@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Catalog discovery hub \u2014 knows when a SKU appears before it is buyable",
+  "description": "Catalog discovery hub — knows when a SKU appears before it is buyable",
   "engines": {
     "node": ">=22"
   },
@@ -12,14 +12,16 @@
     "bundle": "node --experimental-strip-types scripts/bundle.ts",
     "deploy": "npm run bundle && vercel deploy --prod",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit",
-    "test": "node --experimental-strip-types --test --test-concurrency=4 test/*.test.ts",
+    "test": "node --experimental-strip-types --test-force-exit --test --test-concurrency=4 test/*.test.ts",
     "db:push": "node --experimental-strip-types --env-file-if-exists=.env.local scripts/migrate.ts schema.sql",
     "db:seed": "node --experimental-strip-types --env-file-if-exists=.env.local scripts/migrate.ts seed.sql",
     "db:reset": "node --experimental-strip-types --env-file-if-exists=.env.local scripts/migrate.ts reset.sql"
   },
   "devDependencies": {
+    "@types/jsdom": "^30.0.0",
     "@types/node": "^22.10.0",
     "esbuild": "^0.28.2",
+    "jsdom": "^30.0.1",
     "typescript": "^5.6.0"
   },
   "dependencies": {

@@ -170,9 +170,14 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       (await request.json().catch(() => null)) as T | null;
 
     if (request.method === 'POST' && path === '/api/products') {
-      const b = await body<{ name?: string; releaseDate?: string; notes?: string }>();
-      if (!b?.name?.trim()) return json({ error: 'a product needs a name' }, 400);
-      return json({ product: await store.upsertProduct(db, { name: b.name, releaseDate: b.releaseDate || null, notes: b.notes }) });
+      const b = await body<store.ProductInput>();
+      if (!b) return json({ error: 'body must be JSON' }, 400);
+      try {
+        return json({ product: await store.upsertProduct(db, b) });
+      } catch (err) {
+        // validateProduct speaks in sentences. Pass it through unchanged.
+        return json({ error: (err as Error).message }, 400);
+      }
     }
 
     if (request.method === 'DELETE' && path.startsWith('/api/products/')) {

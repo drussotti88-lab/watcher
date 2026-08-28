@@ -243,6 +243,7 @@ export interface ProductRow {
   key: string;
   name: string;
   releaseDate: string | null;
+  msrp: number | null;
   imageUrl: string;
   notes: string;
 }
@@ -252,6 +253,7 @@ function toProduct(r: Record<string, unknown>): ProductRow {
     key: String(r.key),
     name: String(r.name ?? ''),
     releaseDate: r.release_date ? String(r.release_date).slice(0, 10) : null,
+    msrp: toPrice(r.msrp),
     imageUrl: String(r.image_url ?? ''),
     notes: String(r.notes ?? ''),
   };
@@ -279,23 +281,57 @@ export async function listProducts(db: Sql): Promise<ProductRow[]> {
   return rows.map(toProduct);
 }
 
-export async function upsertProduct(
-  db: Sql,
-  p: { key?: string; name: string; releaseDate?: string | null; imageUrl?: string; notes?: string },
-): Promise<ProductRow> {
+export interface ProductInput {
+  key?: string;
+  name: string;
+  releaseDate?: string | null;
+  msrp?: number | null;
+  imageUrl?: string;
+  notes?: string;
+}
+
+/**
+ * Everything optional here is genuinely optional.
+ *
+ * Worth stating because it was not always true: the add-product form read the
+ * name via `form.name`, which is the form's *own* name attribute rather than
+ * the input called "name" — so every submission sent an empty name and came
+ * back "a product needs a name". The only field left to suspect was the date,
+ * which is why it looked required when it never was.
+ */
+export function validateProduct(p: ProductInput): string | null {
+  if (!p.name?.trim()) return 'a product needs a name';
+  if (p.name.trim().length > 200) return 'that name is too long';
+  if (p.msrp !== undefined && p.msrp !== null && !(p.msrp > 0)) {
+    return 'MSRP must be greater than zero, or left blank';
+  }
+  if (p.releaseDate && !/^\d{4}-\d{2}-\d{2}$/.test(p.releaseDate)) {
+    return 'a release date must look like 2026-09-26';
+  }
+  if (p.imageUrl && !/^https?:\/\//i.test(p.imageUrl)) {
+    return 'an image URL must start with http:// or https://';
+  }
+  return null;
+}
+
+export async function upsertProduct(db: Sql, p: ProductInput): Promise<ProductRow> {
+  const problem = validateProduct(p);
+  if (problem) throw new Error(problem);
+
   const key = p.key?.trim() || keyForName(p.name);
   const rows = await db.query(
-    `INSERT INTO products (key, name, release_date, image_url, notes)
-     VALUES ($1, $2, $3, $4, $5)
+    `INSERT INTO products (key, name, release_date, msrp, image_url, notes)
+     VALUES ($1, $2, $3, $4, $5, $6)
      ON CONFLICT (key) DO UPDATE SET
        name = EXCLUDED.name,
        -- COALESCE, not EXCLUDED: an edit that omits a field must not blank a
        -- value someone already took the trouble to set.
        release_date = COALESCE(EXCLUDED.release_date, products.release_date),
+       msrp = COALESCE(EXCLUDED.msrp, products.msrp),
        image_url = CASE WHEN EXCLUDED.image_url = '' THEN products.image_url ELSE EXCLUDED.image_url END,
        notes = CASE WHEN EXCLUDED.notes = '' THEN products.notes ELSE EXCLUDED.notes END
      RETURNING *`,
-    [key, p.name.trim(), p.releaseDate || null, p.imageUrl ?? '', p.notes ?? ''],
+    [key, p.name.trim(), p.releaseDate || null, p.msrp ?? null, p.imageUrl ?? '', p.notes ?? ''],
   );
   return toProduct(rows[0]!);
 }
@@ -397,6 +433,7 @@ export interface MissionRow {
   productKey: string;
   productName: string;
   imageUrl: string;
+  msrp: number | null;
   retailer: string;
   externalId: string;
   url: string;
@@ -431,6 +468,7 @@ function toMission(r: Record<string, unknown>): MissionRow {
     productKey: String(r.product_key ?? ''),
     productName: String(r.product_name ?? ''),
     imageUrl: String(r.image_url ?? ''),
+    msrp: toPrice(r.msrp),
     retailer: String(r.retailer ?? ''),
     externalId: String(r.external_id ?? ''),
     url: String(r.url ?? ''),
@@ -461,7 +499,7 @@ function toMission(r: Record<string, unknown>): MissionRow {
 
 const MISSION_SELECT = `
   SELECT m.*, l.product_key, l.retailer, l.external_id, l.url,
-         p.name AS product_name, p.image_url,
+         p.name AS product_name, p.image_url, p.msrp,
          COALESCE(w.state, 'unchecked') AS state,
          COALESCE(w.confidence, 'unknown') AS confidence,
          w.price,

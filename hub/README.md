@@ -200,13 +200,28 @@ reason was D1's write quota; the reason it survived the move to Postgres is
 that a table with a row per poll is unreadable, and this data is meant to be
 looked at — Supabase gives you a table editor, so use it.
 
+## The page is tested by being used
+
+`page.test.ts` loads the real HTML into a real DOM, fills the real fields,
+clicks the real buttons, and asserts on what reaches the network.
+
+It exists because of a bug 98 passing tests were blind to. The add-product form
+read its name as `form.name` — which is a form's **own name attribute**, not the
+input called "name". Every submission sent an empty name and came back "a
+product needs a name". Since the name box plainly had a name in it, the only
+field left to suspect was the date, which looked required when it never was.
+
+Every other test in the suite exercised the API the page calls. Not one of them
+pressed the button. Forms are read through `FormData` now, which cannot be
+shadowed by a form property, and these tests press the buttons.
+
 ## Testing
 
 ```bash
 npm test
 ```
 
-98 tests, running against **real Postgres** — PGlite, compiled to WebAssembly,
+114 tests, running against **real Postgres** — PGlite, compiled to WebAssembly,
 in the test process. The previous version tested SQL against SQLite, which
 agrees with Postgres right up until it doesn't:
 

@@ -51,6 +51,11 @@ CREATE TABLE IF NOT EXISTS products (
   key           TEXT PRIMARY KEY,          -- prd_mega_evolution_etb
   name          TEXT NOT NULL,
   release_date  DATE,                      -- filled in by hand or a later source
+  -- What it is meant to cost. The whole point of this system is buying at
+  -- retail before the resellers do, so "is this a scalper price" needs a
+  -- number to compare against — and it gives a mission's ceiling a sane
+  -- default instead of asking you to remember one.
+  msrp          NUMERIC(10, 2),
   -- Taken from the product page: JSON-LD `image` on Pokémon Center, imageInfo
   -- on Walmart, the enrichment block on Target. Hotlinked rather than copied —
   -- these are the retailer's own CDN images of the retailer's own product.
