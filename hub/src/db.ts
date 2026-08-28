@@ -75,20 +75,43 @@ export function connectionStringFrom(env: Record<string, string | undefined>): s
   if (!url) {
     throw new Error(
       'DATABASE_URL is not set.\n' +
-        '  Supabase → Project Settings → Database → Connection string → Transaction pooler.\n' +
-        '  Put it in .env.local for `vercel dev`, and in the Vercel project settings for deploys.',
+        '  Supabase dashboard → the "Connect" button at the top → Shared pooler,\n' +
+        '  transaction mode. Put it in .env.local for local work, and in the Vercel\n' +
+        '  project settings for deploys.',
     );
   }
   if (!/^postgres(ql)?:\/\//.test(url)) {
     throw new Error('DATABASE_URL does not look like a Postgres connection string.');
   }
-  // Port 5432 is the direct connection: it works locally and falls over in
-  // production once a few functions are warm. Better to say so now.
-  if (/:5432\//.test(url)) {
+
+  /**
+   * The trap this exists for.
+   *
+   * Supabase offers three strings and two of them are on `db.<ref>.supabase.co`:
+   * the direct connection (5432) and the *dedicated* pooler (6543). Both resolve
+   * over IPv6 only unless you buy the IPv4 add-on — and Vercel's functions are
+   * IPv4. So both connect happily from a laptop and fail every single time in
+   * production.
+   *
+   * An earlier version of this check only looked at the port, which the
+   * dedicated pooler sails straight through: right port, wrong host, broken
+   * deploy. The host is the thing that actually decides.
+   *
+   * The one that works on the free tier is the *shared* pooler, on
+   * `aws-N-<region>.pooler.supabase.com`.
+   */
+  const host = /@([^/:?]+)/.exec(url)?.[1] ?? '';
+  if (/^db\.[a-z0-9-]+\.supabase\.co$/i.test(host)) {
+    const port = /:(\d+)\//.exec(url)?.[1] ?? '';
+    const which = port === '6543' ? 'the dedicated pooler' : 'the direct connection';
     throw new Error(
-      'That is the direct connection (port 5432). Serverless needs the\n' +
-        '  transaction pooler on port 6543, or Postgres will run out of connections.',
+      `That is ${which} (${host}), which is IPv6-only unless you pay for the\n` +
+        '  IPv4 add-on — and Vercel is IPv4, so it would fail on every deploy.\n' +
+        '  Use the SHARED pooler instead: its host contains "pooler.supabase.com"\n' +
+        '  and the username has the project ref on it (postgres.<ref>).\n' +
+        '  Supabase dashboard → "Connect" → Shared pooler → Transaction mode.',
     );
   }
+
   return url;
 }

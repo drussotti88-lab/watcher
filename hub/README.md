@@ -27,13 +27,25 @@ was ruled out by the 403s above. Nothing is lost.
 
 ### 1. Database
 
-Create a Supabase project, then from **Project Settings → Database →
-Connection string → Transaction pooler** copy the connection string. It ends in
-`:6543/postgres`.
+Create a Supabase project, then click **Connect** at the top of the project
+dashboard and choose **Shared pooler → Transaction mode**.
 
-Port **6543**, not 5432. `src/db.ts` refuses 5432 deliberately: a direct
-connection works fine locally and exhausts Postgres' connection limit once a
-handful of serverless functions are warm.
+Supabase offers three strings and two of them will not work here:
+
+| | Host | Works from Vercel? |
+|---|---|---|
+| Direct connection | `db.<ref>.supabase.co:5432` | **No** — IPv6 only |
+| Dedicated pooler | `db.<ref>.supabase.co:6543` | **No** — IPv6 only, and paid |
+| **Shared pooler** | `aws-N-<region>.pooler.supabase.com:6543` | **Yes** |
+
+Both of the wrong ones connect perfectly from a laptop and fail every time in
+production, because Vercel's functions are IPv4 and `db.<ref>.supabase.co`
+resolves over IPv6 unless you buy the add-on. `src/db.ts` refuses them by
+**host**, not by port — an earlier version checked only the port and waved the
+dedicated pooler straight through.
+
+The giveaway on a correct string: the username carries the project ref
+(`postgres.<ref>`), and the host contains `pooler.supabase.com`.
 
 ```bash
 cp .env.example .env.local     # then paste your values in
@@ -139,7 +151,7 @@ looked at — Supabase gives you a table editor, so use it.
 npm test
 ```
 
-58 tests, running against **real Postgres** — PGlite, compiled to WebAssembly,
+66 tests, running against **real Postgres** — PGlite, compiled to WebAssembly,
 in the test process. The previous version tested SQL against SQLite, which
 agrees with Postgres right up until it doesn't:
 
