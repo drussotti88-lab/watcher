@@ -59,9 +59,18 @@ npm run db:seed                # three retailers, three known-good products
 
 ### 2. Deploy
 
-The build bundles `src/server.ts` and everything it imports into a single
-`api/index.js`, so nothing is left for the platform to interpret. That is not
-a preference — see the testing section for what happened when it was.
+`api/index.js` is a committed bundle of `src/server.ts` and everything it
+imports, so **Vercel runs no build step at all** — it just deploys the file.
+
+Both halves of that were learned the hard way. Shipping TypeScript failed
+because Vercel compiled the entry file, left the `./app.ts` specifier as
+written, and never compiled `src/`. Adding a `build` script then failed
+differently: it flipped Vercel out of zero-config into static-site mode, which
+demands an output directory this project will never have.
+
+So: rebuild with `npm run bundle` after changing anything in `src/`, and commit
+the result. A test compares the committed bundle against a fresh build and
+fails if you forget.
 
 ```bash
 npx vercel link
@@ -155,7 +164,7 @@ looked at — Supabase gives you a table editor, so use it.
 npm test
 ```
 
-72 tests, running against **real Postgres** — PGlite, compiled to WebAssembly,
+73 tests, running against **real Postgres** — PGlite, compiled to WebAssembly,
 in the test process. The previous version tested SQL against SQLite, which
 agrees with Postgres right up until it doesn't:
 
@@ -182,11 +191,15 @@ compiled the entry file, left the `./app.ts` specifier exactly as written, and
 never compiled `src/` at all. Every test passed because they all import the
 TypeScript directly and none of them cared how it was packaged.
 
+It also asserts the committed `api/index.js` matches a fresh build, so the
+artifact cannot drift behind the source it was made from.
+
 ## Layout
 
 ```
-api/index.js       The deployed bundle. Generated — do not edit
+api/index.js       The deployed bundle. Generated and committed — do not edit
 src/server.ts      Vercel adapter — the only platform-specific file
+scripts/bundle.ts  Build options, shared by the build and the test that checks it
 src/app.ts         The API and pages, as Request → Response
 src/auth.ts        Bearer token for the Watcher, signed cookie for the browser
 src/page.ts        The two HTML documents. No framework, no build step

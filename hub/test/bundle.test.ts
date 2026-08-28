@@ -19,6 +19,7 @@ import assert from 'node:assert/strict';
 import * as esbuild from 'esbuild';
 import { readFileSync, mkdirSync, rmSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { BUNDLE_OPTIONS, OUTFILE } from '../scripts/bundle.ts';
 import { createServer, type Server } from 'node:http';
 
 const root = resolve(import.meta.dirname, '..');
@@ -38,15 +39,10 @@ before(async () => {
   // and execFileSync cannot find it without a shell — the test failed on the
   // one machine that actually deploys this, which is the worst place for a
   // test harness to be platform-specific.
-  await esbuild.build({
-    entryPoints: [resolve(root, 'src/server.ts')],
-    bundle: true,
-    platform: 'node',
-    format: 'esm',
-    target: 'node22',
-    packages: 'external',
-    outfile: out,
-  });
+  //
+  // Same options object the real build uses, imported rather than retyped, so
+  // this can never end up testing a different artifact than the one that ships.
+  await esbuild.build({ ...BUNDLE_OPTIONS, outfile: out });
 
   process.env.DATABASE_URL =
     'postgresql://postgres.ref:pw@aws-0-us-east-2.pooler.supabase.com:6543/postgres';
@@ -63,6 +59,23 @@ before(async () => {
 after(() => {
   server?.close();
   rmSync(outDir, { recursive: true, force: true });
+});
+
+test('THE COMMITTED BUNDLE IS NOT STALE', () => {
+  // api/index.js is committed, because Vercel deploys it without a build step —
+  // naming an npm script `build` flipped Vercel into static-site mode and it
+  // then failed looking for a `public/` directory that will never exist.
+  //
+  // The price of committing a build artifact is that someone edits src/ and
+  // forgets to rebuild, shipping yesterday's code with today's source. This is
+  // that price being paid: rebuild, compare, fail loudly.
+  const committed = readFileSync(OUTFILE, 'utf8');
+  const fresh = readFileSync(out, 'utf8');
+  assert.equal(
+    committed,
+    fresh,
+    'api/index.js does not match src/. Run `npm run bundle` and commit the result.',
+  );
 });
 
 test('the bundle carries no unresolved TypeScript imports', () => {
