@@ -1,0 +1,29 @@
+# ── Dependencies ────────────────────────────────────────────────────────────
+node_modules/
+
+# ── Secrets and machine-specific settings ───────────────────────────────────
+.env
+.env.local
+.env*.local
+.vercel/
+watcher/watcher.config.json
+
+# ── The Watcher's browser profile ───────────────────────────────────────────
+# Signed-in sessions and cookies for three retailers. Never leaves this machine.
+watcher/chrome-profile/
+
+# ── Captured pages ──────────────────────────────────────────────────────────
+# Evidence, not source. Target embeds a visitor id, the home store's address and
+# the postcode in every request, and these files keep all of it verbatim.
+watcher/probe-artifacts/
+
+# ── Build output and archives ───────────────────────────────────────────────
+dist/
+*.tgz
+*.zip
+*.log
+
+# ── Python (PokeTrack) ──────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+.pytest_cache/

@@ -1,0 +1,218 @@
+{
+ "modules": [
+  {
+   "module_type": "ProductDetailWebDatasourceFulfillmentAndVariations",
+   "version": 0,
+   "module_data": {
+    "data": {
+     "product": {
+      "__typename": "Product",
+      "tcin": "1012644666",
+      "pay_per_order_charges": {
+       "one_day": 7.99,
+       "scheduled_delivery": 9.99
+      },
+      "fulfillment": {
+       "product_id": "1012644666",
+       "is_out_of_stock_in_all_store_locations": true,
+       "sold_out": false,
+       "store_options": [
+        {
+         "location_id": "2362",
+         "store": {
+          "location_name": "Spring Hill",
+          "mailing_address": {
+           "city": "Anytown",
+           "state": "Tennessee",
+           "postal_code": "00000"
+          }
+         },
+         "search_response_store_type": "PRIMARY",
+         "location_available_to_promise_quantity": 0.0,
+         "pre_order_location_available_to_promise_quantity": 0.0,
+         "order_pickup": {
+          "availability_status": "UNAVAILABLE"
+         },
+         "in_store_only": {
+          "availability_status": "NOT_SOLD_IN_STORE"
+         },
+         "ship_to_store": {
+          "availability_status": "UNAVAILABLE"
+         }
+        }
+       ],
+       "shipping_options": {
+        "availability_status": "OUT_OF_STOCK",
+        "loyalty_availability_status": "OUT_OF_STOCK",
+        "available_to_promise_quantity": 0.0,
+        "reason_code": "INVENTORY_UNAVAILABLE",
+        "services": []
+       },
+       "scheduled_delivery": {
+        "location_id": "2362",
+        "availability_status": "UNAVAILABLE",
+        "location_available_to_promise_quantity": 0.0
+       }
+      }
+     }
+    }
+   },
+   "module_placement_id": "ProductDetailWebDatasourceFulfillmentAndVariations",
+   "is_enrichment_deferred": false,
+   "module_type_version": "ProductDetailWebDatasourceFulfillmentAndVariations_0"
+  },
+  {
+   "module_type": "ProductDetailReviewsAndQuestions",
+   "version": 0,
+   "module_data": {
+    "ribbons": [
+     "New At Target"
+    ],
+    "question_count": 0,
+    "review_count": 3,
+    "hide_ratings": false,
+    "ratings_and_reviews": {
+     "average": 1.24,
+     "count": 39,
+     "distribution": {
+      "rating1": 36,
+      "rating2": 0,
+      "rating3": 1,
+      "rating4": 1,
+      "rating5": 1
+     }
+    },
+    "fulfillment": {},
+    "buy_url": "https://www.target.com/p/pok-233-mon-trading-card-game-mega-evolution-8212-ascended-heroes-tin-mega-fraligatr-ex/-/A-1012644666",
+    "tcin": "1012644666",
+    "data_by_tcin": [],
+    "rating_stars": {
+     "__typename": "RatingStars",
+     "click_interactions": [
+      {
+       "__typename": "ComponentClick",
+       "component_id": "ReviewsAndQuestionsClick"
+      },
+      {
+       "__typename": "FireflyClick",
+       "firefly_event": {
+        "feature_type": "BUY_BOX",
+        "click_type": "RATINGS_AND_REVIEWS",
+        "element": {
+         "id": "1012644666",
+         "type": "TCIN"
+        },
+        "cdui": {
+         "layout_id": "web_pdp_default",
+         "module_type": "ProductDetailReviewsAndQuestions",
+         "module_group_id": "ProductDetailAboveTheFoldRight",
+         "module_placement_id": "99b5cf48-e96d-4f80-9453-9515e5ca517c"
+        },
+        "event_type": "CLICK"
+       }
+      }
+     ],
+     "component_list": [
+      {
+       "__typename": "RatingDisplay",
+       "rating": 1.24,
+       "size": "SM",
+       "condensed": false
+      },
+      {
+       "__typename": "TextQuill",
+       "contents": [
+        {
+         "attributes": {
+          "color": "color.text.base",
+          "fontsize": "font.caption"
+         },
+         "insert": {
+          "text": "39"
+         }
+        },
+        {
+         "attributes": {
+          "fontsize": "font.caption"
+         },
+         "insert": {
+          "targetnicollet": {
+           "__typename": "NicolletIcon",
+           "tint": "color.icon.subdued",
+           "accessibility_label": "Chevron right",
+           "resource_name": "chevron-right"
+          }
+         }
+        }
+       ],
+       "paragraph_options": {
+        "truncate": {
+         "max_lines": 1
+        }
+       }
+      }
+     ],
+     "accessibility_label": "Average customer rating is 1.2 out of 5 stars with 39 reviews."
+    },
+    "rating_stars_extended": {
+     "__typename": "RatingStars",
+     "component_list": [
+      {
+       "__typename": "TextQuill",
+       "contents": [
+        {
+         "attributes": {
+          "bold": true,
+          "color": "color.text.base",
+          "fontsize": "font.headline.sm"
+         },
+         "insert": {
+          "text": "1.2"
+         }
+        }
+       ]
+      },
+      {
+       "__typename": "RatingDisplay",
+       "rating": 1.24,
+       "size": "MD",
+       "condensed": false
+      },
+      {
+       "__typename": "TextQuill",
+       "contents": [
+        {
+         "attributes": {
+          "color": "color.text.base",
+          "fontsize": "font.body.md"
+         },
+         "insert": {
+          "text": "39 guest ratings"
+         }
+        }
+       ],
+       "paragraph_options": {
+        "truncate": {
+         "max_lines": 1
+        }
+       }
+      }
+     ],
+     "accessibility_label": "Average customer rating is 1.2 out of 5 stars with 39 reviews."
+    }
+   },
+   "module_placement_id": "99b5cf48-e96d-4f80-9453-9515e5ca517c",
+   "is_enrichment_deferred": false,
+   "module_type_version": "ProductDetailReviewsAndQuestions_0"
+  },
+  {
+   "module_type": "ProductDetailFulfillment",
+   "version": 0,
+   "module_data": {},
+   "module_placement_id": "f5fb0564-9878-43cd-b5df-7dd161d619d9",
+   "is_enrichment_deferred": false,
+   "module_type_version": "ProductDetailFulfillment_0"
+  }
+ ],
+ "extensions": {}
+}

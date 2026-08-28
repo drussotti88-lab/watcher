@@ -1,0 +1,26 @@
+{
+  "name": "half-a-hub",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Catalog discovery hub \u2014 knows when a SKU appears before it is buyable",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "vercel dev",
+    "deploy": "vercel deploy --prod",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit",
+    "test": "node --experimental-strip-types --test test/*.test.ts",
+    "db:push": "node --experimental-strip-types scripts/migrate.ts schema.sql",
+    "db:seed": "node --experimental-strip-types scripts/migrate.ts seed.sql"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.6.0"
+  },
+  "dependencies": {
+    "@electric-sql/pglite": "^0.5.8",
+    "postgres": "^3.4.9"
+  }
+}

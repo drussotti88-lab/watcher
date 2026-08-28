@@ -1,0 +1,649 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Release-Day Cash Brief</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Karla:wght@400;500;700&family=IBM+Plex+Mono:wght@400&display=swap">
+<style>
+:root {
+  color-scheme: light;
+  --ground: #f0f3f0;
+  --surface: #ffffff;
+  --surface-2: #e6ebe6;
+  --ink: #141a16;
+  --ink-2: #4a554d;
+  --ink-3: #7e8a82;
+  --accent: #1f6b45;
+  --accent-soft: #dfeee6;
+  --alt: #2c5f8a;
+  --alt-soft: #e0ebf4;
+  --open: #8a5a12;
+  --open-soft: #f8f0e2;
+  --rule: #d8e0da;
+  --shadow: 0 1px 2px rgba(20,26,22,.05), 0 8px 26px rgba(20,26,22,.06);
+  --display: "Fraunces", Georgia, "Times New Roman", serif;
+  --body: "Karla", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --ground: #0d110f;
+    --surface: #161b18;
+    --surface-2: #1e2521;
+    --ink: #eef2ef;
+    --ink-2: #a4b0a8;
+    --ink-3: #78847c;
+    --accent: #4fb87c;
+    --accent-soft: #12261b;
+    --alt: #6aa6d8;
+    --alt-soft: #12212e;
+    --open: #d3a052;
+    --open-soft: #26200f;
+    --rule: #253029;
+    --shadow: 0 1px 2px rgba(0,0,0,.5), 0 8px 26px rgba(0,0,0,.35);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --ground: #0d110f;
+  --surface: #161b18;
+  --surface-2: #1e2521;
+  --ink: #eef2ef;
+  --ink-2: #a4b0a8;
+  --ink-3: #78847c;
+  --accent: #4fb87c;
+  --accent-soft: #12261b;
+  --alt: #6aa6d8;
+  --alt-soft: #12212e;
+  --open: #d3a052;
+  --open-soft: #26200f;
+  --rule: #253029;
+  --shadow: 0 1px 2px rgba(0,0,0,.5), 0 8px 26px rgba(0,0,0,.35);
+}
+
+* { box-sizing: border-box; }
+
+body { margin: 0; background: var(--ground); color: var(--ink); font-family: var(--body); font-size: 16.5px; line-height: 1.66; -webkit-font-smoothing: antialiased; }
+
+.wrap { display: grid; grid-template-columns: 178px minmax(0, 66ch); gap: 54px; justify-content: center; padding: 54px 30px 120px; }
+
+.toc { position: sticky; top: 38px; align-self: start; }
+.toc .label { font-family: var(--mono); font-size: 10px; letter-spacing: .16em; text-transform: uppercase; color: var(--ink-3); margin: 0 0 12px; }
+.toc ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
+.toc a { display: block; padding: 6px 9px; border-radius: 6px; font-size: 13px; color: var(--ink-2); text-decoration: none; line-height: 1.35; }
+.toc a:hover { background: var(--accent-soft); color: var(--accent); }
+.toc a:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+header.mast { margin-bottom: 42px; }
+.eyebrow { font-family: var(--mono); font-size: 10.5px; letter-spacing: .16em; text-transform: uppercase; color: var(--accent); margin: 0 0 14px; }
+h1 { font-family: var(--display); font-weight: 600; font-size: clamp(32px, 4.6vw, 44px); line-height: 1.08; letter-spacing: -.015em; margin: 0 0 16px; text-wrap: balance; }
+.standfirst { font-size: 18.5px; color: var(--ink-2); margin: 0; text-wrap: pretty; }
+
+section { margin-bottom: 46px; scroll-margin-top: 26px; }
+h2 { font-family: var(--display); font-weight: 600; font-size: 26px; letter-spacing: -.01em; margin: 0 0 14px; line-height: 1.22; text-wrap: balance; }
+h3 { font-family: var(--body); font-weight: 700; font-size: 15.5px; margin: 26px 0 8px; letter-spacing: .005em; }
+p { margin: 0 0 14px; }
+ul, ol.b { margin: 0 0 14px; padding-left: 21px; }
+li { margin-bottom: 8px; }
+li::marker { color: var(--ink-3); }
+a { color: var(--accent); text-underline-offset: 2px; }
+strong { font-weight: 700; }
+em { color: var(--ink-2); }
+
+code { font-family: var(--mono); font-size: .83em; background: var(--surface-2); padding: 1.5px 5px; border-radius: 4px; }
+
+.fact { display: grid; grid-template-columns: 26px 1fr; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--rule); align-items: start; }
+.fact:last-of-type { border-bottom: none; }
+.fact .m { font-family: var(--mono); font-size: 11px; color: var(--accent); padding-top: 4px; }
+.fact.b .m { color: var(--alt); }
+.fact p { margin: 0; font-size: 16px; }
+.fact p + p { margin-top: 6px; color: var(--ink-2); font-size: 15px; }
+
+.settled, .open, .note {
+  border-left: 3px solid var(--accent); background: var(--surface); padding: 16px 19px;
+  border-radius: 0 10px 10px 0; margin: 0 0 16px; box-shadow: var(--shadow);
+}
+.open { border-left-color: var(--open); background: var(--open-soft); box-shadow: none; }
+.note { border-left-color: var(--alt); background: var(--alt-soft); box-shadow: none; }
+.settled > :last-child, .open > :last-child, .note > :last-child { margin-bottom: 0; }
+.settled .lede, .open .lede, .note .lede {
+  font-family: var(--mono); font-size: 10px; letter-spacing: .15em; text-transform: uppercase;
+  display: block; margin-bottom: 8px; color: var(--accent);
+}
+.open .lede { color: var(--open); }
+.note .lede { color: var(--alt); }
+.open h3 { margin-top: 14px; font-size: 14.5px; }
+.open h3:first-of-type { margin-top: 10px; }
+
+.reversal { background: var(--surface); border: 1px solid var(--rule); border-radius: 11px; padding: 19px 22px; margin: 0 0 16px; box-shadow: var(--shadow); }
+.reversal > :last-child { margin-bottom: 0; }
+.reversal .then { font-family: var(--mono); font-size: 11px; color: var(--ink-3); display: block; margin-bottom: 9px; letter-spacing: .02em; }
+.reversal .then s { text-decoration-color: var(--ink-3); opacity: .75; }
+.reversal h3 { margin: 0 0 9px; font-family: var(--display); font-weight: 600; font-size: 19px; letter-spacing: -.005em; }
+
+pre { font-family: var(--mono); font-size: 12.5px; line-height: 1.7; background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 15px 18px; overflow-x: auto; margin: 0 0 15px; }
+pre code { background: none; padding: 0; border-radius: 0; font-size: inherit; }
+pre .c { color: var(--ink-3); }
+pre .hl { color: var(--accent); }
+
+.tbl-wrap { overflow-x: auto; margin: 0 0 15px; }
+table { border-collapse: collapse; width: 100%; font-size: 15px; }
+th { font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: .11em; color: var(--ink-3); text-align: left; font-weight: 400; padding: 0 13px 8px 0; border-bottom: 1px solid var(--rule); vertical-align: bottom; }
+td { padding: 10px 13px 10px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+tr:last-child td { border-bottom: none; }
+.num { font-variant-numeric: tabular-nums; text-align: right; }
+.yes { color: var(--accent); font-weight: 700; }
+.no { color: var(--ink-3); }
+.stop { color: var(--ink); font-weight: 700; }
+
+footer { margin-top: 56px; padding-top: 22px; border-top: 1px solid var(--rule); font-size: 14px; color: var(--ink-3); }
+
+@media (max-width: 900px) {
+  .wrap { grid-template-columns: minmax(0, 1fr); gap: 0; padding: 32px 20px 90px; }
+  .toc { position: static; margin-bottom: 30px; padding-bottom: 20px; border-bottom: 1px solid var(--rule); }
+  .toc ol { flex-direction: row; flex-wrap: wrap; gap: 4px; }
+  .toc a { background: var(--surface); border: 1px solid var(--rule); }
+}
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+html { scroll-behavior: smooth; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav class="toc" aria-label="Contents">
+  <p class="label">Contents</p>
+  <ol>
+    <li><a href="#job">The job</a></li>
+    <li><a href="#gap">What Guppy leaves</a></li>
+    <li><a href="#loop">How the halves join</a></li>
+    <li><a href="#cost">What it costs</a></li>
+    <li><a href="#rules">Rules &amp; whose they are</a></li>
+    <li><a href="#facts-a">True: getting it</a></li>
+    <li><a href="#facts-b">True: owing it</a></li>
+    <li><a href="#lessons">Hard-won</a></li>
+    <li><a href="#reversals">What I'd undo</a></li>
+    <li><a href="#open">Yours to decide</a></li>
+    <li><a href="#done">Done looks like</a></li>
+    <li><a href="#trap">The trap</a></li>
+  </ol>
+</nav>
+
+<main>
+<header class="mast">
+  <p class="eyebrow">Design brief · intent only</p>
+  <h1>The alert should know what you already owe</h1>
+  <p class="standfirst">Two halves — finding product before it's gone, and knowing what your
+  buying has already committed you to. Everything durable about both, separated from the
+  implementation choices of the first build. No language, no schema, no service.</p>
+</header>
+
+<section id="job">
+<h2>The job</h2>
+<p>Two sentences, and every decision should trace to one of them.</p>
+<div class="settled"><span class="lede">Half A · acquisition</span>
+<p><strong>Tell me a product I want is buyable, early enough and specifically enough that I can
+actually act on it.</strong></p></div>
+<div class="settled" style="border-left-color:var(--alt)"><span class="lede" style="color:var(--alt)">Half B · obligation</span>
+<p><strong>Tell me how much money is going to leave my account on a given day, and which
+purchases make it up — without me having to remember anything.</strong></p></div>
+<p>Neither sentence mentions email, Discord, Pokémon, or a dashboard. Those are all means. What
+Half B does say, implicitly, is the hard part: <em>without me having to remember anything.</em>
+A tool you have to feed is a tool you stop feeding by week three, and receipts landing in an
+inbox are the only thing that reliably already happens.</p>
+</section>
+
+<section id="gap">
+<h2>What Guppy proves, and what it leaves on the table</h2>
+<p>Guppy is the existence proof for Half A, so it's worth being precise about what it actually
+covers — and where it stops.</p>
+<div class="tbl-wrap"><table>
+<thead><tr><th>Capability</th><th>Guppy</th></tr></thead>
+<tbody>
+<tr><td>Drop &amp; restock alerts across major retailers</td><td class="yes">yes</td></tr>
+<tr><td>Store-level local inventory</td><td class="yes">yes</td></tr>
+<tr><td>Queue auto-join, and auto-checkout via a desktop app</td><td class="yes">yes</td></tr>
+<tr><td>eBay market price overlay — raw / PSA 9 / PSA 10</td><td class="yes">yes</td></tr>
+<tr><td>Community-sourced drop rumours</td><td class="yes">yes</td></tr>
+<tr><td>Worst-case for <em>one night's</em> armed missions — a pre-flight check</td><td class="yes">yes</td></tr>
+<tr><td>Collection &amp; portfolio management</td><td class="no">"exploring"</td></tr>
+<tr><td><strong>What you actually bought</strong></td><td class="no">not built</td></tr>
+<tr><td><strong>What's already charged vs still owed</strong></td><td class="no">not built</td></tr>
+<tr><td><strong>When a pre-order will clear</strong></td><td class="no">not built</td></tr>
+<tr><td><strong>Anything bought outside Guppy</strong></td><td class="no">invisible by design</td></tr>
+</tbody></table></div>
+
+<p><strong>One row needs care, because I initially read too much into it.</strong> Guppy's
+mission screen shows <em>"7 drops rumored — you're armed for 6 · est. worst case if all hit:
+$504.78"</em>. That's a dollar figure with a sum behind it, and I first called it a money view.
+It isn't one.</p>
+
+<p>Look at what it's scoped to. <strong>One event, one night.</strong> Only missions you armed.
+A hypothetical maximum — <em>if</em> all six hit. And it evaporates once the drop is over. It
+answers a single narrow question, well: <em>am I comfortable with tonight's worst case before I
+go to bed?</em> That's a pre-flight check on one sortie, not an account of what you owe.</p>
+
+<p>Half B is a different object entirely: every purchase, every retailer, however you bought it,
+organised by <strong>the date money actually moves</strong>, accumulating rather than expiring.
+Guppy's number can't answer "what clears on the 26th" — it has no concept of a date money lands
+on, because it never looks past tonight.</p>
+
+<div class="note"><span class="lede">The part that can't be closed by a competitor</span>
+<p>Guppy can only ever count what Guppy armed, on the night it armed it. A pre-order placed by
+hand, a purchase on a retailer it doesn't cover, anything bought before you installed it, anything
+from last month — structurally invisible, because its input is its own mission list and its
+horizon is one evening.</p>
+<p>Half B's input is <strong>receipts</strong>. That sees everything you buy, everywhere, forever,
+including the months before any of this existed. That isn't a feature gap someone ships next
+quarter; it's a different data source, and it's the actual moat.</p></div>
+
+<div class="note"><span class="lede">A line you drew, now under review</span>
+<p>Guppy does auto-checkout and queue-joining. Your first monitoring PRD ruled both out —
+detect-and-notify, human-in-the-loop. That was your call, not a law of nature, and it's
+reopened. See <a href="#rules">Rules &amp; whose they are</a> for the full ladder and where each
+rung actually sits.</p></div>
+</section>
+
+<section id="cost">
+<h2>What it costs to run</h2>
+<p>Worth knowing before choosing an architecture, because the cheap tier and the good tier turn
+out to be the same tier.</p>
+
+<h3>The expensive way</h3>
+<p>Watching a hostile retailer from a server means renting residential IPs, because datacenter
+addresses get blocked. Those run about <strong>$1/GB at the floor and $3–8/GB mid-market</strong>.
+A modern product page with its JSON payload is roughly 300KB:</p>
+<pre><code>1 item @ 45s polling  =  1,920 fetches/day
+× ~300 KB             =  ~576 MB/day  =  ~17 GB/month
+                      =  $17/mo at $1/GB · ~$50/mo at $3/GB
+
+20 items              =  <span class="hl">$340 – $1,000 / month</span></code></pre>
+<p>And 45 seconds isn't even competitive for a real drop. Scale it linearly for anything faster.</p>
+
+<h3>The free way, which is also better</h3>
+<p>A browser on your own machine, on your own residential connection, with real cookies and a
+real session, is the exact thing anti-bot systems are trying to verify. It isn't an imitation of
+a legitimate visitor — it is one. It costs nothing, and it doesn't degrade when someone updates
+their fingerprinting.</p>
+<p>This appears to be Guppy's answer too: they ship desktop apps for macOS and Windows that run
+locally, plus a browser extension, plus community-sourced Discord signals. The expensive,
+blockable work sits on users' machines. <em>Inference from their published product, not
+knowledge of their infrastructure</em> — but the shape is legible from what they chose to build.</p>
+
+<div class="tbl-wrap"><table>
+<thead><tr><th>Tier</th><th>What it watches</th><th>Cost</th></tr></thead>
+<tbody>
+<tr><td>Public JSON endpoints</td><td>Target, store-level inventory, official eBay API</td><td class="yes">~free</td></tr>
+<tr><td>Sitemaps &amp; new-release pages</td><td>Pre-drop catalog visibility (A3)</td><td class="yes">~free</td></tr>
+<tr><td>Your own browser</td><td>The hostile sites — Pokémon Center, Walmart</td><td class="yes">$0</td></tr>
+<tr><td>Receipts (all of Half B)</td><td>Orders, totals, what clears when</td><td class="yes">pennies</td></tr>
+<tr><td>Community signals</td><td>Whatever humans post first</td><td class="yes">$0</td></tr>
+<tr><td>Rented residential IPs</td><td>Hostile sites, centrally</td><td>$17–50/mo <em>per item</em></td></tr>
+</tbody></table></div>
+<p>Hosting for the cheap tier is a small always-on worker (a few dollars a month, or nothing if
+you co-locate on something you already run), a free-tier database, and Discord. Extraction for
+Half B is fractions of a cent per receipt.</p>
+<div class="settled"><span class="lede">The number that matters</span>
+<p><strong>Under $5/month gets you everything except centralized watching of hostile sites — and
+that one line item is both the most expensive thing on the list and the one with the worst
+return.</strong> The half nobody has built is also the half that's nearly free to run.</p></div>
+</section>
+
+<section id="rules">
+<h2>Rules, and whose they are</h2>
+<p>You asked to see what I've been holding. Fair. They fall into three piles, and they are not
+the same kind of thing — conflating them is how a preference calcifies into a law.</p>
+
+<div class="note"><span class="lede">Pile 1 · yours</span>
+<p><strong>"Detect-and-notify, human-in-the-loop. No auto-checkout, no queue circumvention."</strong>
+This came from your own PRD §1 and §24. I read it in your README and reflected it back to you as
+a constraint. It was never mine, and it's entirely yours to move.</p></div>
+
+<h3>The auto-checkout ladder</h3>
+<p>"Auto-checkout" isn't one thing. Four rungs, and they're genuinely different:</p>
+<div class="tbl-wrap"><table>
+<thead><tr><th>#</th><th>Rung</th><th>Where it sits</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>Deep link that opens the product, or the cart, pre-loaded</td><td class="yes">Navigation. Your adapters already declare this capability.</td></tr>
+<tr><td>2</td><td>Autofill your own checkout form; you press Buy</td><td class="yes">What every password manager does.</td></tr>
+<tr><td>3</td><td>Complete the purchase unattended — your account, your card, normal pace, queue respected</td><td>Your call. Usually a terms-of-service matter, not a legal one. Real risk is a banned account and cancelled orders.</td></tr>
+<tr><td>4</td><td>Defeat the bot detection — solve CAPTCHAs, spoof fingerprints, rotate IPs to look like many people, bypass the waiting room</td><td class="stop">I won't help build this.</td></tr>
+</tbody></table></div>
+
+<div class="settled"><span class="lede">Pile 2 · mine, and there's only one</span>
+<p><strong>I won't help build rung 4 — anything whose purpose is to defeat a detection or
+security control.</strong> That's a line about what the code is <em>for</em>, not about how
+aggressive you are. Rungs 1 through 3 are automating your own account with your own money, and
+I'll help with all of them.</p></div>
+
+<p>Separately, and worth not confusing with the above: <strong>rung 3 has poor returns for
+you specifically.</strong> It only pays in the sub-second contest — and per A1 that contest is
+unwinnable for a solo builder, by Guppy's own admission about itself. The inventory you can
+actually get (A2) sits available for minutes, where a fast notification and your own hands are
+enough. So rung 3 buys you ban risk and maintenance in exchange for the segment with the worst
+odds. That's an engineering argument, not a moral one, and you should weigh it as such.</p>
+
+<div class="open"><span class="lede">Pile 3 · advice, override freely</span>
+<p>Everything else I've said is judgment, not a rule. Build the money model first. Don't
+hand-write an extractor. Rules as override, not on-ramp. Two halves sharing product identity.
+Never guess, corrections stick, compute on read, alert on transitions.</p>
+<p>I'd defend each of them and I think they'll save you time. None is a constraint. If you want
+the parser hand-written or the halves fully merged, say so and I'll build it that way and stop
+relitigating it.</p></div>
+</section>
+
+<section id="loop">
+<h2>How the two halves should join</h2>
+<p>You asked me to recommend. Here it is, and the reasoning matters more than the answer.</p>
+<div class="settled"><span class="lede">Recommendation</span>
+<p><strong>Two independently-running halves that share exactly one thing: product identity.</strong>
+Not one merged system, not two unrelated tools.</p></div>
+<p><strong>Why not merge them.</strong> They have nothing operationally in common. One polls in
+seconds and is worthless if it's late; the other reads receipts and doesn't care about minutes.
+One fights Cloudflare; the other doesn't. Wire them together and a monitoring outage takes down
+your money view, which is the half that has to be trustworthy.</p>
+<p><strong>Why not separate them.</strong> Because the interesting questions live at the seam,
+and all of them are of the form <em>"given what I already owe, should I buy this?"</em> You
+can't ask that with two disconnected tools.</p>
+<p><strong>So share the spine, nothing else.</strong> If both halves agree on what a product
+<em>is</em> — one identity, whatever form it takes — then a restock alert can carry your
+existing exposure, and an order can be priced against market without either half knowing how
+the other works.</p>
+<pre><code>     HALF A                            HALF B
+  finds product                    reads receipts
+   seconds matter                  minutes do not
+        │                                 │
+        └────────►  product id  ◄─────────┘
+                         │
+                    <span class="c">the seam</span>
+                         │
+   <span class="hl">"Mega Evolution ETB, $49.99 at Target.</span>
+    <span class="hl">You have 5 on order. $346.84 clears on the 26th."</span></code></pre>
+<p>That last line is the product. It's not available from either half alone, and it's the
+moment that actually prevents the failure this whole thing exists to prevent — not learning on
+the 26th that you overcommitted on the 12th.</p>
+</section>
+
+<section id="facts-a">
+<h2>What's true about getting it</h2>
+<p>Properties of the problem, not of any solution.</p>
+
+<div class="fact b"><div class="m">A1</div><div>
+<p><strong>You cannot win a hyped drop by being polite, and no tool fixes that.</strong></p>
+<p>Guppy says this about itself. Treat the hyped drop as a lottery ticket and stop optimising
+for it — the effort has a terrible return, and it's the part that tempts you across the
+automation line.</p>
+</div></div>
+
+<div class="fact b"><div class="m">A2</div><div>
+<p><strong>The winnable inventory is the quiet restock, not the event.</strong></p>
+<p>Product that sits available for ten minutes on a Tuesday is uncontested and gettable. Design
+for reliably catching those rather than heroically losing the big ones.</p>
+</div></div>
+
+<div class="fact b"><div class="m">A3</div><div>
+<p><strong>Knowing before it's buyable beats knowing faster.</strong></p>
+<p>A SKU appearing in a catalog days before it can be bought is uncontested information — a
+completely different game from racing everyone to an add-to-cart. This is the most defensible
+edge available and it doesn't require winning any race.</p>
+<p>And the source needn't be technical. Guppy's "7 drops rumored tonight" is attributed to a
+named person who posted eleven hours earlier. The best pre-drop signal in this category is often
+a human with good sources, not a scraper.</p>
+</div></div>
+
+<div class="fact b"><div class="m">A4</div><div>
+<p><strong>Some retailers can't be watched from a server at all.</strong></p>
+<p>Anti-bot blocks datacenter IPs, so certain sites are only observable from something living in
+a real browser on a real machine. Any design that assumes one uniform way of watching hits this
+wall — and the workaround is free, which is the opposite of how these things usually go. Your
+extension isn't a fallback for the worker; it's the half that watches the sites that matter.</p>
+</div></div>
+
+<div class="fact b"><div class="m">A5</div><div>
+<p><strong>Behind a queue, stock status is meaningless.</strong></p>
+<p>The queue is the actual gate. Knowing an item is "in stock" tells you nothing you can act on;
+knowing the waiting room just opened tells you everything.</p>
+</div></div>
+
+<div class="fact b"><div class="m">A6</div><div>
+<p><strong>Local store inventory is a separate, less contested signal.</strong></p>
+<p>Shelf stock at a specific store is competed for by whoever is near that store, which is a far
+smaller field than the internet. Guppy invests here for a reason.</p>
+</div></div>
+
+<div class="fact b"><div class="m">A7</div><div>
+<p><strong>A watch is worth more when it carries a price ceiling and a quantity.</strong></p>
+<p>Guppy calls it <em>arming</em>: not "tell me when this restocks" but "buy up to 2 of this at
+or under $30." Worth stealing even if you never automate the purchase, because it turns a vague
+watchlist into something you can add up — which is exactly what makes their worst-case number
+computable, and what would make yours computable too.</p>
+</div></div>
+</section>
+
+<section id="facts-b">
+<h2>What's true about owing it</h2>
+
+<div class="fact"><div class="m">B1</div><div>
+<p><strong>Money leaves at a different time than you commit it.</strong></p>
+<p>Pre-orders authorize at purchase and charge at ship. A month of buying can produce almost no
+card activity, then several hundred dollars on one release day. This is why "total spent" is the
+wrong number and always was.</p>
+</div></div>
+
+<div class="fact"><div class="m">B2</div><div>
+<p><strong>Release dates are never in the order confirmation.</strong></p>
+<p>Not from any retailer, ever. That data comes from you, or from Half A — which is one more
+reason the halves should share a spine.</p>
+</div></div>
+
+<div class="fact"><div class="m">B3</div><div>
+<p><strong>Retailers change their email templates without warning.</strong></p>
+<p>Anything reading receipts is aiming at a moving target. A permanent condition, not a bug to
+fix once.</p>
+</div></div>
+
+<div class="fact"><div class="m">B4</div><div>
+<p><strong>One order can span two release months.</strong></p>
+<p>So the unit of money is the line item, not the order. An order-level model looks fine until
+the first mixed cart, then it's quietly wrong forever.</p>
+</div></div>
+
+<div class="fact"><div class="m">B5</div><div>
+<p><strong>Nobody spells the product the same way twice.</strong></p>
+<p>"Pokémon TCG: Mega Evolution Elite Trainer Box" and "Pokemon Trading Card Game Mega Evolution
+ETB" are the same object. This is the same problem the shared spine has to solve, from the other
+direction.</p>
+</div></div>
+
+<div class="fact"><div class="m">B6</div><div>
+<p><strong>Stores sell more than cards</strong>, so relevance is about contents, not sender. And
+the order number is the only stable identity — within one retailer.</p>
+</div></div>
+</section>
+
+<section id="lessons">
+<h2>What building Half B once actually taught me</h2>
+<p>These cost something to learn. They're about behaviour, so they survive a rewrite — and most
+apply to Half A too.</p>
+
+<div class="settled"><span class="lede">Never guess</span>
+<p>A wrong number in a money tool is worse than a missing one. Missing, you go look. Wrong, you
+plan around it — and the first time you catch it lying, the whole thing is dead. Anything the
+system isn't sure about must say so, in a place you'll see.</p></div>
+
+<div class="settled"><span class="lede">Corrections are permanent or they're worthless</span>
+<p>If you fix a bad number and any later process reverts it, you'll fix it twice and then never
+again. A human correction outranks every automated source, forever, no exceptions.</p></div>
+
+<div class="settled"><span class="lede">Derived money is computed, never stored</span>
+<p>Cache "due on the 26th" and it starts going stale silently. Change a release date and the
+money should move on the next read, with nothing to re-run. Cheap up front, expensive to
+retrofit.</p></div>
+
+<div class="settled"><span class="lede">Undatable money needs a visible home</span>
+<p>There will always be committed money you can't date yet. It can't be dropped and it can't be
+folded into a real date — both produce a number that's confidently wrong. Own bucket, on screen,
+with a route to fixing it.</p></div>
+
+<div class="settled"><span class="lede">Alert on change, not on state</span>
+<p>"You owe $340" every morning gets muted inside a week, and takes the one that mattered with
+it. Fire on transitions, each once. <em>This applies double to Half A</em> — a monitor that
+cries wolf is a monitor you'll turn off, and then you miss the drop.</p></div>
+
+<div class="settled"><span class="lede">The subtotal trap</span>
+<p>The first dollar figure in a receipt is the subtotal. Taking it produces a number wrong by
+exactly the tax — the worst kind of wrong, because it looks fine. Find the <em>labelled</em>
+total; tax and shipping ride with the shipment, not the earliest item.</p></div>
+</section>
+
+<section id="reversals">
+<h2>What I'd undo from last time</h2>
+<p>Where the old methods were wrong, not just incidental. Three are reversals of things I built
+and would now argue against.</p>
+
+<div class="reversal">
+  <span class="then"><s>Then: a regex parser per field, tuned against sample emails.</s></span>
+  <h3>Don't hand-write an extractor</h3>
+  <p>I wrote pattern matching for order numbers, totals and line items. It passes its tests and
+  it is a treadmill — every template change is a bug, every new retailer a project.</p>
+  <p>Hand the text to a model and ask for structured output. It reads layouts it's never seen,
+  survives redesigns, handles retailers you never planned for, and costs a fraction of a cent a
+  message. Have it return a confidence signal and route the unsure ones to review — same safety
+  valve, no maintenance.</p>
+  <p><em>What you give up:</em> determinism. Mitigate by extracting once per message and storing
+  the result, so re-running never rewrites history, and by showing what it extracted so a wrong
+  read is visible rather than silent.</p>
+</div>
+
+<div class="reversal">
+  <span class="then"><s>Then: user-authored rules with sender/subject/body conditions.</s></span>
+  <h3>Rules should be the override, not the on-ramp</h3>
+  <p>You asked for rules and I made them mandatory — nothing worked until you'd authored
+  conditions. Backwards. Those rules only ever answered "is this an order, and from whom," which
+  is a classification question needing no configuration at all.</p>
+  <p>Invert it: works on day one with empty config, and rules exist for when you disagree —
+  always count this sender, never count that one, always treat these as pre-orders. Same
+  control, without paying for it up front.</p>
+</div>
+
+<div class="reversal">
+  <span class="then"><s>Then: poll IMAP on a timer, store app passwords.</s></span>
+  <h3>Consider making mail arrive instead of fetching it</h3>
+  <p>Polling means credentials at rest, a scan window, a batch size, a memory ceiling — all of it
+  in service of "how do I see the mail."</p>
+  <p>A forwarding filter in each inbox pointed at one address the system owns deletes that whole
+  category, and gives you a clean way to feed it something by hand. <em>Not automatically
+  right</em> — polling wins if you want a year of history on day one, since forwarding only sees
+  mail from the day you set it up.</p>
+</div>
+
+<div class="reversal">
+  <span class="then"><s>Then: five order statuses, retail-flavoured.</s></span>
+  <h3>There are only two questions</h3>
+  <p>I modelled pre-order / open / shipped / delivered / cancelled. Only two distinctions drive
+  anything: <strong>has the money left</strong>, and <strong>when will it</strong>. Model those;
+  let status be a label you compute for display, not a state the logic branches on.</p>
+</div>
+</section>
+
+<section id="open">
+<h2>Genuinely yours to decide</h2>
+<p>Deliberately unanswered — each changes the shape of the build, and last time I picked defaults
+that hardened into assumptions.</p>
+
+<div class="open"><span class="lede">Open</span>
+<h3>What is a product, exactly?</h3>
+<p>The shared spine's whole job, and the only question both halves depend on. A retailer SKU? A
+market identifier? A name you assign? Get this one wrong and the seam never closes. Worth
+settling before anything else.</p>
+
+<h3>Where does each half live?</h3>
+<p>They don't have to live in the same place, and A4 suggests Half A may not get to choose.
+Decide them separately.</p>
+
+<h3>How do receipts get in?</h3>
+<p>Fetched, forwarded, or pasted. Pasted-by-hand is a legitimate v1 — it proves the money model
+with zero infrastructure, and within a week you'd know whether the output justifies automating
+the input.</p>
+
+<h3>Where does the answer surface?</h3>
+<p>Somewhere you already look, or somewhere you'd have to go. Be honest about which you actually
+check. A perfect number on a page you open twice a month is worth less than a rough one that
+reaches you.</p>
+
+<h3>How much history on day one?</h3>
+<p>Starting from today is dramatically simpler than backfilling a year. Ask whether past orders
+change any decision you'll make, or would just be nice to look at.</p>
+
+<h3>Where do release dates come from?</h3>
+<p>You typing them is the honest v1 and might be permanent — a handful a month. But Half A's
+pre-drop visibility (A3) is exactly a source for this, which is an argument for building that
+part of A early.</p>
+</div>
+</section>
+
+<section id="done">
+<h2>What done looks like</h2>
+<p>Not a feature list — two behaviours. It's finished when both work and you believe them.</p>
+
+<h3>The question you ask it</h3>
+<pre><code>you   what's the damage on the 26th?
+
+it    $346.84, across two orders.
+
+      Pokémon Center  #PC10502991              $238.11
+        3× Mega Evolution ETB       179.97
+        1× Mega Charizard Figure     39.99
+        tax                          18.15
+
+      Target          #3021445907621           $108.73
+        2× Mega Evolution ETB        99.98
+        tax                           8.75
+
+      $118.20 more is committed but has no date yet.</code></pre>
+<p>Two retailers on one date, because it's organised by when money moves and not by order. Line
+items rather than order totals, per B4. The undated bucket visible rather than swallowed.</p>
+
+<h3>The one it asks you</h3>
+<pre><code>it    <span class="hl">Mega Evolution ETB — in stock, Target, $49.99</span>
+      <span class="hl">You have 5 on order. $346.84 already clears on the 26th.</span></code></pre>
+<p>That second line is the whole reason the halves share a spine. Half A alone can't say it.
+Half B alone is never in the room at the moment it matters.</p>
+
+<div class="tbl-wrap"><table>
+<thead><tr><th>Test</th><th>Passes when</th></tr></thead>
+<tbody>
+<tr><td>Nothing to remember</td><td>You made no entry between buying and asking, except release dates</td></tr>
+<tr><td>Correct by construction</td><td>Move a release date; the money moves with no re-run</td></tr>
+<tr><td>Honest under failure</td><td>An unreadable receipt shows up as a question, never a silent gap</td></tr>
+<tr><td>Corrections stick</td><td>Fix a number, rebuild everything, it's still your number</td></tr>
+<tr><td>It reaches you</td><td>You learn about the 26th before the 26th, without going to look</td></tr>
+<tr><td>The seam closes</td><td>A restock alert knows what you already own and owe</td></tr>
+</tbody></table></div>
+</section>
+
+<section id="trap">
+<h2>The trap</h2>
+<p>Both halves have the same one. The plumbing — mail ingestion on B, retailer polling on A — is
+the visible part, the fun part, and the part that feels like the project. Neither is the hard
+part. Both are solved problems with a few known approaches, any of which works.</p>
+<p>The hard parts are the money model on B (charge timing, per-item allocation, undatable money,
+sticky corrections — under a page of logic where every subtle bug lives) and, on A, deciding
+what's worth alerting about at all. Neither needs any plumbing to build or to test.</p>
+<p>Build the money model first, drive it with receipts you paste in by hand, and make it
+genuinely useful before a line of mail plumbing exists. If it isn't useful with hand-fed data,
+automating the feed won't rescue it. Last time I built the plumbing early because it was the
+interesting bit, and the money model came out right mostly by luck. Don't repeat that ordering
+— and don't repeat it on Half A either.</p>
+</section>
+
+<footer>
+No schema, no file paths, no stack. If a future version of this contains any of those, it's
+turned back into a spec — a fine thing to write, but write it second, and against the decisions
+above.
+</footer>
+</main>
+</div>
+</body>
+</html>

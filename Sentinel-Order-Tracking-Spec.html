@@ -1,0 +1,784 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sentinel Order Tracking</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chivo:wght@600;700&family=Atkinson+Hyperlegible:wght@400;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root {
+  color-scheme: light;
+  --ground: #f3f3f7;
+  --surface: #ffffff;
+  --surface-2: #eaeaf1;
+  --ink: #15151d;
+  --ink-2: #4d4d5e;
+  --ink-3: #82829a;
+  --accent: #5546c8;
+  --accent-soft: #e7e4fa;
+  --warn: #91560a;
+  --warn-soft: #fbf1e1;
+  --ok: #0e7248;
+  --ok-soft: #e0f2ea;
+  --rule: #dcdce7;
+  --shadow: 0 1px 2px rgba(21,21,29,.05), 0 8px 26px rgba(21,21,29,.06);
+  --display: "Chivo", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --body: "Atkinson Hyperlegible", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --ground: #0e0e13;
+    --surface: #17171f;
+    --surface-2: #1f1f2a;
+    --ink: #eeeef4;
+    --ink-2: #a5a5ba;
+    --ink-3: #78788f;
+    --accent: #9b8dfa;
+    --accent-soft: #1d1a31;
+    --warn: #d69a48;
+    --warn-soft: #251f10;
+    --ok: #3fbd85;
+    --ok-soft: #10261c;
+    --rule: #262633;
+    --shadow: 0 1px 2px rgba(0,0,0,.5), 0 8px 26px rgba(0,0,0,.35);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --ground: #0e0e13;
+  --surface: #17171f;
+  --surface-2: #1f1f2a;
+  --ink: #eeeef4;
+  --ink-2: #a5a5ba;
+  --ink-3: #78788f;
+  --accent: #9b8dfa;
+  --accent-soft: #1d1a31;
+  --warn: #d69a48;
+  --warn-soft: #251f10;
+  --ok: #3fbd85;
+  --ok-soft: #10261c;
+  --rule: #262633;
+  --shadow: 0 1px 2px rgba(0,0,0,.5), 0 8px 26px rgba(0,0,0,.35);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0; background: var(--ground); color: var(--ink);
+  font-family: var(--body); font-size: 15.5px; line-height: 1.62;
+  -webkit-font-smoothing: antialiased;
+}
+
+.wrap {
+  display: grid; grid-template-columns: 196px minmax(0, 78ch);
+  gap: 48px; justify-content: center; padding: 50px 28px 120px;
+}
+
+.toc { position: sticky; top: 34px; align-self: start; }
+.toc .label {
+  font-family: var(--mono); font-size: 10px; letter-spacing: .16em;
+  text-transform: uppercase; color: var(--ink-3); margin: 0 0 11px;
+}
+.toc ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
+.toc a {
+  display: grid; grid-template-columns: 20px 1fr; gap: 7px; padding: 5px 8px;
+  border-radius: 5px; font-size: 12.5px; color: var(--ink-2); text-decoration: none; line-height: 1.3;
+}
+.toc a .n { font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); padding-top: 1px; }
+.toc a:hover { background: var(--accent-soft); color: var(--accent); }
+.toc a:hover .n { color: var(--accent); }
+.toc a:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+header.mast { margin-bottom: 38px; padding-bottom: 24px; border-bottom: 2px solid var(--accent); }
+.eyebrow {
+  font-family: var(--mono); font-size: 10.5px; letter-spacing: .16em; text-transform: uppercase;
+  color: var(--accent); margin: 0 0 13px;
+}
+h1 {
+  font-family: var(--display); font-weight: 700; font-size: clamp(30px, 4.2vw, 40px);
+  line-height: 1.06; letter-spacing: -.022em; margin: 0 0 13px; text-wrap: balance;
+}
+.standfirst { font-size: 17px; color: var(--ink-2); margin: 0 0 18px; text-wrap: pretty; }
+.meta { display: flex; flex-wrap: wrap; gap: 5px 20px; font-family: var(--mono); font-size: 11.5px; color: var(--ink-3); margin: 0; }
+.meta b { color: var(--ink-2); font-weight: 500; }
+
+section { margin-bottom: 42px; scroll-margin-top: 22px; }
+.sec-head { display: grid; grid-template-columns: 32px 1fr; gap: 13px; align-items: baseline; margin-bottom: 13px; }
+.sec-n { font-family: var(--mono); font-size: 11.5px; color: var(--accent); font-weight: 500; border-top: 2px solid var(--accent); padding-top: 7px; }
+h2 { font-family: var(--display); font-weight: 600; font-size: 23px; letter-spacing: -.012em; margin: 0; line-height: 1.2; text-wrap: balance; }
+h3 { font-family: var(--display); font-weight: 600; font-size: 15.5px; margin: 24px 0 8px; }
+.sec-body { padding-left: 45px; }
+p { margin: 0 0 13px; }
+ul, ol.b { margin: 0 0 13px; padding-left: 20px; }
+li { margin-bottom: 6px; }
+li::marker { color: var(--ink-3); }
+a { color: var(--accent); text-underline-offset: 2px; }
+
+code { font-family: var(--mono); font-size: .84em; background: var(--surface-2); padding: 1.5px 5px; border-radius: 4px; }
+pre {
+  font-family: var(--mono); font-size: 12px; line-height: 1.6; background: var(--surface);
+  border: 1px solid var(--rule); border-left: 3px solid var(--accent); border-radius: 0 9px 9px 0;
+  padding: 14px 17px; overflow-x: auto; margin: 0 0 14px;
+}
+pre code { background: none; padding: 0; font-size: inherit; }
+pre .c { color: var(--ink-3); }
+pre .add { color: var(--ok); }
+
+.req { display: grid; grid-template-columns: 48px 1fr; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--rule); align-items: start; }
+.req:last-of-type { border-bottom: none; }
+.req .id { font-family: var(--mono); font-size: 10.5px; font-weight: 500; color: var(--accent); background: var(--accent-soft); border-radius: 4px; padding: 3px 0; text-align: center; }
+.req div:last-child { font-size: 15px; }
+.req p { margin: 0 0 6px; }
+.req p:last-child { margin: 0; }
+
+.card { background: var(--surface); border: 1px solid var(--rule); border-radius: 11px; padding: 17px 20px; box-shadow: var(--shadow); margin: 0 0 14px; }
+.card > :last-child { margin-bottom: 0; }
+.card h3 { margin-top: 0; }
+
+.flag { border-left: 3px solid var(--warn); background: var(--warn-soft); padding: 13px 16px; border-radius: 0 9px 9px 0; margin: 0 0 14px; font-size: 15px; }
+.flag > :last-child { margin-bottom: 0; }
+.flag .lede { font-family: var(--mono); font-weight: 500; font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: var(--warn); display: block; margin-bottom: 6px; }
+.good { border-left-color: var(--ok); background: var(--ok-soft); }
+.good .lede { color: var(--ok); }
+
+.tbl-wrap { overflow-x: auto; margin: 0 0 14px; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th { font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: .11em; color: var(--ink-3); text-align: left; font-weight: 500; padding: 0 12px 8px 0; border-bottom: 1px solid var(--rule); white-space: nowrap; vertical-align: bottom; }
+td { padding: 9px 12px 9px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+tr:last-child td { border-bottom: none; }
+td code { white-space: nowrap; }
+.num { font-variant-numeric: tabular-nums; text-align: right; }
+
+.tag { display: inline-block; font-family: var(--mono); font-size: 9.5px; letter-spacing: .07em; padding: 2px 6px; border-radius: 3px; text-transform: uppercase; white-space: nowrap; font-weight: 500; }
+.tag.new { background: var(--ok-soft); color: var(--ok); }
+.tag.mod { background: var(--accent-soft); color: var(--accent); }
+.tag.reuse { background: var(--surface-2); color: var(--ink-3); }
+
+footer { margin-top: 54px; padding-top: 20px; border-top: 1px solid var(--rule); font-size: 13.5px; color: var(--ink-3); }
+
+@media (max-width: 900px) {
+  .wrap { grid-template-columns: minmax(0, 1fr); gap: 0; padding: 30px 18px 90px; }
+  .toc { position: static; margin-bottom: 28px; padding-bottom: 18px; border-bottom: 1px solid var(--rule); }
+  .toc ol { flex-direction: row; flex-wrap: wrap; gap: 3px; }
+  .toc a { background: var(--surface); border: 1px solid var(--rule); }
+  .sec-body { padding-left: 0; }
+  .sec-head { grid-template-columns: 26px 1fr; gap: 9px; }
+}
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+html { scroll-behavior: smooth; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav class="toc" aria-label="Contents">
+  <p class="label">Sections</p>
+  <ol>
+    <li><a href="#s1"><span class="n">01</span><span>Thesis</span></a></li>
+    <li><a href="#s2"><span class="n">02</span><span>Where it attaches</span></a></li>
+    <li><a href="#s3"><span class="n">03</span><span>Change manifest</span></a></li>
+    <li><a href="#s4"><span class="n">04</span><span>Schema</span></a></li>
+    <li><a href="#s5"><span class="n">05</span><span>The scanner loop</span></a></li>
+    <li><a href="#s6"><span class="n">06</span><span>Ported logic</span></a></li>
+    <li><a href="#s7"><span class="n">07</span><span>Alert state machine</span></a></li>
+    <li><a href="#s8"><span class="n">08</span><span>Discord surface</span></a></li>
+    <li><a href="#s9"><span class="n">09</span><span>Config &amp; secrets</span></a></li>
+    <li><a href="#s10"><span class="n">10</span><span>Dashboard</span></a></li>
+    <li><a href="#s11"><span class="n">11</span><span>Constraints</span></a></li>
+    <li><a href="#s12"><span class="n">12</span><span>Build order</span></a></li>
+    <li><a href="#s13"><span class="n">13</span><span>Acceptance</span></a></li>
+  </ol>
+</nav>
+
+<main>
+<header class="mast">
+  <p class="eyebrow">Integration spec · Sentinel v0.2</p>
+  <h1>Order Tracking Subsystem</h1>
+  <p class="standfirst">Adding email-derived order tracking and release-day cash forecasting to
+  Sentinel, so the system that tells you to buy also tells you what buying cost you and when
+  the money actually leaves.</p>
+  <p class="meta">
+    <span><b>Target</b> vault_sentinel @ 0.1.0</span>
+    <span><b>Source</b> PokeTrack (Python, working, tested)</span>
+    <span><b>New module</b> src/orders/</span>
+  </p>
+</header>
+
+<section id="s1">
+<div class="sec-head"><div class="sec-n">01</div><h2>Thesis</h2></div>
+<div class="sec-body">
+<p>Sentinel's lifecycle ends at <em>"it's in stock, go buy it."</em> Nothing downstream of the
+buy decision is tracked. The system fires alerts all month and has no idea what those alerts
+cost.</p>
+<pre><code><span class="c">// today</span>
+watch → alert → <span class="c">[ nothing ]</span>
+
+<span class="c">// with this subsystem</span>
+watch → alert → <span class="add">buy → order mail → owed → charged</span> → own
+                 <span class="c">└─ Sentinel already does this half ─┘</span></code></pre>
+<p>The new half is entirely email-derived. A retailer's order confirmation is a fact you
+already receive; nobody has to remember to log anything. What comes out the other end is a
+single question answered: <strong>how much do I need available on the 26th, and which orders
+make it up.</strong></p>
+<p>This matters more than it sounds for pre-orders specifically. Pokémon Center authorizes at
+order time and charges at ship — so a month of pre-ordering produces no card activity at all,
+then several hundred dollars on one release day. That's the number the system should be
+shouting about, and it currently can't see it.</p>
+</div>
+</section>
+
+<section id="s2">
+<div class="sec-head"><div class="sec-n">02</div><h2>Where it attaches</h2></div>
+<div class="sec-body">
+<p><strong>This is not an adapter.</strong> The <code>RetailerAdapter</code> contract is
+<code>resolve(url)</code> + <code>check(watch) → CheckResult</code> — one product, one stock
+state, polled on a URL. An inbox has no product id and returns N orders per poll. Forcing it
+into that contract would corrupt the adapter model for every future retailer.</p>
+<div class="flag good"><span class="lede">Precedent already in the codebase</span>
+<p><code>SiteMonitor</code> is a non-adapter watcher: its own cadence, its own loop, posts to
+Discord directly, isolated in <code>index.ts</code> so a failure can't take the engine down.
+The mail scanner is the same species. Follow it exactly.</p></div>
+
+<h3>src/index.ts <span class="tag mod">modify</span></h3>
+<pre><code>  const siteMonitor = new SiteMonitor();
+  void siteMonitor.start().catch((err) => { <span class="c">/* ... */</span> });
+
+<span class="add">  // Order tracker: scans mail for order/shipping/cancellation notices and
+  // posts release-day cash warnings. Isolated like SiteMonitor — a mail
+  // outage must never stop stock polling.
+  const orderTracker = new OrderTracker();
+  void orderTracker.start().catch((err) => {
+    logger.error('order tracker crashed', {
+      error: err instanceof Error ? err : new Error(String(err)),
+    });
+  });</span>
+
+  const shutdown = (signal: string) => {
+    engine.stop();
+    siteMonitor.stop();
+<span class="add">    orderTracker.stop();</span>
+    <span class="c">/* ... */</span>
+  };</code></pre>
+<p>Four independent loops instead of three. Nothing in <code>Engine</code>,
+<code>stateMachine</code>, or any adapter changes.</p>
+</div>
+</section>
+
+<section id="s3">
+<div class="sec-head"><div class="sec-n">03</div><h2>Change manifest</h2></div>
+<div class="sec-body">
+<div class="tbl-wrap"><table>
+<thead><tr><th></th><th>Path</th><th>Purpose</th></tr></thead>
+<tbody>
+<tr><td><span class="tag new">new</span></td><td><code>src/orders/orderTracker.ts</code></td><td>The loop. <code>start()</code> / <code>stop()</code>, mirrors <code>SiteMonitor</code></td></tr>
+<tr><td><span class="tag new">new</span></td><td><code>src/orders/mailbox.ts</code></td><td>IMAP fetch, dedupe, body flattening</td></tr>
+<tr><td><span class="tag new">new</span></td><td><code>src/orders/rules.ts</code></td><td>Rule matching (ported)</td></tr>
+<tr><td><span class="tag new">new</span></td><td><code>src/orders/parser.ts</code></td><td>Field extraction (ported)</td></tr>
+<tr><td><span class="tag new">new</span></td><td><code>src/orders/ledger.ts</code></td><td>Charge timing + date allocation (ported)</td></tr>
+<tr><td><span class="tag new">new</span></td><td><code>src/orders/orderState.ts</code></td><td>Pure <code>decide()</code>, mirrors <code>core/stateMachine.ts</code></td></tr>
+<tr><td><span class="tag new">new</span></td><td><code>src/orders/*.test.ts</code></td><td>Ports of the existing passing suite (§13)</td></tr>
+<tr><td><span class="tag new">new</span></td><td><code>src/dispatcher/orderEmbeds.ts</code></td><td>Order + cash-due embed builders</td></tr>
+<tr><td><span class="tag new">new</span></td><td><code>src/service/orderActions.ts</code></td><td>Transport-agnostic actions, mirrors <code>watchActions.ts</code></td></tr>
+<tr><td><span class="tag mod">mod</span></td><td><code>src/index.ts</code></td><td>Start/stop the fourth loop</td></tr>
+<tr><td><span class="tag mod">mod</span></td><td><code>src/db/types.ts</code></td><td>Row interfaces for the new tables</td></tr>
+<tr><td><span class="tag mod">mod</span></td><td><code>src/db/repositories.ts</code></td><td><code>orders</code>, <code>orderItems</code>, <code>releases</code>, <code>mailAccounts</code>, <code>orderRules</code></td></tr>
+<tr><td><span class="tag mod">mod</span></td><td><code>src/lib/config.ts</code></td><td><code>orders</code> block in the zod schema</td></tr>
+<tr><td><span class="tag mod">mod</span></td><td><code>src/bot/commands.ts</code></td><td>Six new command definitions + cases</td></tr>
+<tr><td><span class="tag mod">mod</span></td><td><code>src/api/server.ts</code></td><td><code>/api/orders</code>, <code>/api/releases</code>, <code>/api/cash-due</code></td></tr>
+<tr><td><span class="tag mod">mod</span></td><td><code>supabase/schema.sql</code></td><td>Six tables (§04)</td></tr>
+<tr><td><span class="tag reuse">reuse</span></td><td><code>src/lib/{http,logger,config,rateLimiter}</code></td><td>Unchanged</td></tr>
+<tr><td><span class="tag reuse">reuse</span></td><td><code>src/dispatcher/dispatcher.ts</code></td><td><code>postWebhook()</code> is already generic</td></tr>
+<tr><td><span class="tag reuse">reuse</span></td><td><code>src/market/marketPrice.ts</code></td><td>For the cost-basis enrichment (§08)</td></tr>
+</tbody></table></div>
+<p>One new runtime dependency: an IMAP client. <code>imapflow</code> is the reasonable pick —
+promise-based, maintained, works with <code>mailparser</code> for MIME decoding. Everything
+else is already in <code>package.json</code>.</p>
+</div>
+</section>
+
+<section id="s4">
+<div class="sec-head"><div class="sec-n">04</div><h2>Schema</h2></div>
+<div class="sec-body">
+<p>Appended to <code>supabase/schema.sql</code>, following the existing conventions —
+<code>gen_random_uuid()</code>, <code>timestamptz not null default now()</code>,
+<code>create index if not exists</code>. Single-tenant like the rest, multi-tenant-ready the
+same way (add <code>owner_id</code> + RLS later).</p>
+<pre><code>-- ---------------------------------------------------------------------------
+-- Order tracking: mail accounts, rules, messages, orders, items, releases
+-- ---------------------------------------------------------------------------
+
+create table if not exists mail_accounts (
+  id           uuid primary key default gen_random_uuid(),
+  label        text not null,
+  address      text not null unique,
+  imap_host    text not null,
+  imap_port    int  not null default 993,
+  folder       text not null default 'INBOX',
+  <span class="c">-- Name of the env var holding the app password. The secret itself never
+  -- touches the DB (PRD §20) -- stricter than retailers.config on purpose.</span>
+  secret_ref   text not null,
+  since_days   int  not null default 540,
+  enabled      boolean not null default true,
+  last_scan_at timestamptz,
+  last_status  text,
+  created_at   timestamptz not null default now()
+);
+
+create table if not exists order_rules (
+  id               uuid primary key default gen_random_uuid(),
+  name             text not null,
+  enabled          boolean not null default true,
+  priority         int  not null default 100,
+  <span class="c">-- Optional link to a retailers row, so an order alert can post in that
+  -- retailer's existing channel and share its display identity.</span>
+  retailer_id      uuid references retailers(id) on delete set null,
+  retailer_name    text not null default '',
+  from_contains    text not null default '',
+  subject_contains text not null default '',
+  subject_excludes text not null default '',
+  body_contains    text not null default '',
+  use_regex        boolean not null default false,
+  kind             text not null default 'auto',
+  charge_timing    text not null default 'auto',
+  order_no_regex   text not null default '',
+  total_regex      text not null default '',
+  item_regex       text not null default '',
+  tag              text not null default '',
+  notes            text not null default '',
+  hits             int  not null default 0,
+  created_at       timestamptz not null default now()
+);
+
+create index if not exists order_rules_enabled_idx on order_rules (enabled, priority);
+
+create table if not exists order_messages (
+  id          uuid primary key default gen_random_uuid(),
+  account_id  uuid not null references mail_accounts(id) on delete cascade,
+  message_id  text not null,
+  subject     text not null default '',
+  from_addr   text not null default '',
+  from_name   text not null default '',
+  received_at timestamptz,
+  body        text not null default '',
+  rule_id     uuid references order_rules(id) on delete set null,
+  order_id    uuid,
+  status      text not null default 'new',   <span class="c">-- new|parsed|needs_review|ignored</span>
+  note        text not null default ''
+);
+
+create unique index if not exists order_messages_uq
+  on order_messages (account_id, message_id);
+create index if not exists order_messages_status_idx on order_messages (status);
+
+create table if not exists orders (
+  id            uuid primary key default gen_random_uuid(),
+  order_no      text not null,
+  retailer_name text not null default '',
+  retailer_id   uuid references retailers(id) on delete set null,
+  account_id    uuid references mail_accounts(id) on delete set null,
+  order_date    date,
+  status        text not null default 'open',  <span class="c">-- preorder|open|shipped|delivered|cancelled</span>
+  total         numeric not null default 0,
+  currency      text not null default 'USD',
+  charge_timing text not null default 'at_ship',
+  charged       boolean not null default false,
+  charge_date   date,
+  release_date  date,
+  tracking      text not null default '',
+  tag           text not null default '',
+  <span class="c">-- Field names the user hand-edited. Never overwritten by a rescan.</span>
+  locked        text[] not null default '{}',
+  notes         text not null default '',
+  last_alerted  timestamptz,
+  created_at    timestamptz not null default now(),
+  updated_at    timestamptz not null default now()
+);
+
+create unique index if not exists orders_retailer_no_uq
+  on orders (retailer_name, order_no);
+create index if not exists orders_open_idx on orders (charged, status);
+
+create table if not exists order_items (
+  id         uuid primary key default gen_random_uuid(),
+  order_id   uuid not null references orders(id) on delete cascade,
+  name       text not null default '',
+  qty        int  not null default 1,
+  unit_price numeric not null default 0,
+  line_total numeric not null default 0,
+  <span class="c">-- Enables market-price enrichment against the shared price_cache.</span>
+  tcg_sku    text,
+  manual     boolean not null default false
+);
+
+create index if not exists order_items_order_idx on order_items (order_id);
+
+create table if not exists product_releases (
+  id            uuid primary key default gen_random_uuid(),
+  product       text not null,
+  release_date  date not null,
+  <span class="c">-- Comma-separated substrings matched against item names. Short and
+  -- distinctive beats the full title -- retailers never spell it the same way.</span>
+  match_text    text not null default '',
+  retailer_name text not null default '',
+  est_price     numeric,
+  tcg_sku       text,
+  notes         text not null default '',
+  created_at    timestamptz not null default now()
+);
+
+create index if not exists product_releases_date_idx on product_releases (release_date);</code></pre>
+<div class="flag"><span class="lede">Naming</span>
+<p><code>orders</code> is generic for a Postgres instance you may later share with DNA Card
+Vault. If co-location is likely, prefix the whole set (<code>ord_orders</code>, etc.) now
+rather than migrating later. Everything else is already namespaced enough.</p></div>
+</div>
+</section>
+
+<section id="s5">
+<div class="sec-head"><div class="sec-n">05</div><h2>The scanner loop</h2></div>
+<div class="sec-body">
+<p><code>OrderTracker</code> runs two independent timers on one loop — they have nothing to do
+with each other and shouldn't share a cadence.</p>
+<div class="tbl-wrap"><table>
+<thead><tr><th>Timer</th><th>Default</th><th>Does</th></tr></thead>
+<tbody>
+<tr><td><strong>Mail scan</strong></td><td>900s</td><td>Fetch new mail, match rules, upsert orders, alert on transitions</td></tr>
+<tr><td><strong>Cash digest</strong></td><td>Daily</td><td>Recompute allocation, post a warning for anything landing inside the horizon</td></tr>
+</tbody></table></div>
+<p>Fifteen minutes, not forty-five seconds. An order email is not time-critical the way a
+restock is — the thing it's warning you about is days away.</p>
+
+<div class="req"><div class="id">O-1</div><div>
+<p><strong>Fetch headers before bodies.</strong> IMAP-search each enabled account for
+<code>SINCE &lt;since_days&gt;</code> + <code>FROM &lt;term&gt;</code>, once per sender term
+across all enabled rules, then union the UIDs. Only fetch full bodies for UIDs whose
+<code>Message-ID</code> isn't already in <code>order_messages</code>.</p></div></div>
+<div class="req"><div class="id">O-2</div><div>
+<p><strong>Cap the batch.</strong> Process at most 50 new messages per tick and carry the rest
+to the next one. See §11 — the box is 256MB.</p></div></div>
+<div class="req"><div class="id">O-3</div><div>
+<p>Store the <strong>flattened text</strong>, never raw HTML, capped at 200KB. Prefer whichever
+of the plain and HTML parts carries more content — marketing mail routinely ships a near-empty
+plain part.</p></div></div>
+<div class="req"><div class="id">O-4</div><div>
+<p><strong>Re-apply without re-fetching.</strong> Editing a rule must rebuild orders from
+<code>order_messages</code> alone, no IMAP round-trip. This is what makes rules iterable; the
+existing implementation treats it as non-negotiable and so should this one.</p></div></div>
+<div class="req"><div class="id">O-5</div><div>
+<p>A mail failure is logged and skipped, never thrown past the loop. Per-account
+<code>last_status</code> carries the reason so <code>/status</code> can surface it, exactly
+like adapter health.</p></div></div>
+</div>
+</section>
+
+<section id="s6">
+<div class="sec-head"><div class="sec-n">06</div><h2>Ported logic</h2></div>
+<div class="sec-body">
+<p>Three files, ~600 lines of Python becoming TypeScript. The semantics below are what make it
+predictable — port them precisely; the reference implementation's tests exist to prove you did.</p>
+
+<h3>rules.ts</h3>
+<div class="req"><div class="id">O-6</div><div>
+<p>Every non-empty condition must pass; blank conditions are ignored. Within one condition,
+comma-separated terms are OR'd. <code>subject_excludes</code> inverts — any hit fails the rule.
+Matching is case-insensitive substring unless <code>use_regex</code>, in which case an invalid
+pattern fails closed rather than throwing.</p></div></div>
+<div class="req"><div class="id">O-7</div><div>
+<p>Sender matching runs against display name and address concatenated. Rules evaluate in
+ascending <code>priority</code> then <code>created_at</code>; <strong>first match wins</strong>.
+A rule with zero conditions matches nothing — never everything.</p></div></div>
+
+<h3>parser.ts</h3>
+<div class="req"><div class="id">O-8</div><div>
+<p>Total extraction is <strong>priority-ordered</strong>: labelled totals
+(<code>order total</code>, <code>grand total</code>, <code>total charged</code>) first, then
+bare <code>total</code>, then a trailing amount. Taking the first dollar figure returns the
+subtotal and is wrong.</p></div></div>
+<div class="req"><div class="id">O-9</div><div>
+<p>Line items try several layouts in turn. Lines containing <code>subtotal</code>,
+<code>shipping</code>, <code>tax</code>, <code>discount</code> are never products. Return
+<strong>zero items</strong> rather than fabricated ones.</p></div></div>
+<div class="req"><div class="id">O-10</div><div>
+<p>No order number, no total, or items summing above the total → the message goes to
+<code>needs_review</code> with a plain-language note. Never silent, never thrown.</p></div></div>
+
+<h3>ledger.ts</h3>
+<p>The substance. Runs over every order that is <em>not charged</em> with status
+<code>preorder</code> or <code>open</code>, allocating money to dates — per line item where
+possible, so an order spanning two release months splits across both.</p>
+<pre><code>for (const order of unchargedOpenOrders) {
+  <span class="c">// Explicit beats inferred, in this order</span>
+  if (order.charge_date)            allocate(order.charge_date, order.total)
+  else if (order.release_date)      allocate(order.release_date, order.total)
+  else if (timing === 'at_order')   allocate(order.order_date, order.total)
+  else {
+    let matched = 0
+    for (const item of order.items) {
+      const rel = bestReleaseMatch(item.name, order.retailer_name)
+      if (rel) { allocate(rel.release_date, item.line_total); matched += item.line_total }
+    }
+    const leftover = order.total - matched   <span class="c">// tax, shipping, unmatched</span>
+
+    if (matched > 0 && leftover > 0) allocate(latestMatchedDate, leftover)
+    else if (matched === 0) {
+      const fb = bestReleaseMatch(allItemNames, order.retailer_name)
+      fb ? allocate(fb.release_date, order.total)
+         : allocate(UNSCHEDULED, order.total)
+    }
+  }
+}</code></pre>
+<div class="req"><div class="id">O-11</div><div>
+<p><code>bestReleaseMatch</code> returns the release whose <strong>longest</strong> matching
+term appears — most specific wins. A release with <code>retailer_name</code> set matches only
+that retailer.</p></div></div>
+<div class="req"><div class="id">O-12</div><div>
+<p>Allocation is <strong>computed on read, never stored</strong>. Changing a release date moves
+the money immediately, with no rescan.</p></div></div>
+<div class="req"><div class="id">O-13</div><div>
+<p>Undatable money goes to an explicit <strong>unscheduled</strong> bucket, surfaced in Discord
+and the dashboard. Never silently dropped, never folded into a real date.</p></div></div>
+<div class="req"><div class="id">O-14</div><div>
+<p><strong>Hand edits win permanently.</strong> Editing any order field appends it to
+<code>locked</code>. No scan, upsert or rebuild may overwrite a locked field. Orders with notes,
+and hand-created orders, survive a rebuild untouched.</p></div></div>
+</div>
+</section>
+
+<section id="s7">
+<div class="sec-head"><div class="sec-n">07</div><h2>Alert state machine</h2></div>
+<div class="sec-body">
+<p>Your stock rule is "alert on transitions, not states." Orders follow the identical
+philosophy in <code>src/orders/orderState.ts</code> — a pure <code>decide()</code> with an
+injectable <code>now</code>, exactly like <code>core/stateMachine.ts</code>.</p>
+<div class="tbl-wrap"><table>
+<thead><tr><th>Transition</th><th>Alert</th><th>Why it's worth a ping</th></tr></thead>
+<tbody>
+<tr><td>— → order recorded</td><td>🧾 New order</td><td>Confirms the tracker saw what you bought</td></tr>
+<tr><td>preorder/open → shipped</td><td>💳 Charged</td><td>Money just left; the forecast changed</td></tr>
+<tr><td>any → cancelled</td><td>↩️ Cancelled</td><td>Money you thought you owed, you don't</td></tr>
+<tr><td>charge date enters horizon</td><td>⏳ Due soon</td><td><strong>The point of the whole subsystem</strong></td></tr>
+<tr><td>parse failed</td><td>⚠️ to <code>#ops</code></td><td>Same channel adapter degradation already uses</td></tr>
+</tbody></table></div>
+<div class="req"><div class="id">O-15</div><div>
+<p>Dedup via <code>orders.last_alerted</code> against a cooldown, mirroring
+<code>watches.last_alerted</code>. The due-soon warning fires <strong>once per order per
+horizon crossing</strong> — not daily until the date passes. A daily digest that repeats
+itself gets muted, and then the one that mattered gets muted with it.</p></div></div>
+<div class="req"><div class="id">O-16</div><div>
+<p>The digest is a <strong>single embed for a date</strong>, not one per order. "$346.84 clears
+Friday across 3 orders" with the orders as fields.</p></div></div>
+</div>
+</section>
+
+<section id="s8">
+<div class="sec-head"><div class="sec-n">08</div><h2>Discord surface</h2></div>
+<div class="sec-body">
+<p>One new channel, <code>#orders</code>, alongside the retailer channels — configured by
+webhook URL the way <code>opsChannelId</code> already is. Order alerts optionally cross-post to
+the retailer's own channel when <code>order_rules.retailer_id</code> is set.</p>
+
+<h3>Slash commands <span class="tag mod">src/bot/commands.ts</span></h3>
+<p>Kebab-case, matching the existing set. Each delegates to
+<code>src/service/orderActions.ts</code> so the control API shares the logic — the same split
+<code>watchActions.ts</code> already enforces.</p>
+<div class="tbl-wrap"><table>
+<thead><tr><th>Command</th><th>Effect</th></tr></thead>
+<tbody>
+<tr><td><code>/cash-due [days]</code></td><td>What's owed, by date, within the horizon. The headline command</td></tr>
+<tr><td><code>/list-orders [status] [retailer]</code></td><td>Open orders with charged/owed state</td></tr>
+<tr><td><code>/add-release product date [match] [price] [tcg_sku]</code></td><td>Manual release-date entry</td></tr>
+<tr><td><code>/list-releases</code></td><td>Calendar with money committed to each</td></tr>
+<tr><td><code>/scan-mail</code></td><td>Force a scan (the <code>/check-now</code> analog)</td></tr>
+<tr><td><code>/reapply-rules</code></td><td>Rebuild from stored mail, no IMAP</td></tr>
+</tbody></table></div>
+<p><code>/status</code> gains a mail block: per-account last scan, message counts, and the
+<code>needs_review</code> backlog.</p>
+
+<div class="flag good"><span class="lede">Capability neither system had alone</span>
+<p><code>order_items.tcg_sku</code> + your existing <code>price_cache</code> and
+<code>MarketPriceService</code> means the due-soon embed can carry a cost-basis line:
+<em>"$346.84 clears Friday — 3× Mega Evolution ETB at $59.99 against a $71 market median."</em>
+Sentinel already computes that number for restock alerts; here it prices what you actually
+committed to. Cheap to add once <code>tcg_sku</code> is populated, and it's the strongest
+argument for this living in Sentinel rather than anywhere else.</p></div>
+</div>
+</section>
+
+<section id="s9">
+<div class="sec-head"><div class="sec-n">09</div><h2>Config &amp; secrets</h2></div>
+<div class="sec-body">
+<h3>src/lib/config.ts <span class="tag mod">modify</span></h3>
+<pre><code>  orders: z.object({
+    enabled:        boolFromEnv(true),
+    scanIntervalSec: numFromEnv(900),
+    <span class="c">// Days ahead to warn about an upcoming charge date.</span>
+    horizonDays:     numFromEnv(7),
+    digestHourUtc:   numFromEnv(14),
+    alertCooldownSec: numFromEnv(21600),
+    ordersWebhookUrl: z.string().optional().default(''),
+    maxMessagesPerTick: numFromEnv(50),
+  }),</code></pre>
+
+<h3>Secrets</h3>
+<p>Mail passwords follow <code>mail_accounts.secret_ref</code> → environment, not the DB:</p>
+<pre><code>fly secrets set \
+  MAIL_PRIMARY_GMAIL=xxxxxxxxxxxxxxxx \
+  MAIL_SECONDARY_OUTLOOK=xxxxxxxxxxxxxxxx \
+  ORDERS_WEBHOOK_URL=https://discord.com/api/webhooks/...</code></pre>
+<p>A row stores <code>secret_ref = 'MAIL_PRIMARY_GMAIL'</code> and the scanner reads
+<code>process.env[row.secret_ref]</code>. This is deliberately stricter than
+<code>retailers.config</code> — a mail password reaches far more than a RedSky key does, and it
+keeps the DB free of anything worth stealing.</p>
+<div class="req"><div class="id">O-17</div><div>
+<p>App passwords only, never a primary account password. Providers reject the latter for IMAP
+anyway, and an app password can be revoked without touching the account.</p></div></div>
+<div class="req"><div class="id">O-18</div><div>
+<p>If <code>secret_ref</code> resolves to nothing, the account is skipped with a loud
+<code>#ops</code> warning. It must not fall back to any other credential.</p></div></div>
+</div>
+</section>
+
+<section id="s10">
+<div class="sec-head"><div class="sec-n">10</div><h2>Dashboard</h2></div>
+<div class="sec-body">
+<p>The Next.js dashboard already has auth, <code>WatchTable</code>, <code>AddItemForm</code>,
+and a server-side-only <code>CONTROL_API_URL</code> pattern. Orders slot in as a second route
+reusing all of it — no new auth surface, no new token, no CORS.</p>
+<ul>
+  <li><code>/orders</code> — the cash timeline as the hero, orders table beneath it</li>
+  <li><code>/releases</code> — release-date CRUD, showing money committed to each</li>
+  <li><code>/orders/[id]</code> — edit any field; edited fields show as locked</li>
+  <li><code>/review</code> — the <code>needs_review</code> queue with the parse note</li>
+</ul>
+<p>New API routes in <code>src/api/server.ts</code>, same bearer-token gate and same shape as
+the existing <code>/api/watches</code> handlers: <code>GET/POST /api/orders</code>,
+<code>PATCH/DELETE /api/orders/:id</code>, <code>GET/POST /api/releases</code>,
+<code>GET /api/cash-due</code>.</p>
+<p>None of PokeTrack's own UI comes across — roughly 70KB of Python-rendered HTML and
+hand-built SVG charts. It exists because the standalone app had nowhere else to draw. This
+dashboard supersedes all of it.</p>
+</div>
+</section>
+
+<section id="s11">
+<div class="sec-head"><div class="sec-n">11</div><h2>Constraints</h2></div>
+<div class="sec-body">
+<div class="flag"><span class="lede">Memory · the real one</span>
+<p>The Fly machine starts at 256MB. A first scan over 540 days across multiple accounts will
+OOM if it fetches everything into memory — which is exactly what the local Python version does,
+because a desktop has room to be sloppy. <strong>O-1 and O-2 are not optimizations, they're
+requirements:</strong> headers first, bodies only for unseen messages, 50 per tick. If it still
+OOMs, <code>fly scale memory 512</code> before loosening the batch.</p></div>
+
+<div class="flag"><span class="lede">Blast radius</span>
+<p>The worker already holds a Discord bot token, a Supabase service key, and eBay credentials.
+Adding mail app passwords means one compromised host reaches your inbox too. Still better than
+a lightly-obfuscated SQLite file on a Windows desktop — but it's a conscious widening, and app
+passwords (O-17) are what keep it revocable.</p></div>
+
+<div class="flag good"><span class="lede">One thing that gets easier</span>
+<p><code>SiteMonitor</code>'s own docstring notes that Pokémon Center 403s datacenter IPs, so
+server-side watching needs a residential proxy or the browser extension. <strong>IMAP has no
+such problem.</strong> Mail servers don't care that you're connecting from Fly. This subsystem
+works properly on the host where your hardest adapter is compromised.</p></div>
+
+<h3>Smaller ones</h3>
+<ul>
+  <li>Retailers change email templates constantly. The <code>needs_review</code> queue is the
+  designed response, not a bug — expect to use it after the first real scan.</li>
+  <li>Order emails carry no release date. That data is manual, permanently. Don't design as
+  though it will arrive.</li>
+  <li>Partial shipments splitting one order across dates are out of scope for v1.</li>
+  <li><code>orders.locked</code> as <code>text[]</code> assumes Postgres arrays; if the
+  Supabase client round-trips them awkwardly, <code>jsonb</code> matches
+  <code>retailers.config</code> precedent better.</li>
+</ul>
+</div>
+</section>
+
+<section id="s12">
+<div class="sec-head"><div class="sec-n">12</div><h2>Build order</h2></div>
+<div class="sec-body">
+<p>Each phase ships something usable. Resist starting with IMAP — it's the most visible piece
+and the least important to get right first.</p>
+<div class="req"><div class="id">P-1</div><div>
+<p><strong>Schema + ledger + manual entry.</strong> Tables, <code>ledger.ts</code>,
+<code>/add-release</code>, <code>/cash-due</code>, and hand-created orders via
+<code>orderActions</code>. <em>No email anywhere.</em> This answers the actual question and
+de-risks the only part that's subtle.</p></div></div>
+<div class="req"><div class="id">P-2</div><div>
+<p><strong>Rules + parser, offline.</strong> Ported logic plus its test suite, driven from
+pasted message text. Fully testable with no IMAP and no network.</p></div></div>
+<div class="req"><div class="id">P-3</div><div>
+<p><strong>The loop.</strong> <code>mailbox.ts</code>, <code>OrderTracker</code>, wiring into
+<code>index.ts</code>, <code>needs_review</code>, <code>/scan-mail</code>,
+<code>/reapply-rules</code>.</p></div></div>
+<div class="req"><div class="id">P-4</div><div>
+<p><strong>Alerts.</strong> <code>orderState.ts</code>, <code>orderEmbeds.ts</code>, the
+<code>#orders</code> channel, due-soon warnings.</p></div></div>
+<div class="req"><div class="id">P-5</div><div>
+<p><strong>Dashboard + market enrichment.</strong> The four routes, then
+<code>tcg_sku</code> on line items and the cost-basis line in the digest.</p></div></div>
+</div>
+</section>
+
+<section id="s13">
+<div class="sec-head"><div class="sec-n">13</div><h2>Acceptance</h2></div>
+<div class="sec-body">
+<p>Ported from the reference implementation's passing suite. Run under
+<code>node --test --import tsx</code> like the existing <code>*.test.ts</code> files. Real
+numbers — an implementation that reproduces them is correct.</p>
+
+<h3>Rules</h3>
+<ul>
+  <li>"Your pre-order is confirmed" from <code>orders@pokemoncenter.com</code> → pre-order rule, not the order rule</li>
+  <li>"Your order has shipped" from <code>shipping@pokemoncenter.com</code> → shipping rule</li>
+  <li>"New arrivals at Pokémon Center" from <code>news@pokemoncenter.com</code> → no match</li>
+  <li>A Target order containing only bath towels → no match (the <code>body_contains</code> guard)</li>
+</ul>
+
+<h3>Parser</h3>
+<ul>
+  <li>Subtotal <code>124.97</code>, tax <code>10.31</code>, order total <code>135.28</code> →
+  extracted total is <strong>135.28</strong></li>
+  <li>Same message → exactly <strong>2</strong> items; none named "Subtotal", "Estimated Tax" or "Shipping"</li>
+  <li>Qty 2 × $49.99 → line total <strong>99.98</strong></li>
+  <li>A shipping notice for an existing order updates it to shipped with tracking; order count unchanged</li>
+</ul>
+
+<h3>Ledger</h3>
+<div class="card">
+<p>Two uncharged pre-orders plus a Target order, against
+<code>mega evolution → 2026-09-26</code> and <code>destined rivals → 2026-10-17</code>:</p>
+<div class="tbl-wrap"><table>
+<thead><tr><th>Assertion</th><th class="num">Expected</th></tr></thead>
+<tbody>
+<tr><td>Owed on 2026-09-26 (two retailers, one release)</td><td class="num">346.84</td></tr>
+<tr><td>Owed on 2026-10-17</td><td class="num">175.30</td></tr>
+<tr><td>Unscheduled</td><td class="num">0.00</td></tr>
+<tr><td>Total still owed</td><td class="num">522.14</td></tr>
+<tr><td>Total already charged</td><td class="num">309.85</td></tr>
+</tbody></table></div>
+<p>346.84 spans two retailers releasing the same product on the same day — the timeline is
+organised by date, not by order. That's the case a per-order view gets wrong.</p>
+</div>
+<ul>
+  <li>Move <code>destined rivals</code> to 2026-11-07 → the 10-17 bucket vanishes, an 11-07
+  bucket appears, with no rescan</li>
+  <li>A cancelled order contributes <strong>zero</strong> to both owed and charged</li>
+  <li>Hand-edit a total to 999.00, then rebuild → still <strong>999.00</strong>, notes intact</li>
+  <li>Rebuild twice → order count unchanged both times</li>
+</ul>
+</div>
+</section>
+
+<footer>
+Reference implementation: PokeTrack — Python, standard library only, full passing suite.
+Logic to port lives in <code>rules.py</code>, <code>parser.py</code> and <code>money.py</code>.
+Its UI layer is not carried over.
+</footer>
+</main>
+</div>
+</body>
+</html>

@@ -1,0 +1,144 @@
+{
+ "props": {
+  "pageProps": {
+   "initialData": {
+    "data": {
+     "product": {
+      "usItemId": "19988614228",
+      "id": "24O4RHN92TF8",
+      "name": "Pokemon Trading Card Games Mega Evolution Chaos Rising Elite Trainer Box",
+      "availabilityStatus": "IN_STOCK",
+      "availabilityStatusV2": {
+       "display": "In stock",
+       "value": "IN_STOCK"
+      },
+      "itemPageAvailabilityStatus": "IN_STOCK",
+      "offerType": "ONLINE_ONLY",
+      "offerId": "4B3BF5E06D8A3D089BE92E9B28C55F56",
+      "sellerId": "5811F7C53AB14DE5943E726AA07291A9",
+      "sellerName": "Rares Market L.L.C.",
+      "sellerDisplayName": "Rares Market",
+      "sellerType": "EXTERNAL",
+      "catalogSellerId": 102536471,
+      "orderLimit": 12,
+      "orderMinLimit": 1,
+      "buyNowEligible": true,
+      "showAtc": true,
+      "preOrder": {
+       "isPreOrder": false,
+       "releaseDate": null
+      },
+      "shippingOption": {
+       "availabilityStatus": "AVAILABLE",
+       "slaTier": null,
+       "deliveryDate": "2026-08-29T21:59:00.000Z",
+       "maxDeliveryDate": null,
+       "shipMethod": null,
+       "shipPrice": null,
+       "internationalShipping": null
+      },
+      "fulfillmentType": "FC",
+      "fulfillmentTitle": "title_shipToHome_date_delivery",
+      "priceInfo": {
+       "dropPrice": false,
+       "priceDisplayCodes": {
+        "clearance": null,
+        "eligibleForAssociateDiscount": null,
+        "finalCostByWeight": null,
+        "priceDisplayCondition": null,
+        "reducedPrice": null,
+        "rollback": null,
+        "submapType": null,
+        "isB2BPrice": false,
+        "pricePerUnitUom": "EA",
+        "priceDisplayType": "UNKNOWN",
+        "priceComparedToNew": true
+       },
+       "currentPrice": {
+        "price": 73.76,
+        "priceString": "$73.76",
+        "variantPriceString": "$73.76",
+        "currencyUnit": "USD",
+        "bestValue": null,
+        "supportText": null,
+        "priceDisplay": "$73.76"
+       },
+       "basePrice": null,
+       "wasPrice": null,
+       "comparisonPrice": null,
+       "unitPrice": null,
+       "savings": null,
+       "savingsAmount": null,
+       "secondaryOfferBoost": null,
+       "shipPrice": null,
+       "isPriceReduced": false,
+       "priceReducedDisplay": null,
+       "subscriptionPrice": null,
+       "priceRange": {
+        "minPrice": null,
+        "maxPrice": null,
+        "priceString": null,
+        "currencyUnit": null,
+        "denominations": null
+       },
+       "listPrice": null,
+       "capType": null,
+       "volumePriceTiers": [],
+       "walmartFundedAmount": null,
+       "wPlusEarlyAccessPrice": null,
+       "additionalFees": {
+        "dutyFee": {
+         "price": 0,
+         "priceString": "$0.00"
+        },
+        "shippingAndImportFee": {
+         "price": 0,
+         "priceString": "$0.00"
+        },
+        "giftCardMarginAndFee": null,
+        "estimatedTotalPrice": {
+         "price": 73.76,
+         "priceString": "$73.76"
+        },
+        "countryName": "United States"
+       },
+       "taxInfo": null
+      },
+      "conditionType": "New",
+      "isConditionNew": true,
+      "fulfillmentOptions": [
+       {
+        "__typename": "ShippingOptionV2",
+        "type": "SHIPPING",
+        "availabilityType": "CURRENT",
+        "availableQuantity": null,
+        "maxOrderQuantity": 12,
+        "orderLimit": 12,
+        "isLowInStock": false,
+        "selected": true
+       },
+       {
+        "__typename": "PickupOptionV2",
+        "type": "PICKUP",
+        "availableQuantity": null,
+        "maxOrderQuantity": null,
+        "orderLimit": null,
+        "isLowInStock": null,
+        "selected": false
+       },
+       {
+        "__typename": "DeliveryOptionV2",
+        "type": "DELIVERY",
+        "availableQuantity": null,
+        "maxOrderQuantity": null,
+        "orderLimit": null,
+        "isLowInStock": null,
+        "selected": false
+       }
+      ]
+     }
+    }
+   }
+  }
+ }
+}

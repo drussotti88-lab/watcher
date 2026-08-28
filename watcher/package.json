@@ -1,0 +1,25 @@
+{
+  "name": "watcher",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Watches retailers from your own machine, on your own connection",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "probe": "node --experimental-strip-types src/index.ts probe",
+    "browser": "node --experimental-strip-types src/index.ts browser",
+    "help": "node --experimental-strip-types src/index.ts help",
+    "test": "node --experimental-strip-types --test test/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "inspect": "node --experimental-strip-types src/index.ts inspect"
+  },
+  "dependencies": {
+    "playwright": "^1.49.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.6.0"
+  }
+}

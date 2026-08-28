@@ -1,0 +1,742 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Order Tracking PRD</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=Public+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+:root {
+  color-scheme: light;
+  --ground: #f2f4f3;
+  --surface: #ffffff;
+  --surface-2: #e9edeb;
+  --ink: #14181a;
+  --ink-2: #4b545a;
+  --ink-3: #7f8a8f;
+  --accent: #0f6b63;
+  --accent-soft: #dfeeec;
+  --flag: #9c5c08;
+  --flag-soft: #faf0e0;
+  --rule: #dae0de;
+  --shadow: 0 1px 2px rgba(20,24,26,.05), 0 8px 26px rgba(20,24,26,.06);
+  --display: "Bricolage Grotesque", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --body: "Public Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --ground: #0f1312;
+    --surface: #171b1a;
+    --surface-2: #1f2523;
+    --ink: #edf1ef;
+    --ink-2: #a3ada9;
+    --ink-3: #77817d;
+    --accent: #4fb3a7;
+    --accent-soft: #122725;
+    --flag: #d69a48;
+    --flag-soft: #251f10;
+    --rule: #242a28;
+    --shadow: 0 1px 2px rgba(0,0,0,.5), 0 8px 26px rgba(0,0,0,.35);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --ground: #0f1312;
+  --surface: #171b1a;
+  --surface-2: #1f2523;
+  --ink: #edf1ef;
+  --ink-2: #a3ada9;
+  --ink-3: #77817d;
+  --accent: #4fb3a7;
+  --accent-soft: #122725;
+  --flag: #d69a48;
+  --flag-soft: #251f10;
+  --rule: #242a28;
+  --shadow: 0 1px 2px rgba(0,0,0,.5), 0 8px 26px rgba(0,0,0,.35);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0; background: var(--ground); color: var(--ink);
+  font-family: var(--body); font-size: 16px; line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+.wrap {
+  display: grid; grid-template-columns: 200px minmax(0, 74ch);
+  gap: 52px; justify-content: center; padding: 52px 30px 120px;
+}
+
+.toc { position: sticky; top: 36px; align-self: start; }
+.toc .label {
+  font-family: var(--mono); font-size: 10.5px; letter-spacing: .14em;
+  text-transform: uppercase; color: var(--ink-3); margin: 0 0 11px;
+}
+.toc ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
+.toc a {
+  display: grid; grid-template-columns: 22px 1fr; gap: 6px; padding: 5px 8px;
+  border-radius: 5px; font-size: 13px; color: var(--ink-2); text-decoration: none; line-height: 1.3;
+}
+.toc a .n { font-family: var(--mono); font-size: 11px; color: var(--ink-3); padding-top: 1px; }
+.toc a:hover { background: var(--accent-soft); color: var(--accent); }
+.toc a:hover .n { color: var(--accent); }
+.toc a:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+header.mast { margin-bottom: 40px; padding-bottom: 26px; border-bottom: 2px solid var(--ink); }
+.eyebrow {
+  font-family: var(--mono); font-size: 11px; letter-spacing: .14em; text-transform: uppercase;
+  color: var(--accent); margin: 0 0 12px;
+}
+h1 {
+  font-family: var(--display); font-weight: 700; font-size: clamp(31px, 4.4vw, 42px);
+  line-height: 1.04; letter-spacing: -.02em; margin: 0 0 13px; text-wrap: balance;
+}
+.standfirst { font-size: 17.5px; color: var(--ink-2); margin: 0 0 18px; text-wrap: pretty; }
+.meta {
+  display: flex; flex-wrap: wrap; gap: 6px 22px; font-family: var(--mono);
+  font-size: 12px; color: var(--ink-3); margin: 0;
+}
+.meta b { color: var(--ink-2); font-weight: 500; }
+
+section { margin-bottom: 44px; scroll-margin-top: 24px; }
+.sec-head { display: grid; grid-template-columns: 34px 1fr; gap: 14px; align-items: baseline; margin-bottom: 14px; }
+.sec-n {
+  font-family: var(--mono); font-size: 12px; color: var(--accent); font-weight: 500;
+  border-top: 2px solid var(--accent); padding-top: 7px;
+}
+h2 {
+  font-family: var(--display); font-weight: 600; font-size: 24px; letter-spacing: -.012em;
+  margin: 0; line-height: 1.18; text-wrap: balance;
+}
+h3 {
+  font-family: var(--display); font-weight: 600; font-size: 16.5px; margin: 24px 0 8px;
+  letter-spacing: -.005em;
+}
+.sec-body { padding-left: 48px; }
+p { margin: 0 0 13px; }
+ul, ol.b { margin: 0 0 13px; padding-left: 20px; }
+li { margin-bottom: 6px; }
+li::marker { color: var(--ink-3); }
+strong { font-weight: 600; }
+a { color: var(--accent); text-underline-offset: 2px; }
+em { color: var(--ink-2); }
+
+code {
+  font-family: var(--mono); font-size: .85em; background: var(--surface-2);
+  padding: 1.5px 5px; border-radius: 4px;
+}
+pre {
+  font-family: var(--mono); font-size: 12.5px; line-height: 1.65; background: var(--surface);
+  border: 1px solid var(--rule); border-left: 3px solid var(--accent); border-radius: 0 9px 9px 0;
+  padding: 15px 18px; overflow-x: auto; margin: 0 0 15px;
+}
+pre code { background: none; padding: 0; font-size: inherit; }
+pre .c { color: var(--ink-3); }
+
+.req {
+  display: grid; grid-template-columns: 52px 1fr; gap: 13px; padding: 11px 0;
+  border-bottom: 1px solid var(--rule); align-items: start;
+}
+.req:last-of-type { border-bottom: none; }
+.req .id {
+  font-family: var(--mono); font-size: 11px; font-weight: 500; color: var(--accent);
+  background: var(--accent-soft); border-radius: 4px; padding: 3px 0; text-align: center;
+  letter-spacing: .02em;
+}
+.req div:last-child { font-size: 15.5px; }
+.req p { margin: 0 0 6px; }
+.req p:last-child { margin: 0; }
+
+.card {
+  background: var(--surface); border: 1px solid var(--rule); border-radius: 11px;
+  padding: 18px 21px; box-shadow: var(--shadow); margin: 0 0 15px;
+}
+.card > :last-child { margin-bottom: 0; }
+.card h3 { margin-top: 0; }
+
+.decide {
+  background: var(--flag-soft); border-left: 3px solid var(--flag);
+  padding: 13px 17px; border-radius: 0 9px 9px 0; margin: 0 0 15px; font-size: 15.5px;
+}
+.decide > :last-child { margin-bottom: 0; }
+.decide .lede {
+  font-family: var(--mono); font-weight: 500; font-size: 10.5px; letter-spacing: .13em;
+  text-transform: uppercase; color: var(--flag); display: block; margin-bottom: 6px;
+}
+
+.tbl-wrap { overflow-x: auto; margin: 0 0 15px; }
+table { border-collapse: collapse; width: 100%; font-size: 14.5px; }
+th {
+  font-family: var(--mono); font-size: 10.5px; text-transform: uppercase; letter-spacing: .1em;
+  color: var(--ink-3); text-align: left; font-weight: 500; padding: 0 13px 8px 0;
+  border-bottom: 1px solid var(--rule); white-space: nowrap; vertical-align: bottom;
+}
+td { padding: 9px 13px 9px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+tr:last-child td { border-bottom: none; }
+td code { white-space: nowrap; }
+.num { font-variant-numeric: tabular-nums; text-align: right; }
+
+.pill {
+  display: inline-block; font-family: var(--mono); font-size: 10.5px; letter-spacing: .05em;
+  padding: 2px 7px; border-radius: 4px; border: 1px solid var(--rule); color: var(--ink-2);
+  white-space: nowrap; text-transform: uppercase;
+}
+.pill.must { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+.pill.later { color: var(--ink-3); }
+
+footer {
+  margin-top: 56px; padding-top: 20px; border-top: 1px solid var(--rule);
+  font-size: 14px; color: var(--ink-3);
+}
+
+@media (max-width: 900px) {
+  .wrap { grid-template-columns: minmax(0, 1fr); gap: 0; padding: 32px 20px 90px; }
+  .toc { position: static; margin-bottom: 30px; padding-bottom: 20px; border-bottom: 1px solid var(--rule); }
+  .toc ol { flex-direction: row; flex-wrap: wrap; gap: 3px; }
+  .toc a { background: var(--surface); border: 1px solid var(--rule); }
+  .sec-body { padding-left: 0; }
+  .sec-head { grid-template-columns: 28px 1fr; gap: 10px; }
+}
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+html { scroll-behavior: smooth; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav class="toc" aria-label="Contents">
+  <p class="label">Sections</p>
+  <ol>
+    <li><a href="#s1"><span class="n">01</span><span>Why</span></a></li>
+    <li><a href="#s2"><span class="n">02</span><span>The core idea</span></a></li>
+    <li><a href="#s3"><span class="n">03</span><span>Scope</span></a></li>
+    <li><a href="#s4"><span class="n">04</span><span>Data model</span></a></li>
+    <li><a href="#s5"><span class="n">05</span><span>Rules engine</span></a></li>
+    <li><a href="#s6"><span class="n">06</span><span>Email parsing</span></a></li>
+    <li><a href="#s7"><span class="n">07</span><span>Money model</span></a></li>
+    <li><a href="#s8"><span class="n">08</span><span>Surfaces</span></a></li>
+    <li><a href="#s9"><span class="n">09</span><span>Open decisions</span></a></li>
+    <li><a href="#s10"><span class="n">10</span><span>Migration</span></a></li>
+    <li><a href="#s11"><span class="n">11</span><span>Acceptance tests</span></a></li>
+    <li><a href="#s12"><span class="n">12</span><span>Phasing</span></a></li>
+  </ol>
+</nav>
+
+<main>
+<header class="mast">
+  <p class="eyebrow">Product requirements</p>
+  <h1>Order &amp; Release-Day Cash Tracking</h1>
+  <p class="standfirst">Folding PokeTrack — a working standalone app — into the DNA card vault,
+  so a pre-order is tracked as inventory you don't have yet and the vault can tell you what
+  cash you need ready on each release date.</p>
+  <p class="meta">
+    <span><b>Status</b> draft for implementation</span>
+    <span><b>Reference impl</b> PokeTrack, Python, working</span>
+    <span><b>Target stack</b> to be determined by implementer</span>
+  </p>
+</header>
+
+<section id="s1">
+<div class="sec-head"><div class="sec-n">01</div><h2>Why this exists</h2></div>
+<div class="sec-body">
+<p>The card vault knows what you own. It does not know what you have <em>committed to</em>.
+For someone buying sealed product across multiple retailers, the money that matters is
+usually money that hasn't left the account yet — pre-orders that will all charge on the same
+release day, from stores that authorize at order time and charge at ship.</p>
+<p>The problem being solved is a cash-timing problem, not an inventory problem: <strong>how
+much do I need available on September 26, and which orders make up that number.</strong></p>
+<p>A standalone version of this exists and works — it reads multiple inboxes over IMAP,
+matches order mail against user-defined rules, extracts orders and line items, and renders
+the cash timeline. This document specifies folding that capability into the vault rather
+than running two apps. The existing implementation is a reference for logic and test
+expectations, not code to copy.</p>
+</div>
+</section>
+
+<section id="s2">
+<div class="sec-head"><div class="sec-n">02</div><h2>The core idea</h2></div>
+<div class="sec-body">
+<p><strong>An order is incoming inventory.</strong> A pre-order is something you own on paper
+but not in hand. On delivery it graduates into the vault proper. That gives one continuous
+timeline instead of two disconnected apps:</p>
+<pre><code>ordered  →  pre-order  →  shipped  →  delivered  →  <span class="c">vault item</span>
+   ↑                          ↑                            ↑
+ money owed            money charged              inventory owned</code></pre>
+<p>This is the integration point that makes the merge worth doing. If orders just sit in a
+side table with no relationship to vault items, the result is a second app wearing the
+vault's CSS. Two consequences follow:</p>
+<ul>
+  <li>An order line item should be able to <strong>resolve to a vault item</strong> — the same
+  product identity the vault already uses for a sealed box or a card.</li>
+  <li>A delivered order should be able to <strong>create or increment</strong> vault inventory,
+  with the order as its provenance and its price as the cost basis.</li>
+</ul>
+<div class="decide"><span class="lede">Depends on the vault</span>
+<p>How tightly line items bind to vault items depends on whether the vault has a product
+catalog with stable identity, or whether items are free-text. Both are workable — see
+<a href="#s9">§09</a>. Ship the loose version first; tighten later.</p></div>
+</div>
+</section>
+
+<section id="s3">
+<div class="sec-head"><div class="sec-n">03</div><h2>Scope</h2></div>
+<div class="sec-body">
+<h3>In scope</h3>
+<ul>
+  <li>Connecting one or more email accounts and scanning them for order mail</li>
+  <li>User-authored rules that decide which mail counts and what it means</li>
+  <li>Extracting order number, date, total, line items, status and tracking</li>
+  <li>Manual entry of product release dates</li>
+  <li>A cash-due timeline and supporting order views</li>
+  <li>Hand-editing and hand-creating orders, with edits protected from being overwritten</li>
+</ul>
+<h3>Out of scope for v1</h3>
+<ul>
+  <li>Scraping retailer websites or using retailer APIs — email only</li>
+  <li>Automatic background scanning on a schedule (manual trigger in v1; see <a href="#s12">§12</a>)</li>
+  <li>Payment or card integration of any kind</li>
+  <li>Price/market-value tracking — the vault's existing concern, not this feature's</li>
+  <li>Partial shipments splitting one order across dates</li>
+</ul>
+<h3>Non-goals</h3>
+<p>This is not a general email client, and not a purchase-approval workflow. It reads mail
+and never sends any.</p>
+</div>
+</section>
+
+<section id="s4">
+<div class="sec-head"><div class="sec-n">04</div><h2>Data model</h2></div>
+<div class="sec-body">
+<p>Field names below are from the reference implementation. Types are given generically —
+adapt to whatever the vault's ORM or storage layer uses. <code>date</code> means a plain
+calendar date; the money model never needs time-of-day.</p>
+
+<h3>mail_account</h3>
+<div class="tbl-wrap"><table>
+<thead><tr><th>Field</th><th>Type</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td><code>email</code></td><td>string, unique</td><td>The address</td></tr>
+<tr><td><code>imap_host</code>, <code>imap_port</code></td><td>string, int</td><td>Derive host from the domain for common providers; let the user override</td></tr>
+<tr><td><code>secret</code></td><td>string</td><td>App password, encrypted at rest. See <a href="#s9">§09</a> — the vault may already have a secrets story</td></tr>
+<tr><td><code>folder</code></td><td>string</td><td>Defaults to INBOX</td></tr>
+<tr><td><code>since_days</code></td><td>int</td><td>How far back to search. Default 540</td></tr>
+<tr><td><code>last_scan_at</code>, <code>last_status</code></td><td>timestamp, string</td><td>Shown in the UI so failures are visible</td></tr>
+</tbody></table></div>
+
+<h3>rule</h3>
+<div class="tbl-wrap"><table>
+<thead><tr><th>Field</th><th>Type</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td><code>name</code>, <code>enabled</code>, <code>priority</code></td><td>string, bool, int</td><td>Lower priority checked first</td></tr>
+<tr><td><code>retailer</code></td><td>string</td><td>Stamped onto orders this rule creates</td></tr>
+<tr><td><code>from_contains</code></td><td>string</td><td>Comma-separated; any match passes</td></tr>
+<tr><td><code>subject_contains</code></td><td>string</td><td>Comma-separated; any match passes</td></tr>
+<tr><td><code>subject_excludes</code></td><td>string</td><td>Comma-separated; <em>no</em> match may pass</td></tr>
+<tr><td><code>body_contains</code></td><td>string</td><td>Comma-separated; any match passes</td></tr>
+<tr><td><code>use_regex</code></td><td>bool</td><td>Treat the four fields above as patterns instead of substrings</td></tr>
+<tr><td><code>kind</code></td><td>enum</td><td><code>auto</code> · <code>order</code> · <code>preorder</code> · <code>shipment</code> · <code>cancellation</code> · <code>delivery</code></td></tr>
+<tr><td><code>charge_timing</code></td><td>enum</td><td><code>auto</code> · <code>at_order</code> · <code>at_ship</code> · <code>at_release</code></td></tr>
+<tr><td><code>order_no_regex</code>, <code>total_regex</code>, <code>item_regex</code></td><td>string</td><td>Optional per-rule extraction overrides</td></tr>
+<tr><td><code>tag</code>, <code>notes</code>, <code>hits</code></td><td>string, string, int</td><td><code>hits</code> is a match counter, useful for spotting dead rules</td></tr>
+</tbody></table></div>
+
+<h3>message</h3>
+<p>The raw email, kept so rules can be re-applied without re-downloading.</p>
+<div class="tbl-wrap"><table>
+<thead><tr><th>Field</th><th>Type</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td><code>account_id</code>, <code>message_id</code></td><td>fk, string</td><td>Unique together — this is the dedupe key</td></tr>
+<tr><td><code>subject</code>, <code>from_addr</code>, <code>from_name</code>, <code>received_at</code></td><td>string ×3, timestamp</td><td></td></tr>
+<tr><td><code>body</code></td><td>text</td><td>Flattened plain text, not raw HTML. Cap around 200KB</td></tr>
+<tr><td><code>rule_id</code>, <code>order_id</code></td><td>fk, fk</td><td>What matched and what it produced</td></tr>
+<tr><td><code>status</code></td><td>enum</td><td><code>new</code> · <code>parsed</code> · <code>needs_review</code> · <code>ignored</code></td></tr>
+<tr><td><code>note</code></td><td>string</td><td>Why it needs review, in plain language</td></tr>
+</tbody></table></div>
+
+<h3>order</h3>
+<div class="tbl-wrap"><table>
+<thead><tr><th>Field</th><th>Type</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td><code>order_no</code>, <code>retailer</code></td><td>string, string</td><td><strong>Unique together</strong> — the upsert key</td></tr>
+<tr><td><code>order_date</code></td><td>date</td><td>Falls back to the email's received date</td></tr>
+<tr><td><code>status</code></td><td>enum</td><td><code>preorder</code> · <code>open</code> · <code>shipped</code> · <code>delivered</code> · <code>cancelled</code></td></tr>
+<tr><td><code>total</code>, <code>currency</code></td><td>decimal, string</td><td>The full charged amount including tax and shipping</td></tr>
+<tr><td><code>charge_timing</code></td><td>enum</td><td>Resolved from the rule at creation</td></tr>
+<tr><td><code>charged</code>, <code>charge_date</code></td><td>bool, date</td><td>Has the money actually left, and when</td></tr>
+<tr><td><code>release_date</code></td><td>date</td><td>Order-level override when no product matches a release</td></tr>
+<tr><td><code>tracking</code>, <code>tag</code>, <code>notes</code></td><td>string ×3</td><td></td></tr>
+<tr><td><code>locked</code></td><td>string[]</td><td><strong>Critical.</strong> Field names the user has hand-edited</td></tr>
+</tbody></table></div>
+
+<h3>order_item</h3>
+<p><code>order_id</code>, <code>name</code>, <code>qty</code>, <code>unit_price</code>,
+<code>line_total</code>, <code>manual</code> — plus the vault-item foreign key discussed in
+<a href="#s2">§02</a> if the vault has a product catalog.</p>
+
+<h3>release</h3>
+<div class="tbl-wrap"><table>
+<thead><tr><th>Field</th><th>Type</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td><code>product</code></td><td>string</td><td>Human-readable name</td></tr>
+<tr><td><code>release_date</code></td><td>date</td><td>The whole point of the record</td></tr>
+<tr><td><code>match_text</code></td><td>string</td><td>Comma-separated substrings matched against item names. Falls back to <code>product</code> if blank</td></tr>
+<tr><td><code>retailer</code></td><td>string</td><td>Optional. Constrains matching to one store</td></tr>
+<tr><td><code>est_price</code>, <code>notes</code></td><td>decimal, string</td><td></td></tr>
+</tbody></table></div>
+<div class="decide"><span class="lede">Merge opportunity</span>
+<p>If the vault already stores set/product release dates, <code>release</code> should read
+from that instead of being a parallel table. Keep <code>match_text</code> either way —
+retailers never spell product names the same way twice, and that field is what bridges the gap.</p></div>
+</div>
+</section>
+
+<section id="s5">
+<div class="sec-head"><div class="sec-n">05</div><h2>Rules engine</h2></div>
+<div class="sec-body">
+<p>This is the feature the user asked for by name. It is about 100 lines of logic with no
+dependencies and should be ported precisely — the semantics are what make it predictable.</p>
+
+<div class="req"><div class="id">R-1</div><div>
+<p>Every non-empty condition on a rule must pass. Conditions left blank are ignored.</p></div></div>
+<div class="req"><div class="id">R-2</div><div>
+<p>Within a single condition, comma-separated terms are OR'd. <code>shipped, on its way</code>
+matches either.</p></div></div>
+<div class="req"><div class="id">R-3</div><div>
+<p><code>subject_excludes</code> inverts: the rule fails if <em>any</em> of its terms appear.</p></div></div>
+<div class="req"><div class="id">R-4</div><div>
+<p>Matching is case-insensitive substring by default. When <code>use_regex</code> is set,
+every term in every condition is treated as a pattern instead. An invalid pattern fails
+closed — it does not throw.</p></div></div>
+<div class="req"><div class="id">R-5</div><div>
+<p>Sender matching runs against display name and address concatenated, so both
+<code>Pokemon Center</code> and <code>pokemoncenter.com</code> work as terms.</p></div></div>
+<div class="req"><div class="id">R-6</div><div>
+<p>Rules are evaluated in ascending <code>priority</code>, then ascending id.
+<strong>First match wins</strong> and evaluation stops.</p></div></div>
+<div class="req"><div class="id">R-7</div><div>
+<p>A rule with zero conditions matches nothing. It must never match everything.</p></div></div>
+<div class="req"><div class="id">R-8</div><div>
+<p>The union of every enabled rule's <code>from_contains</code> terms drives the IMAP search,
+so scanning only downloads mail that could possibly match.</p></div></div>
+
+<h3>Rules that must ship by default</h3>
+<p>Order matters — cancellations and shipping notices must be checked before the generic
+order rule, or a "your order has shipped" email gets filed as a new order.</p>
+<div class="tbl-wrap"><table>
+<thead><tr><th>Pri</th><th>Name</th><th>Conditions</th><th>Kind / timing</th></tr></thead>
+<tbody>
+<tr><td class="num">5</td><td>Pokémon Center cancellations</td><td>from <code>pokemoncenter.com</code> · subject <code>cancel, canceled, cancelled, refund</code></td><td>cancellation</td></tr>
+<tr><td class="num">10</td><td>Pokémon Center pre-orders</td><td>from <code>pokemoncenter.com</code> · subject <code>pre-order, preorder, pre order</code></td><td>preorder / at_ship</td></tr>
+<tr><td class="num">15</td><td>Pokémon Center shipping</td><td>from <code>pokemoncenter.com</code> · subject <code>shipped, on its way, shipment</code></td><td>shipment / at_ship</td></tr>
+<tr><td class="num">20</td><td>Pokémon Center orders</td><td>from <code>pokemoncenter.com</code> · subject <code>order, thanks for your order</code> · NOT <code>cancel, shipped, delivered, refund</code></td><td>order / at_order</td></tr>
+<tr><td class="num">30</td><td>Target Pokémon orders</td><td>from <code>target.com, oes.target.com</code> · subject <code>order</code> · NOT <code>cancel, delivered, return</code> · <strong>body <code>pokemon, pokémon</code></strong></td><td>auto / at_ship</td></tr>
+</tbody></table></div>
+<p>That last rule demonstrates the pattern for any store that sells more than trading cards:
+the body condition is what keeps a Target order for bath towels out of the vault.</p>
+
+<div class="req"><div class="id">R-9</div><div>
+<p><strong>Rule tester.</strong> The user can paste an email — or select one already
+downloaded — and see which rule wins, which individual conditions passed or failed, and
+what would be extracted. Non-negotiable: rules are unpredictable without it.</p></div></div>
+<div class="req"><div class="id">R-10</div><div>
+<p><strong>Re-apply without re-scanning.</strong> Changing a rule must be able to rebuild
+orders from mail already stored, with no network round-trip. Scans are slow; iterating on
+rules must not be.</p></div></div>
+</div>
+</section>
+
+<section id="s6">
+<div class="sec-head"><div class="sec-n">06</div><h2>Email parsing</h2></div>
+<div class="sec-body">
+<p>Retailers change templates constantly. The design principle is that <strong>parsing
+failures surface rather than get guessed at</strong>.</p>
+
+<div class="req"><div class="id">R-11</div><div>
+<p>HTML bodies are flattened to text before parsing. Table cells become spaced text, block
+elements become newlines, script and style are dropped. Prefer whichever of the plain and
+HTML parts carries more content — marketing mail often ships a near-empty plain part.</p></div></div>
+<div class="req"><div class="id">R-12</div><div>
+<p><strong>Total extraction is priority-ordered.</strong> Look for labelled totals first
+(<code>order total</code>, <code>grand total</code>, <code>total charged</code>), then bare
+<code>total</code>, then a trailing currency amount. Matching the first dollar figure in the
+email returns the subtotal and is wrong.</p></div></div>
+<div class="req"><div class="id">R-13</div><div>
+<p>Order number is searched in the subject before the body. Reject anything shorter than
+six characters — short numeric matches are dates and quantities.</p></div></div>
+<div class="req"><div class="id">R-14</div><div>
+<p>Line items are attempted with several layouts in turn: name/qty/price on one line, then
+the flattened-table case where each sits on its own line. Lines whose text contains
+<code>subtotal</code>, <code>shipping</code>, <code>tax</code>, <code>discount</code> and
+similar must never be treated as products.</p></div></div>
+<div class="req"><div class="id">R-15</div><div>
+<p>Return <strong>zero line items</strong> rather than fabricated ones. An order with a
+correct total and no items is useful; an order with an item called "Estimated Tax" is not.</p></div></div>
+<div class="req"><div class="id">R-16</div><div>
+<p>Any matched email that yields no order number, no total, or line items summing to more
+than the total goes to a <strong>review queue</strong> with a plain-language note. It does
+not fail silently and it does not throw.</p></div></div>
+
+<h3>Upsert behaviour</h3>
+<p>Keyed on <code>(retailer, order_no)</code>. A shipping notice for an existing order updates
+it; it never creates a duplicate.</p>
+<pre><code>kind = cancellation  → status = cancelled, charged = false
+kind = delivery      → status = delivered
+kind = shipment      → status = shipped, tracking = extracted
+                       if charge_timing ≠ at_order: charged = true,
+                       charge_date = email date
+kind = order         → fill total and items only if currently empty
+kind = preorder      → status = preorder if currently open
+
+<span class="c">// In every branch, skip any field listed in order.locked</span></code></pre>
+
+<div class="req"><div class="id">R-17</div><div>
+<p><strong>Hand edits win permanently.</strong> Editing any order field adds that field name
+to <code>locked</code>. No scan, upsert or rebuild may ever overwrite a locked field. Orders
+with notes, and orders the user created by hand, survive a rebuild untouched.</p></div></div>
+</div>
+</section>
+
+<section id="s7">
+<div class="sec-head"><div class="sec-n">07</div><h2>Money model</h2></div>
+<div class="sec-body">
+<p>This is the substance of the feature. Everything else is plumbing that feeds it.</p>
+
+<h3>The distinction that matters</h3>
+<p>Pokémon Center authorizes your card when you place a pre-order but does not charge until
+the item ships. Most retailers behave similarly for pre-orders. So an order occupies one of
+two states that a naive "total spent" number conflates:</p>
+<div class="card">
+<p><strong>Charged</strong> — the money has left. It belongs in spend history and nowhere else.</p>
+<p><strong>Committed but not charged</strong> — the money is owed. It belongs on the cash
+timeline, on the date it will actually be taken.</p>
+</div>
+
+<div class="req"><div class="id">R-18</div><div>
+<p><code>charge_timing</code> is resolved once, at order creation, from the matching rule.
+When the rule says <code>auto</code>: a pre-order resolves to <code>at_ship</code>, anything
+else to <code>at_order</code>.</p></div></div>
+<div class="req"><div class="id">R-19</div><div>
+<p>A new order is marked charged immediately if timing is <code>at_order</code>, or if it
+arrived already shipped or delivered. Cancelled orders are never charged.</p></div></div>
+
+<h3>Allocation algorithm</h3>
+<p>Runs over every order that is <em>not charged</em> and has status <code>preorder</code>
+or <code>open</code>. It allocates money to dates, and it allocates <strong>per line item
+where possible</strong> — an order containing two products releasing in different months
+must split across both dates, not pile onto one.</p>
+<pre><code>for order in uncharged_open_orders:
+
+  <span class="c">// Explicit beats inferred, in this order</span>
+  if order.charge_date:    allocate(order.charge_date, order.total)
+  elif order.release_date: allocate(order.release_date, order.total)
+  elif timing == at_order: allocate(order.order_date, order.total)
+
+  else:
+    matched = 0
+    for item in order.items:
+      release = best_release_match(item.name, order.retailer)
+      if release:
+        allocate(release.release_date, item.line_total)
+        matched += item.line_total
+
+    leftover = order.total - matched   <span class="c">// tax, shipping, unmatched items</span>
+
+    if matched > 0 and leftover > 0:
+      allocate(latest_matched_date, leftover)
+    elif matched == 0:
+      fallback = best_release_match(all_item_names, order.retailer)
+      if fallback: allocate(fallback.release_date, order.total)
+      else:        allocate(UNSCHEDULED, order.total)</code></pre>
+
+<div class="req"><div class="id">R-20</div><div>
+<p><code>best_release_match</code> returns the release whose <strong>longest</strong>
+matching term appears in the text — most specific wins. A release with a retailer set only
+matches orders from that retailer.</p></div></div>
+<div class="req"><div class="id">R-21</div><div>
+<p>Tax and shipping ride along with the latest matched item's date, since that is when the
+order actually ships and charges.</p></div></div>
+<div class="req"><div class="id">R-22</div><div>
+<p>Money that cannot be dated goes to an explicit <strong>unscheduled</strong> bucket that is
+visible in the UI and links to release-date entry. It must never be silently dropped or
+silently folded into a real date.</p></div></div>
+<div class="req"><div class="id">R-23</div><div>
+<p>Allocation is computed on read, never stored. Changing a release date must move the money
+immediately, with no rescan and no rebuild.</p></div></div>
+
+<h3>Headline numbers</h3>
+<div class="tbl-wrap"><table>
+<thead><tr><th>Number</th><th>Definition</th></tr></thead>
+<tbody>
+<tr><td><strong>Still owed</strong></td><td>Sum of all uncharged open and pre-order totals</td></tr>
+<tr><td><strong>Due in 30 days</strong></td><td>Allocated buckets dated within 30 days. The "do I have enough" number</td></tr>
+<tr><td><strong>Next charge date</strong></td><td>Soonest bucket on or after today, and its amount</td></tr>
+<tr><td><strong>Unscheduled</strong></td><td>Owed money with no resolvable date</td></tr>
+<tr><td><strong>Spent this month</strong></td><td>Charged orders whose charge date falls in the current month</td></tr>
+</tbody></table></div>
+</div>
+</section>
+
+<section id="s8">
+<div class="sec-head"><div class="sec-n">08</div><h2>Surfaces</h2></div>
+<div class="sec-body">
+<p>Built in the vault's existing design language. Screens are listed by job, not by layout.</p>
+<div class="tbl-wrap"><table>
+<thead><tr><th>Surface</th><th>Job</th><th></th></tr></thead>
+<tbody>
+<tr><td><strong>Cash timeline</strong></td><td>Money owed per release date, as bars plus a table naming the orders in each. The table is not optional — it is how the user gets from a number to the orders behind it</td><td><span class="pill must">v1</span></td></tr>
+<tr><td><strong>Headline tiles</strong></td><td>The five numbers in §07</td><td><span class="pill must">v1</span></td></tr>
+<tr><td><strong>Order list</strong></td><td>Filter by status, store and product text; shows charged vs owed per row</td><td><span class="pill must">v1</span></td></tr>
+<tr><td><strong>Order detail</strong></td><td>Every field editable; add line items; shows which fields are locked and links to source emails</td><td><span class="pill must">v1</span></td></tr>
+<tr><td><strong>Release dates</strong></td><td>Add and edit; shows how much money each release currently carries</td><td><span class="pill must">v1</span></td></tr>
+<tr><td><strong>Rules list &amp; editor</strong></td><td>All conditions; match counts; enable/disable; re-apply button</td><td><span class="pill must">v1</span></td></tr>
+<tr><td><strong>Rule tester</strong></td><td>Per R-9</td><td><span class="pill must">v1</span></td></tr>
+<tr><td><strong>Review queue</strong></td><td>Emails matched but not fully parsed, with what went wrong and a route to fixing it</td><td><span class="pill must">v1</span></td></tr>
+<tr><td><strong>Mail accounts</strong></td><td>Add, test connection, remove. Must explain app passwords in the UI, not only in docs</td><td><span class="pill must">v1</span></td></tr>
+<tr><td><strong>Spend history</strong></td><td>Charged totals by month, gaps shown as zero</td><td><span class="pill later">v1.1</span></td></tr>
+<tr><td><strong>By store</strong></td><td>Spent vs owed per retailer</td><td><span class="pill later">v1.1</span></td></tr>
+</tbody></table></div>
+<div class="req"><div class="id">R-24</div><div>
+<p>Scanning runs in the background with a visible running state. It must not block the UI,
+and a failed scan must surface its reason on the accounts screen rather than disappearing.</p></div></div>
+</div>
+</section>
+
+<section id="s9">
+<div class="sec-head"><div class="sec-n">09</div><h2>Open decisions</h2></div>
+<div class="sec-body">
+<p>These cannot be settled without reading the vault's code. Each needs an answer before
+implementation, and each has a safe default.</p>
+
+<div class="decide"><span class="lede">D-1 · Item identity</span>
+<p>Does the vault have a product catalog with stable identity? If yes, <code>order_item</code>
+gets a nullable foreign key to it, and release dates hang off catalog entries.
+<strong>Default if unclear:</strong> keep item names as free text with
+<code>match_text</code> bridging, and add the key later — nothing in the money model depends on it.</p></div>
+
+<div class="decide"><span class="lede">D-2 · Do delivered orders create inventory?</span>
+<p>The §02 vision says yes. It may not be safe to do automatically if the vault's inventory
+has required fields an order can't supply. <strong>Default:</strong> offer it as an explicit
+"add to vault" action on a delivered order rather than an automatic side effect.</p></div>
+
+<div class="decide"><span class="lede">D-3 · Where does IMAP run?</span>
+<p>If the vault is a pure browser app with no backend, IMAP is not reachable from the client
+and this needs a server component or a local helper process. If the vault already has a
+backend or is a desktop app, it runs there. <strong>This is the decision most likely to
+change the shape of the work</strong> — settle it first.</p></div>
+
+<div class="decide"><span class="lede">D-4 · Secret storage</span>
+<p>App passwords need encrypting at rest. If the vault already has a secrets mechanism or an
+OS keychain integration, use it. <strong>Default:</strong> encrypt with a key in a separate
+local file, and be explicit in the UI that this is local obfuscation, not protection against
+someone with the machine.</p></div>
+
+<div class="decide"><span class="lede">D-5 · Migrating vs starting fresh</span>
+<p>See §10. If the standalone app has not been run against real mail yet, starting fresh is
+strictly simpler and loses nothing.</p></div>
+</div>
+</section>
+
+<section id="s10">
+<div class="sec-head"><div class="sec-n">10</div><h2>Migration</h2></div>
+<div class="sec-body">
+<p>The standalone app stores everything in one SQLite file at <code>data/poketrack.db</code>.
+Tables map to §04 one-to-one, so migration is a read-and-insert, not a transform.</p>
+<div class="req"><div class="id">R-25</div><div>
+<p>If migration is needed: import <code>rules</code>, <code>releases</code>, <code>orders</code>,
+<code>items</code> and <code>emails</code> in that order. Preserve <code>locked</code> exactly —
+it encodes user corrections that would otherwise be silently reverted on first rebuild.</p></div></div>
+<p>Mail accounts should <strong>not</strong> be migrated. The stored secret is encrypted with
+a key tied to that install; re-entering app passwords is quicker and cleaner than porting the
+key material.</p>
+</div>
+</section>
+
+<section id="s11">
+<div class="sec-head"><div class="sec-n">11</div><h2>Acceptance tests</h2></div>
+<div class="sec-body">
+<p>These are lifted from the reference implementation's passing suite, with real numbers.
+An implementation that satisfies them behaves correctly.</p>
+
+<h3>Rules</h3>
+<ul>
+  <li>"Your pre-order is confirmed" from <code>orders@pokemoncenter.com</code> → matches the pre-order rule, not the order rule</li>
+  <li>"Your order has shipped" from <code>shipping@pokemoncenter.com</code> → matches the shipping rule</li>
+  <li>"New arrivals at Pokémon Center" from <code>news@pokemoncenter.com</code> → matches nothing</li>
+  <li>A Target order for bath towels with no Pokémon content → matches nothing</li>
+</ul>
+
+<h3>Parsing</h3>
+<ul>
+  <li>An order email with subtotal <code>124.97</code>, tax <code>10.31</code>, order total
+  <code>135.28</code> → extracted total is <strong>135.28</strong>, never 124.97</li>
+  <li>Same email → exactly <strong>2</strong> line items; neither is named "Subtotal", "Estimated Tax" or "Shipping"</li>
+  <li>An item at qty 2 × $49.99 → line total <strong>99.98</strong></li>
+  <li>A shipping notice for an existing order → updates it to shipped with tracking; total order count does not change</li>
+</ul>
+
+<h3>Money</h3>
+<div class="card">
+<p><strong>Worked example.</strong> Two uncharged pre-orders and one Target order, against
+releases <code>mega evolution → 2026-09-26</code> and <code>destined rivals → 2026-10-17</code>:</p>
+<div class="tbl-wrap"><table>
+<thead><tr><th>Assertion</th><th class="num">Expected</th></tr></thead>
+<tbody>
+<tr><td>Owed on 2026-09-26 (two stores, one release)</td><td class="num">346.84</td></tr>
+<tr><td>Owed on 2026-10-17</td><td class="num">175.30</td></tr>
+<tr><td>Unscheduled</td><td class="num">0.00</td></tr>
+<tr><td>Total still owed</td><td class="num">522.14</td></tr>
+<tr><td>Total already charged</td><td class="num">309.85</td></tr>
+</tbody></table></div>
+<p>Note that 346.84 spans two retailers releasing the same product on the same day — the
+timeline is organised by date, not by order.</p>
+</div>
+<ul>
+  <li>Moving <code>destined rivals</code> to 2026-11-07 → the 10-17 bucket disappears and an
+  11-07 bucket appears, with no rescan and no rebuild</li>
+  <li>A cancelled order contributes <strong>zero</strong> to owed and to charged</li>
+</ul>
+
+<h3>Durability</h3>
+<ul>
+  <li>Hand-edit an order's total to 999.00, then rebuild from stored mail → total is still
+  <strong>999.00</strong> and its notes survive</li>
+  <li>Rebuild twice → order count is unchanged both times</li>
+</ul>
+</div>
+</section>
+
+<section id="s12">
+<div class="sec-head"><div class="sec-n">12</div><h2>Phasing</h2></div>
+<div class="sec-body">
+<p>Each phase is independently useful, which matters — phase 1 alone answers the original
+question.</p>
+<div class="req"><div class="id">P-1</div><div>
+<p><strong>Manual core.</strong> Orders, line items, releases, the allocation algorithm, the
+cash timeline and hand entry. <em>No email at all.</em> This delivers the actual value and
+de-risks everything downstream, because the money model is the part worth getting right.</p></div></div>
+<div class="req"><div class="id">P-2</div><div>
+<p><strong>Rules and parsing, offline.</strong> Rules engine, parser and the rule tester,
+run against pasted email text. Testable without touching IMAP.</p></div></div>
+<div class="req"><div class="id">P-3</div><div>
+<p><strong>Mail ingestion.</strong> Accounts, IMAP scanning, the review queue, re-apply.
+Resolves D-3 and D-4.</p></div></div>
+<div class="req"><div class="id">P-4</div><div>
+<p><strong>Vault integration.</strong> Item identity binding and delivered-order-to-inventory
+per D-1 and D-2. The part that makes it one app rather than two.</p></div></div>
+<div class="req"><div class="id">P-5</div><div>
+<p><strong>Automation.</strong> Scheduled scanning and a heads-up when a charge date is
+approaching.</p></div></div>
+</div>
+</section>
+
+<footer>
+Reference implementation: PokeTrack (Python, standard library only) — data model, algorithms
+and the full passing test suite. Ported logic lives in <code>rules.py</code>,
+<code>parser.py</code> and <code>money.py</code>; the UI layer is not worth carrying over.
+</footer>
+</main>
+</div>
+</body>
+</html>

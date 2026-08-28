@@ -1,0 +1,461 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PokeTrack Setup</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root {
+  color-scheme: light;
+  --ground: #f4f6f9;
+  --surface: #ffffff;
+  --surface-2: #eef1f6;
+  --ink: #12141a;
+  --ink-2: #4d5361;
+  --ink-3: #838a99;
+  --accent: #2a78d6;
+  --accent-soft: #e4eefb;
+  --warn: #b45f0b;
+  --warn-soft: #fbf0e0;
+  --rule: #dce1e9;
+  --shadow: 0 1px 2px rgba(18,20,26,.05), 0 10px 30px rgba(18,20,26,.06);
+  --display: "Archivo", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --body: "Source Serif 4", Georgia, "Times New Roman", serif;
+  --mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --ground: #0f1115;
+    --surface: #171a20;
+    --surface-2: #1e222a;
+    --ink: #f0f2f5;
+    --ink-2: #a9b0bd;
+    --ink-3: #767d8c;
+    --accent: #62a0ec;
+    --accent-soft: #172436;
+    --warn: #dd9a45;
+    --warn-soft: #2a2116;
+    --rule: #262b34;
+    --shadow: 0 1px 2px rgba(0,0,0,.5), 0 10px 30px rgba(0,0,0,.35);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --ground: #0f1115;
+  --surface: #171a20;
+  --surface-2: #1e222a;
+  --ink: #f0f2f5;
+  --ink-2: #a9b0bd;
+  --ink-3: #767d8c;
+  --accent: #62a0ec;
+  --accent-soft: #172436;
+  --warn: #dd9a45;
+  --warn-soft: #2a2116;
+  --rule: #262b34;
+  --shadow: 0 1px 2px rgba(0,0,0,.5), 0 10px 30px rgba(0,0,0,.35);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--body);
+  font-size: 17px;
+  line-height: 1.62;
+  -webkit-font-smoothing: antialiased;
+}
+
+.wrap {
+  display: grid;
+  grid-template-columns: 190px minmax(0, 68ch);
+  gap: 56px;
+  justify-content: center;
+  padding: 56px 32px 120px;
+}
+
+/* ---- contents rail ---- */
+.toc { position: sticky; top: 40px; align-self: start; font-family: var(--display); }
+.toc h2 {
+  font-size: 11px; letter-spacing: .12em; text-transform: uppercase;
+  color: var(--ink-3); margin: 0 0 12px; font-weight: 600;
+}
+.toc ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.toc a {
+  display: block; padding: 5px 9px; border-radius: 6px; font-size: 13.5px;
+  color: var(--ink-2); text-decoration: none; line-height: 1.35;
+}
+.toc a:hover { background: var(--accent-soft); color: var(--accent); }
+.toc a:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* ---- masthead ---- */
+header.mast { margin-bottom: 44px; }
+.eyebrow {
+  font-family: var(--mono); font-size: 12px; letter-spacing: .1em;
+  text-transform: uppercase; color: var(--accent); margin: 0 0 12px;
+}
+h1 {
+  font-family: var(--display); font-weight: 700; font-size: clamp(34px, 5vw, 46px);
+  line-height: 1.05; letter-spacing: -.025em; margin: 0 0 14px; text-wrap: balance;
+}
+.standfirst { font-size: 19px; color: var(--ink-2); margin: 0; text-wrap: pretty; }
+
+/* ---- steps ---- */
+section { margin-bottom: 46px; scroll-margin-top: 28px; }
+.step { display: grid; grid-template-columns: 40px 1fr; gap: 16px; align-items: start; }
+.step-n {
+  font-family: var(--mono); font-size: 13px; font-weight: 500; color: var(--accent);
+  background: var(--accent-soft); border-radius: 7px; width: 34px; height: 30px;
+  display: grid; place-items: center; margin-top: 6px;
+}
+h2 {
+  font-family: var(--display); font-weight: 600; font-size: 25px; letter-spacing: -.015em;
+  margin: 0 0 10px; line-height: 1.2; text-wrap: balance;
+}
+h3 {
+  font-family: var(--display); font-weight: 600; font-size: 16px; letter-spacing: -.005em;
+  margin: 26px 0 8px;
+}
+p { margin: 0 0 14px; }
+ul, ol.body-list { margin: 0 0 14px; padding-left: 22px; }
+li { margin-bottom: 7px; }
+strong { font-weight: 600; }
+a { color: var(--accent); text-underline-offset: 2px; }
+
+code {
+  font-family: var(--mono); font-size: .87em; background: var(--surface-2);
+  padding: 2px 6px; border-radius: 5px; color: var(--ink);
+}
+
+.card {
+  background: var(--surface); border: 1px solid var(--rule); border-radius: 12px;
+  padding: 20px 22px; box-shadow: var(--shadow); margin: 0 0 16px;
+}
+.card h3 { margin-top: 0; }
+.card > :last-child { margin-bottom: 0; }
+
+.grid-3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(178px, 1fr)); gap: 14px; margin-bottom: 16px; }
+.grid-3 .card { margin: 0; font-size: 15.5px; }
+.grid-3 ol { padding-left: 18px; margin-bottom: 0; }
+.grid-3 li { margin-bottom: 5px; }
+
+.note {
+  background: var(--warn-soft); border-left: 3px solid var(--warn);
+  padding: 14px 18px; border-radius: 0 9px 9px 0; margin: 0 0 16px; font-size: 16px;
+}
+.note > :last-child { margin-bottom: 0; }
+.note .lede { font-family: var(--display); font-weight: 600; font-size: 14px;
+  letter-spacing: .01em; color: var(--warn); display: block; margin-bottom: 5px; }
+
+.example {
+  background: var(--surface-2); border-radius: 10px; padding: 16px 18px; margin: 0 0 14px;
+  font-family: var(--mono); font-size: 13.5px; line-height: 1.75;
+}
+.example .k { color: var(--ink-3); display: inline-block; min-width: 190px; }
+.example .t { font-family: var(--display); font-weight: 600; font-size: 13px;
+  letter-spacing: .06em; text-transform: uppercase; color: var(--accent);
+  display: block; margin-bottom: 9px; font-family: var(--display); }
+
+.tbl-wrap { overflow-x: auto; margin: 0 0 16px; }
+table { border-collapse: collapse; width: 100%; font-size: 15.5px; }
+th {
+  font-family: var(--display); font-size: 11.5px; text-transform: uppercase;
+  letter-spacing: .08em; color: var(--ink-3); text-align: left; font-weight: 600;
+  padding: 0 14px 8px 0; border-bottom: 1px solid var(--rule); white-space: nowrap;
+}
+td { padding: 11px 14px 11px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+tr:last-child td { border-bottom: none; }
+
+.kicker {
+  font-family: var(--display); font-size: 11.5px; letter-spacing: .12em;
+  text-transform: uppercase; color: var(--ink-3); font-weight: 600; margin: 0 0 6px;
+}
+
+footer {
+  margin-top: 60px; padding-top: 22px; border-top: 1px solid var(--rule);
+  font-size: 14.5px; color: var(--ink-3);
+}
+
+@media (max-width: 900px) {
+  .wrap { grid-template-columns: minmax(0, 1fr); gap: 0; padding: 36px 22px 90px; }
+  .toc { position: static; margin-bottom: 34px; padding-bottom: 22px; border-bottom: 1px solid var(--rule); }
+  .toc ol { flex-direction: row; flex-wrap: wrap; gap: 4px; }
+  .toc a { background: var(--surface); border: 1px solid var(--rule); }
+  .step { grid-template-columns: 32px 1fr; gap: 12px; }
+  .step-n { width: 28px; height: 26px; font-size: 12px; }
+  body { font-size: 16.5px; }
+}
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+html { scroll-behavior: smooth; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav class="toc" aria-label="Contents">
+  <h2>Contents</h2>
+  <ol>
+    <li><a href="#install">1 · Install Python</a></li>
+    <li><a href="#start">2 · Start PokeTrack</a></li>
+    <li><a href="#apppass">3 · Get an app password</a></li>
+    <li><a href="#inbox">4 · Add your inboxes</a></li>
+    <li><a href="#scan">5 · Run a scan</a></li>
+    <li><a href="#releases">6 · Add release dates</a></li>
+    <li><a href="#rules">7 · Write rules</a></li>
+    <li><a href="#dashboard">Reading the dashboard</a></li>
+    <li><a href="#wrong">When it gets it wrong</a></li>
+    <li><a href="#data">Your data</a></li>
+    <li><a href="#trouble">Troubleshooting</a></li>
+  </ol>
+</nav>
+
+<main>
+<header class="mast">
+  <p class="eyebrow">Setup guide</p>
+  <h1>PokeTrack</h1>
+  <p class="standfirst">Reads your inboxes for Pokémon Center and Target order mail, tracks
+  every open pre-order, and tells you how much cash you need ready on each release date.
+  Runs entirely on your own computer.</p>
+</header>
+
+<section id="install">
+<div class="step"><div class="step-n">1</div><div>
+<h2>Install Python</h2>
+<p>PokeTrack is written in Python, and Windows doesn't ship with it. This is a one-time,
+five-minute install. If you already have Python, skip to step 2.</p>
+<ol class="body-list">
+  <li>Go to <a href="https://www.python.org/downloads/">python.org/downloads</a> and click
+  the big yellow <strong>Download Python</strong> button.</li>
+  <li>Run the file it downloads.</li>
+  <li><strong>On the very first installer screen, tick “Add python.exe to PATH.”</strong>
+  It's a small checkbox near the bottom and it is easy to miss.</li>
+  <li>Click <strong>Install Now</strong> and let it finish.</li>
+</ol>
+<div class="note"><span class="lede">If you miss that checkbox</span>
+PokeTrack won't be able to start, and you'll get a “Python is not installed yet” message.
+Re-run the installer, choose <strong>Modify</strong>, and turn the PATH option on.</div>
+</div></div>
+</section>
+
+<section id="start">
+<div class="step"><div class="step-n">2</div><div>
+<h2>Start PokeTrack</h2>
+<p>Open the <code>PokeTrack</code> folder and double-click
+<strong>START PokeTrack.bat</strong>.</p>
+<p>A black console window opens and stays open — that window <em>is</em> the app running, so
+leave it alone. Your browser opens to the dashboard a second later. To stop PokeTrack, close
+the console window.</p>
+<p>Nothing else needs installing. There is no pip, no setup command, and no internet
+connection required beyond reading your own email.</p>
+<h3>Want to see it working before connecting real email?</h3>
+<p>Open the console window in that folder and run <code>python tests\seed_demo.py</code>.
+That loads a handful of fake orders so you can poke at every screen. Delete the
+<code>data</code> folder afterwards to wipe it clean.</p>
+</div></div>
+</section>
+
+<section id="apppass">
+<div class="step"><div class="step-n">3</div><div>
+<h2>Get an app password</h2>
+<p>Email providers won't let an app sign in with your normal password any more. Instead you
+generate a <strong>separate 16-character password</strong> that works only for mail apps and
+can be revoked at any time without changing your real password. You need one per inbox.</p>
+<div class="grid-3">
+  <div class="card">
+    <h3>Gmail</h3>
+    <ol>
+      <li>Turn on 2-Step Verification first — app passwords don't exist without it.</li>
+      <li>Google Account → <strong>Security</strong></li>
+      <li>Search the page for <strong>App passwords</strong></li>
+      <li>Name it “PokeTrack”, then copy the code</li>
+    </ol>
+  </div>
+  <div class="card">
+    <h3>Outlook / Hotmail</h3>
+    <ol>
+      <li>Turn on two-step verification first</li>
+      <li>Microsoft account → <strong>Security</strong></li>
+      <li><strong>Advanced security options</strong></li>
+      <li>Under App passwords, create a new one</li>
+    </ol>
+  </div>
+  <div class="card">
+    <h3>Yahoo / AOL</h3>
+    <ol>
+      <li>Account Info → <strong>Account Security</strong></li>
+      <li><strong>Generate app password</strong></li>
+      <li>Pick “Other app”, name it PokeTrack</li>
+      <li>Copy the code it shows you</li>
+    </ol>
+  </div>
+</div>
+<p>Copy the code with the spaces removed. It only ever gets shown once, so if you lose it,
+just generate another.</p>
+</div></div>
+</section>
+
+<section id="inbox">
+<div class="step"><div class="step-n">4</div><div>
+<h2>Add your inboxes</h2>
+<p>Click <strong>Email accounts</strong> in the sidebar. Enter the address and the app
+password. Leave the IMAP server blank — PokeTrack works it out from the address for every
+common provider.</p>
+<p>Hit <strong>Test connection only</strong> first. If it comes back green, hit
+<strong>Save inbox</strong>. Repeat for each address your orders land in — there's no limit
+on how many you add.</p>
+<p><strong>How far back to look</strong> defaults to 540 days. Raise it if you want older
+order history pulled in; the first scan just takes longer.</p>
+</div></div>
+</section>
+
+<section id="scan">
+<div class="step"><div class="step-n">5</div><div>
+<h2>Run a scan</h2>
+<p>Hit <strong>Scan my email</strong> in the sidebar. PokeTrack asks each mail server only
+for messages from the senders your rules mention, downloads those, and reads them. Everything
+it finds is stored on your computer.</p>
+<p>The first scan is the slow one — a few minutes if you have a lot of history. After that
+it only fetches what's new, so later scans take seconds. Run it whenever you want; it never
+downloads the same message twice.</p>
+</div></div>
+</section>
+
+<section id="releases">
+<div class="step"><div class="step-n">6</div><div>
+<h2>Add release dates</h2>
+<p>This is the piece PokeTrack can't get from email. Order confirmations rarely say when a
+pre-order actually ships — so you type it in once per product, and every matching pre-order
+lands on that date in the cash timeline.</p>
+<p>Go to <strong>Release dates</strong> and add:</p>
+<div class="example">
+  <span class="t">Example entry</span>
+  <span class="k">Product</span>Mega Evolution Elite Trainer Box<br>
+  <span class="k">Release date</span>2026-09-26<br>
+  <span class="k">Match text</span>mega evolution<br>
+  <span class="k">Estimated price</span>59.99
+</div>
+<p><strong>Match text is the important field.</strong> It's the words PokeTrack looks for in
+your order's line items. Keep it short and distinctive — <code>mega evolution</code> catches
+the product no matter how the store spelled out the rest of the title. The full name usually
+matches nothing, because Target and Pokémon Center never write it the same way.</p>
+<p>Change a date later and the money moves with it immediately. Nothing needs re-scanning.</p>
+</div></div>
+</section>
+
+<section id="rules">
+<div class="step"><div class="step-n">7</div><div>
+<h2>Write rules</h2>
+<p>A rule decides which emails count and what they mean. Five are set up already — four for
+Pokémon Center and one for Target. Rules are checked from the lowest <em>order</em> number
+upward, and the first one that matches an email wins.</p>
+<p>Every condition you fill in must pass. A blank condition is ignored. Inside one box,
+comma-separated terms mean “any of these.”</p>
+
+<div class="example">
+  <span class="t">Rule: Pokémon Center pre-orders</span>
+  <span class="k">Sender contains</span>pokemoncenter.com<br>
+  <span class="k">Subject contains</span>pre-order, preorder, pre order<br>
+  <span class="k">Treats email as</span>A pre-order<br>
+  <span class="k">Card charged</span>When it ships<br>
+  <span class="k">Order</span>10
+</div>
+
+<div class="example">
+  <span class="t">Rule: Target Pokémon orders</span>
+  <span class="k">Sender contains</span>target.com, oes.target.com<br>
+  <span class="k">Subject contains</span>order, thanks for your order<br>
+  <span class="k">Must NOT contain</span>cancel, delivered, return<br>
+  <span class="k">Body contains</span>pokemon, pokémon<br>
+  <span class="k">Order</span>30
+</div>
+
+<p>That second one shows the trick for stores that sell more than Pokémon: the
+<strong>body contains</strong> condition means a Target order for bath towels is ignored while
+a Target order for an Elite Trainer Box comes through.</p>
+
+<h3>Test before you trust</h3>
+<p><strong>Rules → Test a rule</strong> lets you paste an email — or pick one PokeTrack already
+downloaded — and see exactly which rule catches it, which conditions passed, and what would be
+pulled out of it. Use it any time a rule isn't behaving.</p>
+
+<h3>After you change a rule</h3>
+<p>Hit <strong>Re-apply rules to email already downloaded</strong> on the Rules page. It
+rebuilds your orders from the mail already on your machine, so you don't have to scan your
+inbox again. Orders you edited by hand or added notes to are left alone.</p>
+</div></div>
+</section>
+
+<section id="dashboard">
+<p class="kicker">Using it</p>
+<h2>Reading the dashboard</h2>
+<div class="tbl-wrap"><table>
+<thead><tr><th>What you see</th><th>What it means</th></tr></thead>
+<tbody>
+<tr><td><strong>Still owed</strong></td><td>Every dollar committed to an order that hasn't hit your card yet.</td></tr>
+<tr><td><strong>Due in 30 days</strong></td><td>The slice of that arriving in the next month. This is the “do I have enough” number.</td></tr>
+<tr><td><strong>Next charge date</strong></td><td>The soonest day money comes out, and how much.</td></tr>
+<tr><td><strong>Cash needed by release date</strong></td><td>One bar per date. The table under it names the orders in each bar, so you can click straight through.</td></tr>
+<tr><td><strong>Shipped vs still pending</strong></td><td>Order value split by status, so you can see how much is genuinely in flight.</td></tr>
+<tr><td><strong>No date yet</strong></td><td>Money owed on pre-orders whose products have no release date yet. Add one and it moves onto the timeline.</td></tr>
+</tbody>
+</table></div>
+<p>Pokémon Center authorizes your card at order time but doesn't actually charge until the
+item ships, which is why pre-orders count as owed rather than spent. When a shipping email
+arrives, PokeTrack flips that order to charged automatically.</p>
+</section>
+
+<section id="wrong">
+<p class="kicker">Using it</p>
+<h2>When it gets it wrong</h2>
+<p>Retailers change their email templates constantly, so the parser will occasionally miss
+something. It's built to flag that rather than quietly guess.</p>
+<ul>
+  <li><strong>Needs review</strong> in the sidebar lists every email a rule caught but the
+  parser couldn't fully read, with a note on what was missing.</li>
+  <li>Open any order and edit any field. Once you do, that field is <strong>locked</strong> —
+  no future scan or rebuild will overwrite it.</li>
+  <li>Missing an order entirely? <strong>Orders → Add an order by hand</strong>. Give it a
+  release date and it joins the timeline like any other.</li>
+  <li>Line items missing? Add them on the order page. That's what release-date matching reads.</li>
+</ul>
+</section>
+
+<section id="data">
+<p class="kicker">Good to know</p>
+<h2>Your data</h2>
+<p>Everything lives in the <code>data</code> folder next to the app: your orders, your rules,
+and the text of the emails PokeTrack read. Nothing is uploaded anywhere, and the app makes no
+network connection except to your own mail server.</p>
+<p>Your app password is obfuscated in that database rather than stored as plain readable text.
+That protects against a casual glance, not against someone who already has your Windows
+account — which is exactly why you use an app password you can revoke instead of your real one.</p>
+<p><strong>To back it up:</strong> copy the <code>data</code> folder somewhere safe.
+<strong>To start over:</strong> delete it — a fresh one is created next time you launch.</p>
+</section>
+
+<section id="trouble">
+<p class="kicker">Good to know</p>
+<h2>Troubleshooting</h2>
+<div class="tbl-wrap"><table>
+<thead><tr><th>Symptom</th><th>Fix</th></tr></thead>
+<tbody>
+<tr><td>“Python is not installed yet”</td><td>Re-run the Python installer with <strong>Add python.exe to PATH</strong> ticked.</td></tr>
+<tr><td>“Login refused”</td><td>You used your real password. Generate an app password (step 3) and make sure two-step verification is on first.</td></tr>
+<tr><td>Console window flashes and vanishes</td><td>Python isn't on PATH. Same fix as the first row.</td></tr>
+<tr><td>Scan finds nothing</td><td>Check the sender domain on a real order email and make sure a rule's <strong>Sender contains</strong> matches it. The rule tester will tell you in seconds.</td></tr>
+<tr><td>Orders show but the timeline is empty</td><td>No release dates yet, or the match text doesn't appear in your line items. Open an order and compare the product names against your match text.</td></tr>
+<tr><td>Wrong total on an order</td><td>Edit it on the order page. It stays locked from then on.</td></tr>
+<tr><td>Browser didn't open</td><td>Type <code>http://127.0.0.1:8765</code> into it yourself. The console window prints the exact address.</td></tr>
+</tbody>
+</table></div>
+</section>
+
+<footer>
+PokeTrack runs locally on your machine. It reads mail; it never sends any.
+</footer>
+</main>
+</div>
+</body>
+</html>

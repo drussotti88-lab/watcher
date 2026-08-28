@@ -1,0 +1,50 @@
+[
+  {
+    "@context": "https://schema.org/",
+    "@type": "Product",
+    "brand": {
+      "@type": "Thing",
+      "name": "Pokémon Center"
+    },
+    "category": "TRADING CARD GAME>TCG Expansions>Journey Together;TRADING CARD GAME>TCG Cards>Booster Packs",
+    "description": "<p>Official, sealed Pokémon TCG: Scarlet & Violet—Journey Together sleeved booster pack with 10 cards and 1 Basic Energy.</p>",
+    "image": [
+      "https://www.pokemoncenter.com/images/DAMRoot/High/10006/P10344_100-10326_01.jpg",
+      "https://www.pokemoncenter.com/images/DAMRoot/High/10006/P10344_100-10326_02.jpg",
+      "https://www.pokemoncenter.com/images/DAMRoot/High/10006/P10344_100-10326_03.jpg",
+      "https://www.pokemoncenter.com/images/DAMRoot/High/10006/P10344_100-10326_04.jpg",
+      "https://www.pokemoncenter.com/images/DAMRoot/High/10006/P10344_100-10326_05.jpg",
+      "https://www.pokemoncenter.com/images/DAMRoot/High/10006/P10344_100-10326_06.jpg",
+      "https://www.pokemoncenter.com/images/DAMRoot/High/10006/P10344_100-10326_07.jpg"
+    ],
+    "mpn": "100-10326",
+    "name": "Pokémon TCG: Scarlet & Violet-Journey Together Sleeved Booster Pack (10 Cards)",
+    "offers": {
+      "@type": "Offer",
+      "itemCondition": "https://schema.org/NewCondition",
+      "priceCurrency": "USD",
+      "seller": {
+        "@type": "Organization",
+        "name": "Pokémon Center"
+      },
+      "url": "https://www.pokemoncenter.com/product/100-10326/pokemon-tcg-scarlet-and-violet-journey-together-sleeved-booster-pack-10-cards",
+      "availability": "http://schema.org/OutOfStock",
+      "price": 4.49
+    },
+    "url": "https://www.pokemoncenter.com/product/100-10326/pokemon-tcg-scarlet-and-violet-journey-together-sleeved-booster-pack-10-cards",
+    "height": "6.8 IN",
+    "width": "0.1 IN",
+    "weight": "1 OZ",
+    "sku": "100-10326"
+  },
+  {
+    "@context": "https://schema.org",
+    "@type": "Product",
+    "name": "Pokémon TCG: Scarlet & Violet-Journey Together Sleeved Booster Pack (10 Cards)",
+    "aggregateRating": {
+      "@type": "AggregateRating",
+      "ratingValue": "4.8",
+      "reviewCount": "20"
+    }
+  }
+]

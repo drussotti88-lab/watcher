@@ -1,0 +1,19 @@
+{
+  "hub": {
+    "url": "",
+    "token": ""
+  },
+  "browser": {
+    "channel": "chrome",
+    "profileDir": "./chrome-profile",
+    "headed": true,
+    "navigationTimeoutMs": 45000,
+    "executablePath": ""
+  },
+  "budget": {
+    "perRun": 150,
+    "perDay": 400
+  },
+  "live": false,
+  "intervalSec": 90
+}
