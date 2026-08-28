@@ -1072,79 +1072,108 @@ async function identify(request, env2) {
 function esc(s) {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
+var FONTS = '<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap">';
 var STYLE = `
 :root {
-  color-scheme: light dark;
-  --bg: #fbfaf8; --panel: #ffffff; --line: #e6e2dc; --line-soft: #f0ede8;
-  --ink: #1c1a17; --muted: #6d675e;
-  --in: #1c6b45; --in-bg: #e6f4ec;
-  --out: #7a736a; --out-bg: #f1efec;
-  --warn: #8a5a10; --warn-bg: #fdf1dd;
-  --alert: #a3341f; --alert-bg: #fbeae6;
-  --accent: #2a5db0; --accent-soft: #eaf0fb;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #16150f; --panel: #1e1d17; --line: #33312a; --line-soft: #26251e;
-    --ink: #edeae4; --muted: #a09a90;
-    --in: #6fd39d; --in-bg: #14301f;
-    --out: #8f887e; --out-bg: #242219;
-    --warn: #e0b060; --warn-bg: #33270f;
-    --alert: #f0907a; --alert-bg: #3a1d16;
-    --accent: #8fb4f5; --accent-soft: #1a2740;
-  }
+  color-scheme: dark;
+  --bg: #09080e;
+  --panel: #17161f;
+  --panel-2: rgba(237, 235, 245, .04);
+  --line: rgba(237, 235, 245, .07);
+  --line-strong: rgba(237, 235, 245, .13);
+  --ink: #edebf5;
+  --muted: #9b97b0;
+  --dim: #6e6a85;
+
+  --accent: #7f77dd;
+  --accent-soft: rgba(127, 119, 221, .14);
+
+  --in: #5fd3a0;      --in-bg: rgba(95, 211, 160, .13);
+  --out: #9b97b0;     --out-bg: rgba(237, 235, 245, .07);
+  --warn: #e0b060;    --warn-bg: rgba(224, 176, 96, .13);
+  --alert: #f0836b;   --alert-bg: rgba(240, 131, 107, .13);
+
+  --shadow: 0 8px 24px rgba(0,0,0,.35), 0 1px 3px rgba(0,0,0,.3);
+  --r-card: 18px;
+  --r-ctl: 13px;
+  --r-sm: 9px;
+
+  --sans: "DM Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --display: Syne, var(--sans);
+  --mono: "DM Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 * { box-sizing: border-box; }
-body {
-  margin: 0; background: var(--bg); color: var(--ink);
-  font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-}
-main { max-width: 1040px; margin: 0 auto; padding: 26px 20px 96px; }
-header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
-h1 { font-size: 21px; margin: 0; letter-spacing: -0.01em; }
-h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.07em;
-     color: var(--muted); margin: 30px 0 10px; }
-h3 { font-size: 14px; margin: 0 0 8px; }
-.sub { color: var(--muted); font-size: 13px; }
-a { color: var(--accent); }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.55 var(--sans); }
+main { max-width: 1040px; margin: 0 auto; padding: 28px 20px 96px; }
 
-.tabs { display: flex; gap: 2px; margin: 16px 0 14px; border-bottom: 1px solid var(--line); }
-.tab { padding: 9px 15px; cursor: pointer; border: none; background: none; font: inherit;
-       color: var(--muted); border-bottom: 2px solid transparent; border-radius: 0; }
+header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+h1 { font: 800 26px/1.2 var(--display); margin: 0; letter-spacing: -0.02em; }
+h2 { font: 700 12px/1.4 var(--display); text-transform: uppercase; letter-spacing: .1em;
+     color: var(--dim); margin: 32px 0 10px; }
+h3 { font: 700 14px/1.4 var(--display); margin: 0 0 8px; letter-spacing: -0.01em; }
+.sub { color: var(--muted); font-size: 13px; }
+a { color: var(--accent); text-underline-offset: 2px; }
+
+.tabs { display: flex; gap: 2px; margin: 18px 0 16px; border-bottom: 1px solid var(--line); }
+.tab { padding: 9px 16px; cursor: pointer; border: none; background: none;
+       font: 500 14px/1.4 var(--sans); color: var(--muted);
+       border-bottom: 2px solid transparent; border-radius: 0; }
 .tab:hover { color: var(--ink); }
 .tab.on { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
-.tab .count { font-variant-numeric: tabular-nums; opacity: .7; margin-left: 5px; }
+.tab .count { font-family: var(--mono); font-size: 12px; opacity: .6; margin-left: 6px; }
 
-.bar { display: flex; gap: 10px; align-items: center; margin-bottom: 16px; flex-wrap: wrap; }
+.bar { display: flex; gap: 10px; align-items: center; margin-bottom: 18px; flex-wrap: wrap; }
 button, .btn {
-  font: inherit; padding: 7px 13px; border-radius: 8px; cursor: pointer;
-  border: 1px solid var(--line); background: var(--panel); color: var(--ink);
-  text-decoration: none; display: inline-block; line-height: 1.4;
+  font: 600 14px/1.4 var(--sans); padding: 8px 15px; border-radius: var(--r-ctl);
+  cursor: pointer; border: 1px solid var(--line-strong); background: var(--panel-2);
+  color: var(--ink); text-decoration: none; display: inline-block;
+  transition: border-color .12s, background .12s, opacity .12s;
 }
-button:hover:not(:disabled) { border-color: var(--muted); }
-button:disabled { opacity: .5; cursor: progress; }
+button:hover:not(:disabled), .btn:hover { border-color: var(--accent); background: var(--accent-soft); }
+button:disabled { opacity: .45; cursor: progress; }
 button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-button.primary:hover:not(:disabled) { filter: brightness(1.08); }
-button.danger { color: var(--alert); border-color: var(--alert); }
-button.small { padding: 3px 9px; font-size: 12px; }
-button.link { border: none; background: none; color: var(--accent); padding: 0; }
+button.primary:hover:not(:disabled) { filter: brightness(1.1); background: var(--accent); }
+button.danger { color: var(--alert); border-color: rgba(240,131,107,.35); }
+button.danger:hover:not(:disabled) { background: var(--alert-bg); border-color: var(--alert); }
+button.small { padding: 4px 10px; font-size: 12px; border-radius: var(--r-sm); }
 
 .card { background: var(--panel); border: 1px solid var(--line);
-        border-radius: 12px; padding: 14px 16px; margin-bottom: 10px; }
-.card.flat { background: none; }
-.row { display: flex; gap: 14px; align-items: flex-start; }
-.grow { flex: 1 1 240px; min-width: 0; }
-.name { font-weight: 600; line-height: 1.35; }
+        border-radius: var(--r-card); padding: 16px 18px; margin-bottom: 12px;
+        box-shadow: var(--shadow); }
+.row { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+.grow { flex: 1 1 260px; min-width: 0; }
+.name { font: 600 15px/1.35 var(--sans); letter-spacing: -0.01em; }
 .meta { color: var(--muted); font-size: 13px; }
 .meta + .meta { margin-top: 3px; }
-.price { font-variant-numeric: tabular-nums; font-size: 19px; font-weight: 600; white-space: nowrap; }
+.price { font: 500 21px/1.2 var(--mono); letter-spacing: -0.02em; white-space: nowrap; }
 .price.over { color: var(--alert); }
 .price.under { color: var(--in); }
-.right { text-align: right; flex: 0 0 auto; }
+/* A fixed column, so prices line up down the page instead of each card
+   deciding its own right edge. */
+.right { text-align: right; flex: 0 0 auto; min-width: 152px; }
+@media (max-width: 560px) { .right { text-align: left; min-width: 0; } }
 
-.pill { display: inline-block; padding: 2px 9px; border-radius: 999px;
-        font-size: 12px; font-weight: 600; letter-spacing: .02em; white-space: nowrap; }
-.pill + .pill { margin-left: 4px; }
+/*
+ * Tags.
+ *
+ * inline-flex with an explicit line-height, not inline-block: an inline-block
+ * pill inherits the body's 1.55 line-height, so the text sits high in a box
+ * that is taller than it needs to be, and each pill baseline-aligns against its
+ * neighbours instead of centring in its own pill.
+ *
+ * text-indent cancels the letter-spacing. Letter-spacing adds its gap *after*
+ * every character including the last, so the glyphs drift left of centre by
+ * exactly one gap; indenting by the same amount puts them back.
+ */
+.pill {
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 3px 11px; border-radius: 999px; min-height: 22px;
+  font: 600 11.5px/1.2 var(--sans);
+  letter-spacing: .04em; text-indent: .04em; text-transform: uppercase;
+  white-space: nowrap; vertical-align: middle;
+}
+/* A flex row with a gap, so spacing never depends on stray text nodes. */
+.tags { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 10px; }
 .s-in { background: var(--in-bg); color: var(--in); }
 .s-out { background: var(--out-bg); color: var(--out); }
 .s-unknown, .s-unchecked, .s-queue { background: var(--warn-bg); color: var(--warn); }
@@ -1152,77 +1181,87 @@ button.link { border: none; background: none; color: var(--accent); padding: 0; 
 .info { background: var(--accent-soft); color: var(--accent); }
 .stale { color: var(--alert); font-weight: 600; }
 
-.thumb { width: 60px; height: 60px; border-radius: 8px; object-fit: contain;
-         background: var(--out-bg); flex: 0 0 auto; }
+.thumb { width: 60px; height: 60px; border-radius: var(--r-ctl); object-fit: contain;
+         background: var(--panel-2); border: 1px solid var(--line); flex: 0 0 auto; }
 .thumb.ph { display: flex; align-items: center; justify-content: center;
-            color: var(--muted); font-size: 20px; }
-.thumb.lg { width: 84px; height: 84px; }
+            color: var(--dim); font-size: 20px; }
+.thumb.lg { width: 88px; height: 88px; }
 
-form.stack { display: grid; gap: 10px; }
-.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }
-label.f { display: grid; gap: 3px; font-size: 13px; color: var(--muted); }
-label.f .hint { font-weight: 400; opacity: .75; }
-label.check { display: flex; gap: 7px; align-items: center; font-size: 14px;
+form.stack { display: grid; gap: 11px; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 11px; }
+label.f { display: grid; gap: 4px; font-size: 12px; color: var(--muted);
+          font-weight: 500; letter-spacing: .01em; }
+label.f .hint { font-weight: 400; color: var(--dim); }
+label.check { display: flex; gap: 8px; align-items: center; font-size: 14px;
               color: var(--ink); cursor: pointer; }
 input[type=text], input[type=url], input[type=number], input[type=date],
 select, textarea, input[type=password] {
-  font: inherit; padding: 8px 10px; border-radius: 8px; width: 100%;
-  border: 1px solid var(--line); background: var(--bg); color: var(--ink);
+  font: 400 14px/1.5 var(--sans); padding: 9px 11px; border-radius: var(--r-ctl); width: 100%;
+  border: 1px solid var(--line-strong); background: var(--bg); color: var(--ink);
 }
-input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
-textarea { min-height: 62px; resize: vertical; }
-.actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+input::placeholder, textarea::placeholder { color: var(--dim); }
+input:focus, select:focus, textarea:focus {
+  outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft);
+}
+textarea { min-height: 64px; resize: vertical; }
+.actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 
 .msg { font-size: 13px; min-height: 18px; }
 .msg.bad { color: var(--alert); }
 .msg.good { color: var(--in); }
-.empty { color: var(--muted); padding: 34px 14px; text-align: center;
-         border: 1px dashed var(--line); border-radius: 12px; }
-.empty strong { color: var(--ink); display: block; margin-bottom: 4px; }
+.empty { color: var(--muted); padding: 38px 16px; text-align: center;
+         border: 1px dashed var(--line-strong); border-radius: var(--r-card); }
+.empty strong { color: var(--ink); display: block; margin-bottom: 5px;
+                font: 700 15px/1.4 var(--display); }
 
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
-td, th { padding: 7px 8px; border-top: 1px solid var(--line-soft); vertical-align: top;
-         text-align: left; }
-th { color: var(--muted); font-weight: 500; font-size: 12px; text-transform: uppercase;
-     letter-spacing: .05em; border-top: none; }
+td, th { padding: 8px; border-top: 1px solid var(--line); vertical-align: top; text-align: left; }
+th { color: var(--dim); font: 600 10.5px/1.4 var(--sans); text-transform: uppercase;
+     letter-spacing: .09em; border-top: none; }
 tr:first-child td { border-top: none; }
 .nowrap { white-space: nowrap; }
+.mono { font-family: var(--mono); }
 .o-bought { color: var(--in); font-weight: 600; }
 .o-failed, .o-blocked { color: var(--alert); font-weight: 600; }
 .o-declined, .o-running { color: var(--warn); }
 .o-in_stock { color: var(--in); }
 
-details { margin-top: 10px; border-top: 1px solid var(--line-soft); padding-top: 10px; }
-details > summary { cursor: pointer; color: var(--muted); font-size: 13px; list-style: none; }
+details { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 12px; }
+details > summary { cursor: pointer; color: var(--muted); font-size: 13px; list-style: none;
+                    font-weight: 500; }
 details > summary::-webkit-details-marker { display: none; }
-details > summary::before { content: '\u25B8 '; }
+details > summary::before { content: '\u25B8 '; color: var(--dim); }
 details[open] > summary::before { content: '\u25BE '; }
 details > summary:hover { color: var(--ink); }
-.off { opacity: .55; }
-.login { max-width: 340px; margin: 16vh auto; }
+.off { opacity: .5; }
+
+.login { max-width: 350px; margin: 15vh auto; }
+.login .card { padding: 26px 24px; }
 .err { color: var(--alert); font-size: 13px; min-height: 20px; }
 `;
 function loginPage(message = "") {
   return `<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Hub</title><style>${STYLE}</style></head>
+<title>Hub</title>${FONTS}<style>${STYLE}</style></head>
 <body><main class="login">
-  <h1>Hub</h1>
-  <p class="sub">Sign in to see what's being watched.</p>
-  <form method="POST" action="/login" style="margin-top:18px">
-    <input type="password" name="password" placeholder="Password" autofocus required
-           autocomplete="current-password">
-    <div class="err" style="margin:8px 0">${esc(message)}</div>
-    <button type="submit" style="width:100%">Sign in</button>
-  </form>
+  <div class="card">
+    <h1>Hub</h1>
+    <p class="sub" style="margin:6px 0 0">Sign in to see what's being watched.</p>
+    <form method="POST" action="/login" style="margin-top:20px">
+      <input type="password" name="password" placeholder="Password" autofocus required
+             autocomplete="current-password">
+      <div class="err" style="margin:9px 0">${esc(message)}</div>
+      <button type="submit" class="primary" style="width:100%">Sign in</button>
+    </form>
+  </div>
 </main></body></html>`;
 }
 function dashboardPage() {
   return `<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Hub</title><style>${STYLE}</style></head>
+<title>Hub</title>${FONTS}<style>${STYLE}</style></head>
 <body><main>
   <header>
     <h1>Hub</h1>
@@ -1421,14 +1460,15 @@ function missionCard(m) {
   left.appendChild(el('div', 'name', m.productName));
 
   const where = el('div', 'meta');
-  where.append(m.retailer + ' \xB7 ' + (m.externalId || '\u2014') + ' \xB7 ');
+  where.append(m.retailer + ' \xB7 ');
+  where.appendChild(el('span', 'mono', m.externalId || '\u2014'));
+  where.append(' \xB7 ');
   const a = el('a', null, 'open page');
   a.href = m.url; a.target = '_blank'; a.rel = 'noreferrer';
   where.appendChild(a);
   left.appendChild(where);
 
-  const flags = el('div', 'meta');
-  flags.style.marginTop = '7px';
+  const flags = el('div', 'tags');
   const label = m.state === 'in' ? 'IN STOCK'
     : m.state === 'out' ? 'out of stock'
     : m.state === 'unchecked' ? 'never checked' : m.state;
@@ -1452,10 +1492,9 @@ function missionCard(m) {
     flags.appendChild(el('span', 'pill s-queue',
       'preorder' + (m.releaseDate ? ' \xB7 ' + m.releaseDate : '')));
   }
-  left.appendChild(flags);
   if (m.note) {
     const note = el('div', 'meta', m.note);
-    note.style.marginTop = '7px';
+    note.style.marginTop = '6px';
     left.appendChild(note);
   }
 
@@ -1485,6 +1524,9 @@ function missionCard(m) {
 
   row.append(left, right);
   card.appendChild(row);
+  // Tags go below the whole row, full width. Nested inside the title column
+  // they were competing with the price for space and wrapping at odd points.
+  card.appendChild(flags);
   card.appendChild(panel('m' + m.id, 'Settings and run history', () => missionPanel(m)));
   return card;
 }
@@ -1607,7 +1649,7 @@ function runTable(runs, emptyText) {
     tr.appendChild(el('td', 'o-' + r.outcome + ' nowrap', r.outcome.replace('_', ' ')));
     // Every non-success carries a reason. Showing it is the point of recording it.
     tr.appendChild(el('td', 'meta', r.reason || ''));
-    const right = el('td', 'meta nowrap',
+    const right = el('td', 'meta nowrap mono',
       [r.price !== null ? money(r.price) : '', r.ms !== null ? r.ms + 'ms' : '']
         .filter(Boolean).join(' \xB7 '));
     right.style.textAlign = 'right';
@@ -1639,8 +1681,7 @@ function productCard(p) {
 
   const missions = DATA.missions.filter((m) => m.productKey === p.key);
   if (missions.length) {
-    const states = el('div', 'meta');
-    states.style.marginTop = '7px';
+    const states = el('div', 'tags');
     for (const m of missions) {
       states.appendChild(el('span', 'pill s-' + m.state, m.retailer + ': ' + m.state));
     }
@@ -1667,7 +1708,7 @@ function productPanel(p, listings) {
     for (const l of listings) {
       const tr = el('tr');
       tr.appendChild(el('td', 'nowrap', l.retailer));
-      tr.appendChild(el('td', 'meta', l.externalId));
+      tr.appendChild(el('td', 'meta mono', l.externalId));
       const linkCell = el('td');
       const a = el('a', null, 'open');
       a.href = l.url; a.target = '_blank'; a.rel = 'noreferrer';

@@ -347,3 +347,76 @@ test('a dashboard that will not load says so instead of sitting blank', async ()
   await h.settle();
   assert.match($(h, '#summary').textContent, /unreachable/);
 });
+
+// ── Tags ─────────────────────────────────────────────────────────────────────
+
+test('TAGS ARE CENTRED — the CSS says so, in both directions', async () => {
+  // Two separate bugs lived here. Vertically, an inline-block pill inherits the
+  // body's 1.55 line-height, so the text sits high in a box taller than it
+  // needs to be. Horizontally, letter-spacing adds its gap after *every*
+  // character including the last, so the glyphs drift left of centre by exactly
+  // one gap.
+  const style = dashboardPage();
+  const pill = /\.pill \{([^}]*)\}/.exec(style)?.[1] ?? '';
+
+  assert.match(pill, /display:\s*inline-flex/, 'inline-block cannot centre its own content');
+  assert.match(pill, /align-items:\s*center/, 'vertical centring');
+  assert.match(pill, /justify-content:\s*center/, 'horizontal centring');
+  assert.match(pill, /font:[^;]*\/1\.2/, 'an inherited 1.55 makes the pill too tall');
+
+  const spacing = /letter-spacing:\s*\.(\d+)em/.exec(pill)?.[1];
+  const indent = /text-indent:\s*\.(\d+)em/.exec(pill)?.[1];
+  assert.ok(spacing, 'letter-spacing is set');
+  assert.equal(indent, spacing, 'text-indent must cancel letter-spacing exactly');
+});
+
+test('the theme is the one from dnacardvault.com, not an approximation of it', async () => {
+  // Read off the live site rather than eyeballed: ground, surface, accent,
+  // hairline border and the three faces it uses.
+  const css = dashboardPage();
+  for (const [what, value] of [
+    ['ground', '#09080e'],
+    ['surface', '#17161f'],
+    ['ink', '#edebf5'],
+    ['accent', '#7f77dd'],
+    ['hairline border', 'rgba(237, 235, 245, .07)'],
+  ] as const) {
+    assert.ok(css.toLowerCase().includes(value), `${what} ${value} missing from the theme`);
+  }
+  for (const face of ['Syne', 'DM Sans', 'DM Mono']) {
+    assert.ok(css.includes(face), `${face} missing`);
+  }
+  assert.match(css, /fonts\.googleapis\.com/, 'the faces have to actually load');
+  assert.match(css, /color-scheme:\s*dark/, 'the site is dark only, so this is too');
+});
+
+test('tags are spaced by a flex gap, not by stray text nodes', async () => {
+  const h = await boot();
+  const tags = $(h, '.tags');
+  assert.ok(tags, 'the tag row should exist');
+  assert.ok(tags.children.length >= 2, 'this fixture has several tags');
+  for (const child of tags.children) {
+    assert.match(child.className, /pill/, 'a tag row holds pills and nothing else');
+  }
+  assert.equal(tags.textContent.includes('  '), false, 'no double spaces from manual padding');
+
+  const css = dashboardPage();
+  assert.match(/\.tags \{([^}]*)\}/.exec(css)?.[1] ?? '', /gap:/, 'spacing comes from the gap');
+});
+
+test('the tag row sits below the card, not squeezed beside the price', async () => {
+  const h = await boot();
+  const card = $(h, '#missions .card');
+  const row = card.querySelector('.row');
+  const tags = card.querySelector('.tags');
+  assert.ok(tags, 'tags render');
+  assert.equal(row.contains(tags), false,
+    'nested in the title column they compete with the price and wrap at odd points');
+  assert.equal(tags.parentElement, card);
+});
+
+test('the price column is a fixed width, so prices line up down the page', async () => {
+  const right = /\.right \{([^}]*)\}/.exec(dashboardPage())?.[1] ?? '';
+  assert.match(right, /min-width:/, 'without it each card picks its own right edge');
+  assert.match(right, /text-align:\s*right/);
+});
