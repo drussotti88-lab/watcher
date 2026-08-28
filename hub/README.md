@@ -8,7 +8,11 @@ That last part is settled, not a design preference. A Hub in a datacentre gets
 own connection reaches all three and reads their prices. So the machine on the
 desk does the looking, and this remembers.
 
-**Stack:** Vercel (API) · Supabase (Postgres) · Discord (alerts). All free tier.
+It also serves the web app: a page showing what is being watched, what is in
+stock, at what price, from which seller, and how stale each reading is.
+
+**Stack:** Vercel · Supabase (Postgres). All free tier. Discord is optional and
+off by default — `notify.ts` posts nothing when no webhook is set.
 
 ## Why there is no cron
 
@@ -46,16 +50,25 @@ npm run db:seed                # three retailers, three known-good products
 ```bash
 npx vercel link
 npx vercel env add DATABASE_URL production
-npx vercel env add DISCORD_WEBHOOK_URL production
+npx vercel env add APP_PASSWORD production
 npx vercel env add INGEST_TOKEN production
 npm run deploy
 ```
 
-`INGEST_TOKEN` is a long random string you invent:
+`INGEST_TOKEN` is a long random string you invent — it is what the Watcher
+presents:
 
 ```bash
 node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 ```
+
+`APP_PASSWORD` is the password for the web page. There are no accounts because
+there is one user. It also signs the session cookie, so changing it signs you
+out everywhere — which is what you want from changing a password.
+
+**Neither being set means that door is shut, never open.** A dashboard that
+went public because someone forgot an environment variable is the failure this
+is built to avoid, and there is a test named after it.
 
 ### 3. Check
 
@@ -70,7 +83,10 @@ request needs `Authorization: Bearer <INGEST_TOKEN>`.
 
 | Method | Path | Auth | What |
 |---|---|---|---|
+| `GET` | `/` | password | The page |
 | `GET` | `/health` | — | Is it up, and what does each source look like |
+| `GET` | `/api/dashboard` | either | Everything the page renders, in one request |
+| `POST` | `/observations` | token | The Watcher reports what it saw |
 | `GET` | `/watchlist` | token | `products` to poll, and `sources` to hunt in |
 | `POST` | `/ingest` | token | The Watcher posts what it saw |
 | `POST` | `/sweep` | token | Sweep sources the Hub can fetch itself (`?source=<id>` for one) |
@@ -80,6 +96,22 @@ request needs `Authorization: Bearer <INGEST_TOKEN>`.
 egress, which sources are fetchable — and every retailer that comes back
 `BLOCKED` belongs to the Watcher. Right now that is all of them, which is why
 `seed.sql` puts every source on `via = 'watcher'`.
+
+## Two tables for what the Watcher sees
+
+`watch_state` holds one row per (product, retailer) and is **upserted on every
+check**, so the page can always say how stale a reading is. A dashboard that
+cannot tell you it is out of date is worse than no dashboard.
+
+`observations` is append-only history and is written **only when something
+material changed** — state, price, or seller. Polling a static product every
+minute for a week is ten thousand checks and zero rows. That is what makes the
+history readable, and why "in stock since" means what it says instead of
+resetting every time we look.
+
+The first ever sighting is recorded but not counted as a change. Otherwise
+switching the Watcher on announces everything at once — the same mistake the
+discovery seeding logic exists to avoid.
 
 ## Design notes that matter
 
@@ -107,7 +139,7 @@ looked at — Supabase gives you a table editor, so use it.
 npm test
 ```
 
-37 tests, running against **real Postgres** — PGlite, compiled to WebAssembly,
+58 tests, running against **real Postgres** — PGlite, compiled to WebAssembly,
 in the test process. The previous version tested SQL against SQLite, which
 agrees with Postgres right up until it doesn't:
 
@@ -130,7 +162,9 @@ runs in-process with no server and no platform mocks.
 
 ```
 api/index.ts       Vercel adapter — the only platform-specific file
-src/app.ts         The API, as Request → Response
+src/app.ts         The API and pages, as Request → Response
+src/auth.ts        Bearer token for the Watcher, signed cookie for the browser
+src/page.ts        The two HTML documents. No framework, no build step
 src/db.ts          The database seam: Sql interface + Postgres adapter
 src/store.ts       Every SQL statement. Nothing above here writes SQL
 src/discover.ts    Sweep, rotate, seed-or-announce

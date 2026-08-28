@@ -70,4 +70,6 @@ export interface Env {
   DISCORD_OPS_WEBHOOK_URL?: string;
   /** Bearer token the Watcher presents when posting findings. */
   INGEST_TOKEN?: string;
+  /** Password for the web page, and the key its session cookie is signed with. */
+  APP_PASSWORD?: string;
 }

@@ -99,3 +99,62 @@ CREATE TABLE IF NOT EXISTS events (
 );
 
 CREATE INDEX IF NOT EXISTS events_at_idx ON events (at DESC);
+
+-- ---------------------------------------------------------------------------
+-- What the Watcher saw
+--
+-- Two tables on purpose, because "what is true now" and "what happened" want
+-- different shapes and different write rates.
+--
+--   watch_state   one row per (product, retailer). Upserted on every check, so
+--                 the dashboard can always say how stale a reading is. A page
+--                 that cannot tell you it is out of date is worse than no page.
+--
+--   observations  append-only history, written ONLY when something material
+--                 changed — state, price, or seller. Polling every minute for a
+--                 week is ten thousand checks and, for a product that never
+--                 moves, zero rows. That is what makes the history readable.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS watch_state (
+  product_key        TEXT NOT NULL REFERENCES products(key) ON DELETE CASCADE,
+  retailer           TEXT NOT NULL,
+  external_id        TEXT NOT NULL DEFAULT '',
+  url                TEXT NOT NULL DEFAULT '',
+  -- 'in' | 'out' | 'queue' | 'unknown'
+  state              TEXT NOT NULL DEFAULT 'unknown',
+  -- 'exact' | 'inferred' | 'unknown'
+  confidence         TEXT NOT NULL DEFAULT 'unknown',
+  price              NUMERIC(10, 2),
+  -- 'retailer' | 'marketplace' | 'unknown'. Walmart lists third-party sellers
+  -- as IN_STOCK at whatever they like; this is what stops a scalper's price
+  -- looking like a restock.
+  seller_kind        TEXT NOT NULL DEFAULT 'unknown',
+  seller_name        TEXT NOT NULL DEFAULT '',
+  available_quantity INTEGER,
+  order_limit        INTEGER,
+  is_preorder        BOOLEAN NOT NULL DEFAULT false,
+  release_date       DATE,
+  note               TEXT NOT NULL DEFAULT '',
+  last_checked_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  -- When the reading last became something different. Drives "in stock since".
+  last_changed_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (product_key, retailer)
+);
+
+CREATE INDEX IF NOT EXISTS watch_state_stock_idx ON watch_state (state, last_changed_at DESC);
+
+CREATE TABLE IF NOT EXISTS observations (
+  id                 BIGSERIAL PRIMARY KEY,
+  product_key        TEXT NOT NULL REFERENCES products(key) ON DELETE CASCADE,
+  retailer           TEXT NOT NULL,
+  state              TEXT NOT NULL,
+  confidence         TEXT NOT NULL DEFAULT 'unknown',
+  price              NUMERIC(10, 2),
+  seller_kind        TEXT NOT NULL DEFAULT 'unknown',
+  seller_name        TEXT NOT NULL DEFAULT '',
+  available_quantity INTEGER,
+  note               TEXT NOT NULL DEFAULT '',
+  at                 TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS observations_product_idx ON observations (product_key, at DESC);
