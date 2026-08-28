@@ -16,7 +16,7 @@
  */
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import * as esbuild from 'esbuild';
 import { readFileSync, mkdirSync, rmSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createServer, type Server } from 'node:http';
@@ -33,14 +33,20 @@ let base = '';
 
 before(async () => {
   mkdirSync(outDir, { recursive: true });
-  execFileSync(
-    'npx',
-    [
-      'esbuild', 'src/server.ts', '--bundle', '--platform=node', '--format=esm',
-      '--target=node22', '--packages=external', `--outfile=${out}`,
-    ],
-    { cwd: root, stdio: 'pipe' },
-  );
+
+  // esbuild's own API, not a spawned `npx`. On Windows the binary is npx.cmd
+  // and execFileSync cannot find it without a shell — the test failed on the
+  // one machine that actually deploys this, which is the worst place for a
+  // test harness to be platform-specific.
+  await esbuild.build({
+    entryPoints: [resolve(root, 'src/server.ts')],
+    bundle: true,
+    platform: 'node',
+    format: 'esm',
+    target: 'node22',
+    packages: 'external',
+    outfile: out,
+  });
 
   process.env.DATABASE_URL =
     'postgresql://postgres.ref:pw@aws-0-us-east-2.pooler.supabase.com:6543/postgres';
