@@ -96,6 +96,7 @@ const MISSION_FIELDS = [
   'state',
   'price',
   'lastCheckedAt',
+  'checkNow',
 ] as const;
 
 test('/api/missions/active gives the Watcher every field it reads', async () => {
@@ -240,4 +241,48 @@ test('the Watcher without its token gets nothing', async () => {
     'wrong',
   );
   assert.equal(observations.status, 401);
+});
+
+// ── Test run ─────────────────────────────────────────────────────────────────
+
+test('a test run is queued, not performed — and says so', async () => {
+  // The Hub has no browser. Answering 200 "checking now" would be a small lie
+  // that makes every later timing question unanswerable.
+  const { db, missionId } = await withMission();
+  const { status, body } = await call(db, 'POST', `/api/missions/${missionId}/check-now`);
+
+  assert.equal(status, 202, 'accepted, not done');
+  assert.match(body.note, /next pass/);
+
+  const active = await call(db, 'GET', '/api/missions/active');
+  assert.equal(active.body.missions[0].checkNow, true, 'and the Watcher is told');
+});
+
+test('a test run on a mission that does not exist is a 404, not a silent no-op', async () => {
+  const { db } = await withMission();
+  const { status } = await call(db, 'POST', '/api/missions/9999/check-now');
+  assert.equal(status, 404);
+});
+
+test('THE FLAG CLEARS WHEN THE READING ARRIVES, not when the button is pressed', async () => {
+  // Clearing on request would tick the box for a check that never happened —
+  // and a test run that silently did nothing is worse than no button.
+  const { db, listingId, missionId } = await withMission();
+  await call(db, 'POST', `/api/missions/${missionId}/check-now`);
+
+  const stillPending = await call(db, 'GET', '/api/missions/active');
+  assert.equal(stillPending.body.missions[0].checkNow, true);
+
+  await call(db, 'POST', '/observations', {
+    observations: [{ listingId, state: 'out', confidence: 'exact' }],
+  });
+
+  const after = await call(db, 'GET', '/api/missions/active');
+  assert.equal(after.body.missions[0].checkNow, false);
+});
+
+test('an ordinary mission is not flagged for a test run', async () => {
+  const { db } = await withMission();
+  const { body } = await call(db, 'GET', '/api/missions/active');
+  assert.equal(body.missions[0].checkNow, false);
 });

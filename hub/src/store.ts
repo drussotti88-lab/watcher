@@ -467,6 +467,8 @@ export interface MissionRow {
   quantity: number;
   sellerPolicy: SellerPolicy;
   checkEverySeconds: number;
+  /** A "test run" is pending: check this one next pass, whatever its schedule. */
+  checkNow: boolean;
   notes: string;
   /** Latest reading for this mission's listing, when there is one. */
   state: string;
@@ -502,6 +504,7 @@ function toMission(r: Record<string, unknown>): MissionRow {
     quantity: Number(r.quantity ?? 1),
     sellerPolicy: (String(r.seller_policy ?? 'retailer_only') as SellerPolicy),
     checkEverySeconds: Number(r.check_every_s ?? 60),
+    checkNow: r.check_now_at !== null && r.check_now_at !== undefined,
     notes: String(r.notes ?? ''),
     state: String(r.state ?? 'unchecked'),
     confidence: String(r.confidence ?? 'unknown'),
@@ -561,6 +564,22 @@ export async function getMission(db: Sql, id: number): Promise<MissionRow | null
 }
 
 /** Missions the Watcher should be polling right now. */
+/**
+ * Ask for a mission to be checked on the next pass, whatever its schedule says.
+ *
+ * This is the "Test run" button. It cannot make a check happen — the Watcher
+ * owns the browser and the retailer owns the budget — so it records a request
+ * and lets the next pass honour it. Saying "checking now" and meaning "queued"
+ * would be the same species of lie as a $30 ceiling that accepts $45.
+ */
+export async function requestCheckNow(db: Sql, id: number): Promise<boolean> {
+  const rows = await db.query<{ id: number }>(
+    'UPDATE missions SET check_now_at = now() WHERE id = $1 RETURNING id',
+    [id],
+  );
+  return rows.length > 0;
+}
+
 export async function activeMissions(db: Sql): Promise<MissionRow[]> {
   const rows = await db.query(`${MISSION_SELECT} WHERE m.enabled = true ORDER BY m.id`);
   return rows.map(toMission);
@@ -862,6 +881,15 @@ export async function recordObservation(
       (obs.note ?? '').slice(0, 500),
       changed,
     ],
+  );
+
+  // A pending "test run" is satisfied by a reading arriving, and by nothing
+  // else. Clearing it when the request is *sent* would tick the box for a check
+  // that never happened; clearing it here means the button stays lit until the
+  // Watcher actually looked.
+  await db.query(
+    'UPDATE missions SET check_now_at = NULL WHERE listing_id = $1 AND check_now_at IS NOT NULL',
+    [obs.listingId],
   );
 
   // The listing remembers who was selling it, so a mission's seller policy has

@@ -311,6 +311,7 @@ export async function pass(missions: Mission[], pacer: Pacer, deps: WatchDeps): 
   if (result.checked === 0 && result.waitingOn.length === 0) {
     let soonest: number | null = null;
     for (const m of missions) {
+      if (m.checkNow) return result; // a test run is pending, not "nothing due"
       if (!m.lastCheckedAt) return result; // due now; something else is wrong
       const dueAt = new Date(m.lastCheckedAt).getTime() + m.checkEverySeconds * 1000;
       if (!Number.isFinite(dueAt)) continue;

@@ -237,6 +237,20 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       }
     }
 
+    /**
+     * "Test run" — check this mission on the next pass, whatever its schedule.
+     *
+     * Answers 202, not 200, and the wording matters: the Hub has no browser and
+     * cannot make a check happen. It records the request; the Watcher honours it
+     * next pass, jumping the mission queue but never the per-retailer floor.
+     */
+    if (request.method === 'POST' && path.endsWith('/check-now') && path.startsWith('/api/missions/')) {
+      const id = Number(path.split('/')[3]);
+      if (!Number.isInteger(id)) return json({ error: 'bad mission id' }, 400);
+      if (!(await store.requestCheckNow(db, id))) return json({ error: 'no such mission' }, 404);
+      return json({ queued: id, note: 'the Watcher will check this on its next pass' }, 202);
+    }
+
     if (request.method === 'DELETE' && path.startsWith('/api/missions/')) {
       const id = Number(path.slice('/api/missions/'.length));
       if (!Number.isInteger(id)) return json({ error: 'bad mission id' }, 400);

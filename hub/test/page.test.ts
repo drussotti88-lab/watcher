@@ -420,3 +420,44 @@ test('the price column is a fixed width, so prices line up down the page', async
   assert.match(right, /min-width:/, 'without it each card picks its own right edge');
   assert.match(right, /text-align:\s*right/);
 });
+
+test('THE TEST RUN BUTTON ACTUALLY ASKS FOR A TEST RUN', async () => {
+  // The lesson from the add-product bug: a button that looks right and posts
+  // nowhere passes every test that does not press it.
+  const h = await boot();
+  const form = $(h, 'form[data-mission="1"]');
+  const btn = form.querySelector('[data-act=check-now]');
+  assert.ok(btn, 'the button should be on the mission panel');
+
+  h.reply('POST /api/missions/1/check-now', { queued: 1, note: 'next pass' });
+  btn.click();
+  await h.settle();
+
+  const call = h.calls.find((c) => c.path === '/api/missions/1/check-now');
+  assert.ok(call, 'clicking Test run must reach the API');
+  assert.equal(call.method, 'POST');
+});
+
+test('the test run button says queued, never "checking now"', async () => {
+  // The Hub has no browser and the Watcher will not jump the retailer's pacing
+  // for a button click. Wording that promises otherwise is a claim neither of
+  // them can keep.
+  const h = await boot();
+  const form = $(h, 'form[data-mission="1"]');
+  const btn = form.querySelector('[data-act=check-now]');
+
+  h.reply('POST /api/missions/1/check-now', { queued: 1 });
+  btn.click();
+  await h.settle();
+
+  assert.match(btn.textContent, /queued/i);
+  assert.doesNotMatch(form.textContent, /checking now/i);
+});
+
+test('a mission already waiting on a test run shows it', async () => {
+  const pending = JSON.parse(JSON.stringify(DASHBOARD));
+  pending.missions[0].checkNow = true;
+  const h = await boot(pending);
+  const btn = $(h, 'form[data-mission="1"]').querySelector('[data-act=check-now]');
+  assert.match(btn.textContent, /queued/i);
+});

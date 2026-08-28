@@ -27,6 +27,8 @@ export interface Mission {
   quantity: number;
   sellerPolicy: 'retailer_only' | 'any';
   checkEverySeconds: number;
+  /** A "test run" was asked for. Due now, whatever the schedule says. */
+  checkNow?: boolean;
   state: string;
   price: number | null;
   lastCheckedAt: string;

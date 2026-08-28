@@ -179,6 +179,19 @@ CREATE TABLE IF NOT EXISTS missions (
 
 CREATE INDEX IF NOT EXISTS missions_active_idx ON missions (enabled, armed);
 
+-- "Test run": check this one now, whatever its schedule says.
+--
+-- A request, not a command. The Watcher is the only thing with a browser, and
+-- it is the only thing that knows whether the retailer will have us — so this
+-- sets a flag the next pass picks up, jumping the mission queue but never the
+-- per-retailer floor. Cleared when a reading for that listing arrives, which is
+-- the only honest signal that the run actually happened.
+--
+-- ADD COLUMN IF NOT EXISTS rather than a new table: schema.sql is run against a
+-- live database by `npm run db:push`, so every statement in it has to be safe
+-- to run twice.
+ALTER TABLE missions ADD COLUMN IF NOT EXISTS check_now_at TIMESTAMPTZ;
+
 -- ---------------------------------------------------------------------------
 -- Mission runs — what happened, and why
 --

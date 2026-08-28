@@ -7,7 +7,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { judge, pass, type ReadFn } from '../src/watch.ts';
-import { Pacer, DEFAULT_PACING, type Pacing } from '../src/rate.ts';
+import { Pacer, nextUp, DEFAULT_PACING, type Pacing } from '../src/rate.ts';
 import type { Browser } from '../src/browser.ts';
 import type { Hub, Mission, ObservationOut, RunOut } from '../src/hub.ts';
 import type { Reading } from '../src/read.ts';
@@ -440,4 +440,12 @@ test('a retailer holding us back is reported as that, not as nothing being due',
   assert.equal(result.checked, 0);
   assert.equal(result.nextDueInMs, null);
   assert.deepEqual(result.waitingOn, ['Target (standing down, 1200s)']);
+});
+
+test('a pending test run is never reported as "nothing due"', () => {
+  // Two silences again. "Nothing due — next in 18s" while a test run sits
+  // unhonoured would send you looking at the schedule.
+  const pacer = new Pacer(STEADY, () => 0);
+  const asked = mission({ lastCheckedAt: new Date(T0 - 1_000).toISOString(), checkNow: true });
+  assert.equal(nextUp([asked], pacer, T0)?.id, 1, 'and it is due');
 });

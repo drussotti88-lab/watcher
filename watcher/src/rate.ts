@@ -136,15 +136,25 @@ export function isDue(lastCheckedAt: string | null, everySeconds: number, now: n
  * Longest-waiting first, so a fast mission cannot starve a slow one when they
  * share a retailer's budget.
  */
-export function nextUp<T extends { retailer: string; checkEverySeconds: number; lastCheckedAt: string }>(
-  missions: T[],
-  pacer: Pacer,
-  now: number,
-): T | null {
+export function nextUp<
+  T extends {
+    retailer: string;
+    checkEverySeconds: number;
+    lastCheckedAt: string;
+    checkNow?: boolean;
+  },
+>(missions: T[], pacer: Pacer, now: number): T | null {
   const due = missions
-    .filter((m) => isDue(m.lastCheckedAt || null, m.checkEverySeconds, now))
+    .filter((m) => m.checkNow === true || isDue(m.lastCheckedAt || null, m.checkEverySeconds, now))
+    // Note what this filter is NOT excepting. A test run jumps the queue of
+    // missions; it does not jump the retailer's budget. Letting a button in a
+    // web page bypass the pacing is how you get a bot check while looking at
+    // the screen that caused it.
     .filter((m) => pacer.waitMs(m.retailer, now) === 0)
     .sort((a, b) => {
+      // An explicitly requested check goes first: somebody is watching the page
+      // waiting for it, and every other mission's schedule can absorb a turn.
+      if (a.checkNow !== b.checkNow) return a.checkNow ? -1 : 1;
       const at = a.lastCheckedAt ? new Date(a.lastCheckedAt).getTime() : 0;
       const bt = b.lastCheckedAt ? new Date(b.lastCheckedAt).getTime() : 0;
       return at - bt;

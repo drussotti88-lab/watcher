@@ -540,6 +540,7 @@ function toMission(r) {
     quantity: Number(r.quantity ?? 1),
     sellerPolicy: String(r.seller_policy ?? "retailer_only"),
     checkEverySeconds: Number(r.check_every_s ?? 60),
+    checkNow: r.check_now_at !== null && r.check_now_at !== void 0,
     notes: String(r.notes ?? ""),
     state: String(r.state ?? "unchecked"),
     confidence: String(r.confidence ?? "unknown"),
@@ -584,6 +585,13 @@ async function listMissions(db2) {
 async function getMission(db2, id) {
   const rows = await db2.query(`${MISSION_SELECT} WHERE m.id = $1`, [id]);
   return rows[0] ? toMission(rows[0]) : null;
+}
+async function requestCheckNow(db2, id) {
+  const rows = await db2.query(
+    "UPDATE missions SET check_now_at = now() WHERE id = $1 RETURNING id",
+    [id]
+  );
+  return rows.length > 0;
 }
 async function activeMissions(db2) {
   const rows = await db2.query(`${MISSION_SELECT} WHERE m.enabled = true ORDER BY m.id`);
@@ -766,6 +774,10 @@ async function recordObservation(db2, obs) {
       (obs.note ?? "").slice(0, 500),
       changed
     ]
+  );
+  await db2.query(
+    "UPDATE missions SET check_now_at = NULL WHERE listing_id = $1 AND check_now_at IS NOT NULL",
+    [obs.listingId]
   );
   if (sellerKind !== "unknown") {
     await db2.query("UPDATE listings SET seller_kind = $1, seller_name = $2 WHERE id = $3", [
@@ -1575,6 +1587,7 @@ function missionPanel(m) {
     <label class="check"><input type="checkbox" name="armed"> Armed \u2014 may buy without asking me</label>
     <div class="actions">
       <button type="submit" class="primary">Save changes</button>
+      <button type="button" data-act="check-now">Test run</button>
       <button type="button" class="danger" data-act="delete">Delete mission</button>
       <span class="msg"></span>
     </div>\`;
@@ -1617,6 +1630,25 @@ function missionPanel(m) {
         load();
         return 'saved';
       });
+  });
+
+  // "Test run" \u2014 ask for this one to be checked next pass.
+  //
+  // The wording on the button and in the reply both say *queued*, deliberately.
+  // The Hub has no browser, and the Watcher will not jump the retailer's
+  // pacing for a button click, so anything promising "checking now" would be
+  // making a claim neither of them can keep.
+  const checkNow = form.querySelector('[data-act=check-now]');
+  if (m.checkNow) checkNow.textContent = 'Test run queued';
+  checkNow.addEventListener('click', async (e) => {
+    const ok = await withButton(e.target, 'Queueing\u2026', msg, async () => {
+      await api('POST', '/api/missions/' + m.id + '/check-now');
+      return 'queued \u2014 the Watcher will check this on its next pass';
+    });
+    // withButton restores the label it started with, which is right for every
+    // other button on this page and wrong for this one: the request outlives
+    // the click, and the button is the only thing showing that.
+    if (ok) e.target.textContent = 'Test run queued';
   });
 
   form.querySelector('[data-act=delete]').addEventListener('click', async (e) => {
@@ -2095,6 +2127,12 @@ function createHandler(db2, env2) {
       } catch (err) {
         return json({ error: err.message }, 400);
       }
+    }
+    if (request.method === "POST" && path.endsWith("/check-now") && path.startsWith("/api/missions/")) {
+      const id = Number(path.split("/")[3]);
+      if (!Number.isInteger(id)) return json({ error: "bad mission id" }, 400);
+      if (!await requestCheckNow(db2, id)) return json({ error: "no such mission" }, 404);
+      return json({ queued: id, note: "the Watcher will check this on its next pass" }, 202);
     }
     if (request.method === "DELETE" && path.startsWith("/api/missions/")) {
       const id = Number(path.slice("/api/missions/".length));

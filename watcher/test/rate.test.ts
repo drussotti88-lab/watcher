@@ -25,6 +25,7 @@ interface Mission {
   retailer: string;
   checkEverySeconds: number;
   lastCheckedAt: string;
+  checkNow?: boolean;
 }
 
 test('a fresh retailer may be touched immediately', () => {
@@ -166,4 +167,41 @@ test('nextUp takes the longest-waiting mission first', () => {
 
   assert.equal(nextUp([fresh, stale], pacer, T0)?.id, 2);
   assert.equal(nextUp([fresh, stale, never], pacer, T0)?.id, 3, 'never-checked is oldest of all');
+});
+
+// ── Test run ─────────────────────────────────────────────────────────────────
+
+test('a requested check is due even when its schedule says otherwise', () => {
+  const pacer = new Pacer(STEADY, () => 0);
+  const justChecked = mission({ lastCheckedAt: new Date(T0).toISOString(), checkNow: true });
+  assert.equal(nextUp([justChecked], pacer, T0 + 1_000)?.id, 1);
+});
+
+test('a requested check jumps the queue of missions', () => {
+  // Somebody is watching the page waiting for it. Every other mission's
+  // schedule can absorb a turn.
+  const pacer = new Pacer(STEADY, () => 0);
+  const ancient = mission({ id: 1, lastCheckedAt: new Date(T0 - 600_000).toISOString() });
+  const asked = mission({ id: 2, lastCheckedAt: new Date(T0 - 1_000).toISOString(), checkNow: true });
+  assert.equal(nextUp([ancient, asked], pacer, T0)?.id, 2);
+});
+
+test('A REQUESTED CHECK DOES NOT JUMP THE RETAILER', () => {
+  // The line that matters. A button in a web page must not be able to override
+  // pacing — that is how you get a bot check while looking at the screen that
+  // caused it.
+  const pacer = new Pacer(STEADY, () => 0);
+  pacer.challenged('Target', T0);
+  assert.equal(nextUp([mission({ checkNow: true })], pacer, T0), null);
+
+  pacer.succeeded('Target');
+  pacer.record('Target', T0);
+  assert.equal(nextUp([mission({ checkNow: true })], pacer, T0), null, 'ordinary spacing holds too');
+});
+
+test('two requested checks fall back to longest-waiting between themselves', () => {
+  const pacer = new Pacer(STEADY, () => 0);
+  const a = mission({ id: 1, lastCheckedAt: new Date(T0 - 10_000).toISOString(), checkNow: true });
+  const b = mission({ id: 2, lastCheckedAt: new Date(T0 - 90_000).toISOString(), checkNow: true });
+  assert.equal(nextUp([a, b], pacer, T0)?.id, 2);
 });
