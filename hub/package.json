@@ -12,8 +12,8 @@
     "deploy": "vercel deploy --prod",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit",
     "test": "node --experimental-strip-types --test --test-concurrency=4 test/*.test.ts",
-    "db:push": "node --experimental-strip-types scripts/migrate.ts schema.sql",
-    "db:seed": "node --experimental-strip-types scripts/migrate.ts seed.sql"
+    "db:push": "node --experimental-strip-types --env-file-if-exists=.env.local scripts/migrate.ts schema.sql",
+    "db:seed": "node --experimental-strip-types --env-file-if-exists=.env.local scripts/migrate.ts seed.sql"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
