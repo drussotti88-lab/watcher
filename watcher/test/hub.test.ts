@@ -204,3 +204,123 @@ test('a refused run also leaves a reason behind', async () => {
   await hub.recordRun(run(1));
   assert.match(hub.lastError, /need missionId/);
 });
+
+// ── Riding out a Hub outage ──────────────────────────────────────────────────
+
+const T = 1_700_000_000_000;
+const activeBody = { missions: [{ id: 1, retailer: 'Target', armed: false, ceiling: null }] };
+
+test('one flaky request is retried before anything is given up', async () => {
+  // Observed in the wild: a request hangs until the abort fires, and the very
+  // next one answers in under 100ms. That should cost a second, not a pass.
+  const { impl, calls } = stubFetch([
+    { body: activeBody },
+    { throws: 'This operation was aborted' },
+    { body: activeBody },
+  ]);
+  const hub = new Hub({ url: 'https://hub.test', token: 'tok', fetchImpl: impl });
+
+  await hub.missions(T);
+  const second = await hub.missionsOrCached(T + 90_000);
+
+  assert.equal(second.stale, false, 'a retry that worked is not a fallback');
+  assert.equal(second.missions.length, 1);
+  assert.equal(calls.length, 3, 'it tried again rather than reaching for the cache');
+});
+
+test('two failures in a row are reported with both timings, not as one', async () => {
+  const { impl } = stubFetch([{ body: activeBody }, { throws: 'down' }, { throws: 'down' }]);
+  const hub = new Hub({ url: 'https://hub.test', token: 'tok', fetchImpl: impl });
+
+  await hub.missions(T);
+  const second = await hub.missionsOrCached(T + 90_000);
+
+  assert.equal(second.stale, true);
+  assert.match(second.reason, /down after \d+s; then down after \d+s/);
+});
+
+test('a cold Hub does not stop us watching what we were already watching', async () => {
+  // This is the bug the first live run found: missions() throwing cost the
+  // whole pass, which is failing CLOSED on watching — the opposite of the rule
+  // this file is built on.
+  const { impl } = stubFetch([
+    { body: activeBody },
+    { throws: 'This operation was aborted' },
+    { throws: 'This operation was aborted' },
+  ]);
+  const hub = new Hub({ url: 'https://hub.test', token: 'tok', fetchImpl: impl });
+
+  await hub.missions(T);
+  const second = await hub.missionsOrCached(T + 90_000);
+
+  assert.equal(second.missions.length, 1, 'we keep looking at the page');
+  assert.equal(second.stale, true);
+  assert.match(second.reason, /aborted/);
+  assert.match(second.reason, /90s ago/, 'and the terminal says how old the list is');
+});
+
+test('a watchlist stops being trusted once it is stale', async () => {
+  // Long enough to ride out a cold start or a deploy; short enough that a
+  // mission you paused is not still being polled an afternoon later.
+  const { impl } = stubFetch([{ body: activeBody }, { throws: 'down' }]);
+  const hub = new Hub({ url: 'https://hub.test', token: 'tok', fetchImpl: impl });
+
+  await hub.missions(T);
+  const later = await hub.missionsOrCached(T + 16 * 60_000);
+
+  assert.deepEqual(later.missions, [], 'better to skip a pass than watch a stale list');
+  assert.equal(later.stale, true);
+});
+
+test('with no watchlist ever received there is nothing to fall back on', async () => {
+  const { hub } = hubWith([{ throws: 'down' }]);
+  const first = await hub.missionsOrCached(T);
+  assert.deepEqual(first.missions, []);
+  assert.equal(first.stale, true);
+});
+
+test('a live watchlist is never reported as stale', async () => {
+  const { hub } = hubWith([{ body: activeBody }]);
+  const result = await hub.missionsOrCached(T);
+  assert.equal(result.stale, false);
+  assert.equal(result.reason, '');
+});
+
+test('A STALE WATCHLIST STILL CANNOT SPEND', async () => {
+  // The safety argument for caching at all. Watching from memory is fine;
+  // buying from memory is how you buy something you already cancelled.
+  const { impl } = stubFetch([{ body: activeBody }, { throws: 'down' }, { throws: 'down' }]);
+  const hub = new Hub({ url: 'https://hub.test', token: 'tok', fetchImpl: impl });
+
+  await hub.missions(T);
+  const cached = await hub.missionsOrCached(T + 60_000);
+  assert.equal(cached.missions.length, 1, 'still watching');
+
+  const verdict = await hub.authorised(1);
+  assert.equal(verdict.ok, false, 'and still not spending');
+  assert.match(verdict.reason, /could not reach the Hub/);
+});
+
+test('a request that takes too long is aborted rather than hanging the pass', async () => {
+  // The mechanism that bit us in the wild: the abort is real, and whatever it
+  // aborts surfaces as an error the caller can fall back from. The default is
+  // 30s — proven by construction, not by waiting 30 seconds here.
+  const hub = new Hub({
+    url: 'https://hub.test',
+    token: 'tok',
+    timeoutMs: 20,
+    fetchImpl: ((_u: string, init?: RequestInit) =>
+      new Promise((_resolve, reject) => {
+        (init?.signal as AbortSignal).addEventListener('abort', () =>
+          reject(new Error('This operation was aborted')),
+        );
+      })) as unknown as typeof fetch,
+  });
+
+  await assert.rejects(() => hub.missions(), /aborted/);
+
+  // …and the loop rides it out rather than losing the pass.
+  const result = await hub.missionsOrCached();
+  assert.equal(result.stale, true);
+  assert.match(result.reason, /aborted/);
+});

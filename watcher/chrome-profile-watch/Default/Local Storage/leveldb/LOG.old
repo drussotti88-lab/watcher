@@ -1,4 +1,7 @@
-2026/08/28-14:34:22.907 8ca8 Creating DB C:\Users\danru\Pokemon\watcher\chrome-profile-watch\Default\Local Storage\leveldb since it was missing.
-2026/08/28-14:34:22.932 8ca8 Reusing MANIFEST C:\Users\danru\Pokemon\watcher\chrome-profile-watch\Default\Local Storage\leveldb/MANIFEST-000001
-2026/08/28-14:34:45.321 8ca8 Level-0 table #5: started
-2026/08/28-14:34:45.332 8ca8 Level-0 table #5: 164869 bytes OK
+2026/08/28-14:38:24.433 1d80 Reusing MANIFEST C:\Users\danru\Pokemon\watcher\chrome-profile-watch\Default\Local Storage\leveldb/MANIFEST-000001
+2026/08/28-14:38:24.439 1d80 Recovering log #4
+2026/08/28-14:38:24.440 1d80 Level-0 table #6: started
+2026/08/28-14:38:24.447 1d80 Level-0 table #6: 166347 bytes OK
+2026/08/28-14:38:24.448 1d80 Recovering log #5
+2026/08/28-14:38:24.453 1d80 Reusing old log C:\Users\danru\Pokemon\watcher\chrome-profile-watch\Default\Local Storage\leveldb/000005.log 
+2026/08/28-14:38:24.455 1d80 Delete type=0 #4

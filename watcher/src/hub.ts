@@ -87,10 +87,18 @@ export class Hub {
   private readonly pending: ObservationOut[] = [];
   private readonly pendingRuns: RunOut[] = [];
 
+  /** The last watchlist the Hub gave us, and when. See missionsOrCached(). */
+  private cached: Mission[] = [];
+  private cachedAt = 0;
+
   constructor(opts: HubOptions) {
     this.base = opts.url.replace(/\/+$/, '');
     this.token = opts.token;
-    this.timeoutMs = opts.timeoutMs ?? 15_000;
+    // 15s was too tight. A Vercel function that has gone cold has to boot and
+    // then open a Postgres connection through the pooler before it can answer;
+    // observed in the wild at over 15 seconds, which aborted the request and
+    // cost a whole pass.
+    this.timeoutMs = opts.timeoutMs ?? 30_000;
     this.doFetch = opts.fetchImpl ?? fetch;
   }
 
@@ -147,9 +155,67 @@ export class Hub {
   }
 
   /** What to watch. Throws when the Hub is unreachable — the caller decides. */
-  async missions(): Promise<Mission[]> {
+  async missions(now: number = Date.now()): Promise<Mission[]> {
     const data = await this.call<{ missions: Mission[] }>('GET', '/api/missions/active');
-    return data.missions ?? [];
+    const missions = data.missions ?? [];
+    this.cached = missions;
+    this.cachedAt = now;
+    return missions;
+  }
+
+  /**
+   * What to watch, even when the Hub cannot say.
+   *
+   * `missions()` throwing used to cost the whole pass — which is failing
+   * *closed* on watching, the exact opposite of the rule this file is built
+   * on. A Hub that is briefly cold is not a reason to stop looking at pages;
+   * the readings buffer and catch up when it comes back.
+   *
+   * Two things keep this safe:
+   *
+   *   · the watchlist goes stale. Fifteen minutes is long enough to ride out a
+   *     cold start or a deploy, and short enough that a mission you paused does
+   *     not keep being polled for an afternoon.
+   *   · a cached mission still cannot spend. authorised() is a live call and
+   *     fails closed, so the worst a stale watchlist can do is look at a page
+   *     nobody asked about any more.
+   */
+  async missionsOrCached(
+    now: number = Date.now(),
+    maxAgeMs = 15 * 60_000,
+  ): Promise<{ missions: Mission[]; stale: boolean; reason: string }> {
+    let firstFailure = '';
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const started = Date.now();
+      try {
+        return { missions: await this.missions(now), stale: false, reason: '' };
+      } catch (err) {
+        // One immediate retry. Observed in the wild: roughly one request in
+        // three from this machine hangs until the abort fires, while the very
+        // next one answers in under 100ms. Whatever that is — DNS, a cold
+        // socket, something on the way out — a second attempt costs nothing
+        // and turns a 90-second blind spot into a hiccup. If it fails twice,
+        // it is not a hiccup, and we say so with both timings.
+        const took = Math.round((Date.now() - started) / 1000);
+        const line = `${(err as Error).message} after ${took}s`;
+        firstFailure = firstFailure ? `${firstFailure}; then ${line}` : line;
+      }
+    }
+
+    {
+      const reason = firstFailure;
+      const age = now - this.cachedAt;
+      if (this.cachedAt === 0 || age > maxAgeMs) {
+        // Nothing trustworthy to fall back on. Say so rather than watching
+        // whatever we happen to remember.
+        return { missions: [], stale: true, reason };
+      }
+      return {
+        missions: this.cached,
+        stale: true,
+        reason: `${reason} — watching the list from ${Math.round(age / 1000)}s ago`,
+      };
+    }
   }
 
   /**

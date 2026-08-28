@@ -79,20 +79,16 @@ async function runPasses(once: boolean): Promise<void> {
 
   try {
     do {
-      let missions;
-      try {
-        missions = await hub.missions();
-      } catch (err) {
-        // Fail open on watching: a Hub that is down should cost us a pass, not
-        // the run. Say so and try again.
-        console.log(`  ${timestamp()}  could not reach the Hub: ${(err as Error).message}`);
-        if (once) break;
-        await sleep(config.intervalSec * 1000);
-        continue;
-      }
+      // Fail open on watching. A Hub that is briefly cold must not stop us
+      // looking at pages — we keep watching the last list it gave us, and the
+      // readings buffer until it comes back.
+      const { missions, stale, reason } = await hub.missionsOrCached();
+      if (stale) console.log(`  ${timestamp()}  ${reason || 'the Hub did not answer'}`);
 
       if (missions.length === 0) {
-        console.log(`  ${timestamp()}  no active missions — add one in the app`);
+        console.log(
+          `  ${timestamp()}  ${stale ? 'nothing to fall back on — skipping this pass' : 'no active missions — add one in the app'}`,
+        );
       } else {
         const result = await pass(missions, pacer, {
           browser,
