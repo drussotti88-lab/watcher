@@ -79,6 +79,42 @@ table { width: 100%; border-collapse: collapse; font-size: 13px; }
 td { padding: 6px 8px; border-top: 1px solid var(--line); vertical-align: top; }
 h2 { font-size: 14px; text-transform: uppercase; letter-spacing: 0.06em;
      color: var(--muted); margin: 34px 0 10px; }
+
+/* ── mission management ─────────────────────────────────────────────────── */
+.tabs { display: flex; gap: 4px; margin: 18px 0 16px; border-bottom: 1px solid var(--line); }
+.tab {
+  padding: 8px 14px; cursor: pointer; border: none; background: none;
+  color: var(--muted); border-bottom: 2px solid transparent; border-radius: 0;
+  font: inherit;
+}
+.tab:hover { color: var(--ink); border-color: var(--line); }
+.tab.on { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
+.thumb {
+  width: 56px; height: 56px; border-radius: 8px; object-fit: contain;
+  background: var(--out-bg); flex: 0 0 auto;
+}
+.thumb.ph { display: flex; align-items: center; justify-content: center;
+            color: var(--muted); font-size: 20px; }
+form.stack { display: grid; gap: 8px; max-width: 560px; }
+label.f { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
+input[type=text], input[type=url], input[type=number], input[type=date], select, textarea {
+  font: inherit; padding: 8px 10px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--bg); color: var(--ink); width: 100%;
+}
+.inline { display: flex; gap: 8px; flex-wrap: wrap; align-items: end; }
+.inline > * { flex: 1 1 160px; }
+.inline > button { flex: 0 0 auto; }
+.danger { color: var(--alert); border-color: var(--alert); }
+.armed { background: var(--alert-bg); color: var(--alert); }
+.off { opacity: 0.55; }
+.msg { font-size: 13px; min-height: 18px; }
+.msg.bad { color: var(--alert); }
+.msg.good { color: var(--in); }
+details > summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+.runs td:first-child { white-space: nowrap; }
+.o-bought { color: var(--in); font-weight: 600; }
+.o-failed, .o-blocked { color: var(--alert); font-weight: 600; }
+.o-declined { color: var(--warn); }
 .login { max-width: 340px; margin: 16vh auto; }
 input[type=password] {
   font: inherit; width: 100%; padding: 9px 11px; border-radius: 8px;
@@ -111,9 +147,15 @@ export function dashboardPage(): string {
 <title>Hub</title><style>${STYLE}</style></head>
 <body><main>
   <header>
-    <h1>Watching</h1>
+    <h1>Hub</h1>
     <span class="sub" id="summary">loading…</span>
   </header>
+
+  <div class="tabs">
+    <button class="tab on" data-tab="missions">Missions</button>
+    <button class="tab" data-tab="products">Products</button>
+    <button class="tab" data-tab="activity">Activity</button>
+  </div>
 
   <div class="bar">
     <button id="refresh">Refresh</button>
@@ -122,10 +164,39 @@ export function dashboardPage(): string {
     <a class="btn" href="/logout">Sign out</a>
   </div>
 
-  <div id="watches"></div>
+  <section id="tab-missions"><div id="missions"></div></section>
 
-  <h2>Recent changes</h2>
-  <div class="card"><table id="feed"><tbody></tbody></table></div>
+  <section id="tab-products" hidden>
+    <div class="card">
+      <div class="name">Add a product</div>
+      <p class="meta">The thing itself. Where to buy it comes next.</p>
+      <form class="stack" id="product-form" style="margin-top:10px">
+        <label class="f">Name
+          <input type="text" name="name" required placeholder="Pokémon TCG: Pitch Black Elite Trainer Box">
+        </label>
+        <label class="f">Release date <span style="opacity:.7">(optional)</span>
+          <input type="date" name="releaseDate">
+        </label>
+        <div class="inline">
+          <button type="submit">Add product</button>
+          <span class="msg" id="product-msg"></span>
+        </div>
+      </form>
+    </div>
+    <div id="products"></div>
+  </section>
+
+  <section id="tab-activity" hidden>
+    <h2 style="margin-top:0">Mission runs</h2>
+    <p class="meta" style="margin:-6px 0 10px">
+      Only written when a mission did something, or could not. Routine checks
+      that found nothing are not runs.
+    </p>
+    <div class="card"><table class="runs" id="runs"><tbody></tbody></table></div>
+
+    <h2>Stock and price changes</h2>
+    <div class="card"><table id="feed"><tbody></tbody></table></div>
+  </section>
 </main>
 <script>
 const money = (n) => n === null || n === undefined ? '—' : '$' + Number(n).toFixed(2);
@@ -143,6 +214,8 @@ function ago(iso) {
 // rather than showing a stale price as though it were current.
 const STALE_MS = 5 * 60 * 1000;
 
+let DATA = { missions: [], runs: [], changes: [], products: [], listings: [] };
+
 function el(tag, cls, text) {
   const n = document.createElement(tag);
   if (cls) n.className = cls;
@@ -150,115 +223,344 @@ function el(tag, cls, text) {
   return n;
 }
 
-function watchCard(w) {
-  const card = el('div', 'card');
+async function api(method, path, body) {
+  const res = await fetch(path, {
+    method,
+    headers: body ? { 'Content-Type': 'application/json' } : {},
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (res.status === 401) { location.href = '/login'; throw new Error('signed out'); }
+  const data = await res.json().catch(() => ({}));
+  // The API answers failures in sentences. Show the sentence, not the status.
+  if (!res.ok) throw new Error(data.error || (method + ' ' + path + ' failed'));
+  return data;
+}
+
+function say(id, text, ok) {
+  const n = document.getElementById(id);
+  n.textContent = text;
+  n.className = 'msg ' + (ok ? 'good' : 'bad');
+  if (ok) setTimeout(() => { n.textContent = ''; }, 4000);
+}
+
+function thumb(url, alt) {
+  if (!url) {
+    const ph = el('div', 'thumb ph', '▦');
+    ph.title = 'no image yet — the Watcher fills this in on its first read';
+    return ph;
+  }
+  const img = el('img', 'thumb');
+  img.src = url;
+  img.alt = alt || '';
+  img.loading = 'lazy';
+  // A dead CDN URL should degrade to the placeholder, not a broken-image icon.
+  img.addEventListener('error', () => img.replaceWith(thumb('', alt)));
+  return img;
+}
+
+/* ── missions ───────────────────────────────────────────────────────────── */
+
+function missionCard(m) {
+  const card = el('div', 'card' + (m.enabled ? '' : ' off'));
   const row = el('div', 'row');
+  row.appendChild(thumb(m.imageUrl, m.productName));
 
   const left = el('div', 'grow');
-  const name = el('div', 'name', w.productName);
-  left.appendChild(name);
+  left.appendChild(el('div', 'name', m.productName));
 
   const meta = el('div', 'meta');
-  meta.append(w.retailer + ' · ' + (w.externalId || '—'));
-  if (w.url) {
-    meta.append(' · ');
-    const a = el('a', null, 'open');
-    a.href = w.url; a.target = '_blank'; a.rel = 'noreferrer';
-    meta.appendChild(a);
-  }
+  meta.append(m.retailer + ' · ' + (m.externalId || '—') + ' · ');
+  const a = el('a', null, 'open');
+  a.href = m.url; a.target = '_blank'; a.rel = 'noreferrer';
+  meta.appendChild(a);
   left.appendChild(meta);
 
   const flags = el('div', 'meta');
   flags.style.marginTop = '6px';
+  const label = m.state === 'in' ? 'IN STOCK'
+    : m.state === 'out' ? 'out of stock'
+    : m.state === 'unchecked' ? 'never checked' : m.state;
+  flags.appendChild(el('span', 'pill s-' + m.state, label));
 
-  const pill = el('span', 'pill s-' + w.state,
-    w.state === 'in' ? 'IN STOCK' :
-    w.state === 'out' ? 'out of stock' :
-    w.state === 'unchecked' ? 'never checked' : w.state);
-  flags.appendChild(pill);
-
-  // A marketplace seller at any price is not a restock at retail. This is the
-  // Walmart trap made visible rather than left in a note nobody reads.
-  if (w.sellerKind === 'marketplace') {
+  if (!m.enabled) { flags.append(' '); flags.appendChild(el('span', 'pill s-out', 'paused')); }
+  if (m.armed) {
     flags.append(' ');
-    const s = el('span', 'pill flag', 'marketplace: ' + (w.sellerName || 'third party'));
-    flags.appendChild(s);
+    flags.appendChild(el('span', 'pill armed', 'ARMED · ' + m.quantity + ' @ ' + money(m.ceiling)));
   }
-  if (w.confidence !== 'exact' && w.state !== 'unchecked') {
+  // The Walmart trap, made visible rather than buried in a note nobody reads.
+  if (m.sellerKind === 'marketplace') {
     flags.append(' ');
-    flags.appendChild(el('span', 'pill s-unknown', w.confidence + ' read'));
+    flags.appendChild(el('span', 'pill flag', 'marketplace: ' + (m.sellerName || 'third party')));
   }
-  if (w.isPreOrder) {
+  if (m.confidence !== 'exact' && m.state !== 'unchecked') {
+    flags.append(' ');
+    flags.appendChild(el('span', 'pill s-unknown', m.confidence + ' read'));
+  }
+  if (m.isPreOrder) {
     flags.append(' ');
     flags.appendChild(el('span', 'pill s-queue',
-      'preorder' + (w.releaseDate ? ' · ' + w.releaseDate : '')));
+      'preorder' + (m.releaseDate ? ' · ' + m.releaseDate : '')));
   }
   left.appendChild(flags);
-
-  if (w.note) {
-    const note = el('div', 'meta', w.note);
+  if (m.note) {
+    const note = el('div', 'meta', m.note);
     note.style.marginTop = '6px';
     left.appendChild(note);
   }
 
   const right = el('div');
   right.style.textAlign = 'right';
-  right.appendChild(el('div', 'price', money(w.price)));
-
-  const checked = el('div', 'meta');
-  const stale = w.lastCheckedAt && (Date.now() - new Date(w.lastCheckedAt).getTime()) > STALE_MS;
-  checked.textContent = 'checked ' + ago(w.lastCheckedAt);
-  if (stale || !w.lastCheckedAt) checked.className = 'meta stale';
+  right.appendChild(el('div', 'price', money(m.price)));
+  const stale = m.lastCheckedAt && (Date.now() - new Date(m.lastCheckedAt).getTime()) > STALE_MS;
+  const checked = el('div', (stale || !m.lastCheckedAt) ? 'meta stale' : 'meta',
+    'checked ' + ago(m.lastCheckedAt));
   right.appendChild(checked);
+  if (m.state === 'in' && m.lastChangedAt) {
+    right.appendChild(el('div', 'meta', 'since ' + ago(m.lastChangedAt)));
+  }
+  if (m.availableQuantity !== null && m.availableQuantity !== undefined) {
+    right.appendChild(el('div', 'meta', m.availableQuantity + ' available'));
+  }
 
-  if (w.state === 'in' && w.lastChangedAt) {
-    right.appendChild(el('div', 'meta', 'since ' + ago(w.lastChangedAt)));
+  row.append(left, right);
+  card.appendChild(row);
+  card.appendChild(missionControls(m));
+  return card;
+}
+
+function missionControls(m) {
+  const wrap = el('details');
+  wrap.style.marginTop = '10px';
+  wrap.appendChild(el('summary', null, 'Settings and history'));
+
+  const form = el('form', 'stack');
+  form.style.marginTop = '10px';
+  form.innerHTML = \`
+    <div class="inline">
+      <label class="f">Price ceiling
+        <input type="number" name="ceiling" step="0.01" min="0.01" placeholder="none">
+      </label>
+      <label class="f">Quantity
+        <input type="number" name="quantity" min="1" max="20" value="1">
+      </label>
+      <label class="f">Check every
+        <select name="checkEverySeconds">
+          <option value="30">30 seconds</option>
+          <option value="60">1 minute</option>
+          <option value="300">5 minutes</option>
+          <option value="1800">30 minutes</option>
+          <option value="3600">1 hour</option>
+        </select>
+      </label>
+      <label class="f">Sellers
+        <select name="sellerPolicy">
+          <option value="retailer_only">The retailer only</option>
+          <option value="any">Any seller, under the ceiling</option>
+        </select>
+      </label>
+    </div>
+    <div class="inline">
+      <label class="f" style="flex:0 0 auto">
+        <span><input type="checkbox" name="enabled"> Watching</span>
+      </label>
+      <label class="f" style="flex:0 0 auto">
+        <span><input type="checkbox" name="armed"> Armed — may buy</span>
+      </label>
+      <span class="grow"></span>
+      <button type="submit">Save</button>
+      <button type="button" class="danger" data-del="\${m.id}">Delete</button>
+    </div>
+    <span class="msg" id="m-msg-\${m.id}"></span>\`;
+
+  form.ceiling.value = m.ceiling ?? '';
+  form.quantity.value = m.quantity;
+  form.checkEverySeconds.value = String(m.checkEverySeconds);
+  form.sellerPolicy.value = m.sellerPolicy;
+  form.enabled.checked = m.enabled;
+  form.armed.checked = m.armed;
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+      await api('POST', '/api/missions', {
+        listingId: m.listingId,
+        label: m.label,
+        enabled: form.enabled.checked,
+        armed: form.armed.checked,
+        ceiling: form.ceiling.value === '' ? null : Number(form.ceiling.value),
+        quantity: Number(form.quantity.value),
+        sellerPolicy: form.sellerPolicy.value,
+        checkEverySeconds: Number(form.checkEverySeconds.value),
+      });
+      say('m-msg-' + m.id, 'saved', true);
+      load();
+    } catch (err) {
+      say('m-msg-' + m.id, err.message, false);
+    }
+  });
+
+  form.querySelector('[data-del]').addEventListener('click', async () => {
+    if (!confirm('Delete this mission? The product and its listing stay.')) return;
+    try {
+      await api('DELETE', '/api/missions/' + m.id);
+      load();
+    } catch (err) { say('m-msg-' + m.id, err.message, false); }
+  });
+
+  wrap.appendChild(form);
+
+  const runs = el('div');
+  runs.style.marginTop = '10px';
+  const btn = el('button', null, 'Show this mission’s runs');
+  btn.addEventListener('click', async () => {
+    btn.remove();
+    try {
+      const data = await api('GET', '/api/missions/' + m.id + '/runs');
+      runs.appendChild(runTable(data.runs, 'This mission has not run yet.'));
+    } catch (err) {
+      runs.appendChild(el('div', 'msg bad', err.message));
+    }
+  });
+  runs.appendChild(btn);
+  wrap.appendChild(runs);
+  return wrap;
+}
+
+function runTable(runs, emptyText) {
+  const table = el('table', 'runs');
+  const body = el('tbody');
+  if (!runs.length) {
+    const tr = el('tr');
+    const td = el('td', 'meta', emptyText);
+    td.colSpan = 5; tr.appendChild(td); body.appendChild(tr);
   }
-  if (w.availableQuantity !== null && w.availableQuantity !== undefined) {
-    right.appendChild(el('div', 'meta', w.availableQuantity + ' available'));
+  for (const r of runs) {
+    const tr = el('tr');
+    tr.appendChild(el('td', 'meta', ago(r.startedAt)));
+    tr.appendChild(el('td', null, r.productName));
+    tr.appendChild(el('td', 'o-' + r.outcome, r.outcome));
+    // Every non-success carries a reason. Showing it here is the whole point
+    // of recording it.
+    tr.appendChild(el('td', 'meta', r.reason || ''));
+    const right = el('td', 'meta',
+      [r.price !== null ? money(r.price) : '', r.ms !== null ? r.ms + 'ms' : '']
+        .filter(Boolean).join(' · '));
+    right.style.textAlign = 'right';
+    tr.appendChild(right);
+    body.appendChild(tr);
   }
+  table.appendChild(body);
+  return table;
+}
+
+/* ── products ───────────────────────────────────────────────────────────── */
+
+function productCard(p) {
+  const card = el('div', 'card');
+  const row = el('div', 'row');
+  row.appendChild(thumb(p.imageUrl, p.name));
+
+  const left = el('div', 'grow');
+  left.appendChild(el('div', 'name', p.name));
+  const meta = el('div', 'meta',
+    p.releaseDate ? 'releases ' + p.releaseDate : 'no release date set');
+  left.appendChild(meta);
+
+  const mine = DATA.listings.filter((l) => l.productKey === p.key);
+  const list = el('div', 'meta');
+  list.style.marginTop = '6px';
+  if (!mine.length) {
+    list.textContent = 'No listings yet — paste a product URL below.';
+  } else {
+    for (const l of mine) {
+      const line = el('div');
+      line.append(l.retailer + ' · ' + l.externalId + ' ');
+      const del = el('button', 'danger');
+      del.textContent = 'remove';
+      del.style.padding = '0 6px';
+      del.style.fontSize = '12px';
+      del.addEventListener('click', async () => {
+        if (!confirm('Remove this listing? Its mission and history go with it.')) return;
+        try { await api('DELETE', '/api/listings/' + l.id); load(); }
+        catch (err) { say('p-msg-' + p.key, err.message, false); }
+      });
+      line.appendChild(del);
+      list.appendChild(line);
+    }
+  }
+  left.appendChild(list);
+
+  const form = el('form', 'inline');
+  form.style.marginTop = '8px';
+  form.innerHTML = \`
+    <input type="url" name="url" required placeholder="Paste a Target / Pokémon Center / Walmart product URL">
+    <button type="submit">Add listing</button>\`;
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+      const { listing } = await api('POST', '/api/listings',
+        { productKey: p.key, url: form.url.value });
+      // A listing with no mission is a thing you meant to watch and didn't.
+      await api('POST', '/api/missions', { listingId: listing.id, label: p.name, enabled: true });
+      form.reset();
+      say('p-msg-' + p.key, 'added ' + listing.retailer + ' ' + listing.externalId, true);
+      load();
+    } catch (err) { say('p-msg-' + p.key, err.message, false); }
+  });
+  left.appendChild(form);
+  left.appendChild(Object.assign(el('span', 'msg'), { id: 'p-msg-' + p.key }));
+
+  const right = el('div');
+  right.style.textAlign = 'right';
+  const del = el('button', 'danger', 'Delete product');
+  del.addEventListener('click', async () => {
+    if (!confirm('Delete "' + p.name + '"? Every listing, mission and run for it goes too.')) return;
+    try { await api('DELETE', '/api/products/' + encodeURIComponent(p.key)); load(); }
+    catch (err) { say('p-msg-' + p.key, err.message, false); }
+  });
+  right.appendChild(del);
 
   row.append(left, right);
   card.appendChild(row);
   return card;
 }
 
-async function load() {
-  let data;
-  try {
-    const res = await fetch('/api/dashboard', { headers: { 'Accept': 'application/json' } });
-    if (res.status === 401) { location.href = '/login'; return; }
-    data = await res.json();
-  } catch (err) {
-    document.getElementById('summary').textContent = 'could not reach the hub';
-    return;
+/* ── wiring ─────────────────────────────────────────────────────────────── */
+
+function render() {
+  const missions = document.getElementById('missions');
+  missions.textContent = '';
+  if (!DATA.missions.length) {
+    missions.appendChild(el('div', 'empty',
+      'No missions yet. Add a product, paste a listing URL, and one is created for you.'));
   }
+  for (const m of DATA.missions) missions.appendChild(missionCard(m));
 
-  const list = document.getElementById('watches');
-  list.textContent = '';
+  const products = document.getElementById('products');
+  products.textContent = '';
+  for (const p of DATA.products) products.appendChild(productCard(p));
 
-  if (!data.watches.length) {
-    list.appendChild(el('div', 'empty', 'Nothing is being watched yet. Run the seed.'));
-  } else {
-    for (const w of data.watches) list.appendChild(watchCard(w));
-  }
-
-  const inStock = data.watches.filter((w) => w.state === 'in').length;
-  const never = data.watches.filter((w) => w.state === 'unchecked').length;
-  const parts = [data.watches.length + ' watched'];
+  const inStock = DATA.missions.filter((m) => m.state === 'in').length;
+  const armed = DATA.missions.filter((m) => m.armed).length;
+  const never = DATA.missions.filter((m) => m.state === 'unchecked').length;
+  const parts = [DATA.missions.length + ' missions'];
   if (inStock) parts.push(inStock + ' in stock');
+  if (armed) parts.push(armed + ' armed');
   if (never) parts.push(never + ' never checked');
   document.getElementById('summary').textContent = parts.join(' · ');
 
+  const runs = document.getElementById('runs');
+  runs.replaceWith(Object.assign(runTable(DATA.runs, 'Nothing has run yet.'), { id: 'runs' }));
+
   const feed = document.querySelector('#feed tbody');
   feed.textContent = '';
-  if (!data.recent.length) {
-    const tr = document.createElement('tr');
+  if (!DATA.changes.length) {
+    const tr = el('tr');
     const td = el('td', 'meta', 'Nothing has changed yet.');
     td.colSpan = 4; tr.appendChild(td); feed.appendChild(tr);
   }
-  for (const o of data.recent) {
-    const tr = document.createElement('tr');
+  for (const o of DATA.changes) {
+    const tr = el('tr');
     tr.appendChild(el('td', 'meta', ago(o.at)));
     tr.appendChild(el('td', null, o.productName));
     tr.appendChild(el('td', 'meta', o.retailer));
@@ -268,6 +570,37 @@ async function load() {
     tr.appendChild(td);
     feed.appendChild(tr);
   }
+}
+
+async function load() {
+  try {
+    DATA = await api('GET', '/api/dashboard');
+  } catch (err) {
+    document.getElementById('summary').textContent = err.message;
+    return;
+  }
+  render();
+}
+
+document.getElementById('product-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  try {
+    await api('POST', '/api/products',
+      { name: f.name.value, releaseDate: f.releaseDate.value || null });
+    f.reset();
+    say('product-msg', 'added — now give it a listing URL below', true);
+    load();
+  } catch (err) { say('product-msg', err.message, false); }
+});
+
+for (const tab of document.querySelectorAll('.tab')) {
+  tab.addEventListener('click', () => {
+    for (const t of document.querySelectorAll('.tab')) t.classList.toggle('on', t === tab);
+    for (const name of ['missions', 'products', 'activity']) {
+      document.getElementById('tab-' + name).hidden = name !== tab.dataset.tab;
+    }
+  });
 }
 
 document.getElementById('refresh').addEventListener('click', load);

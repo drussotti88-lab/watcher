@@ -210,6 +210,7 @@ export async function logEvent(
  * row here and never a redeploy of the thing on the desk.
  */
 export interface WatchRow {
+  listingId: number;
   productKey: string;
   name: string;
   retailer: string;
@@ -220,16 +221,14 @@ export interface WatchRow {
 
 export async function watchlist(db: Sql): Promise<WatchRow[]> {
   const rows = await db.query(
-    `SELECT p.key, p.name, p.release_date, a.retailer, a.value AS external_id,
-            COALESCE(MAX(d.url), '') AS url
-       FROM products p
-       JOIN aliases a ON a.product_key = p.key AND a.kind = 'retailer_sku'
-       LEFT JOIN discoveries d ON d.product_key = p.key
-      GROUP BY p.key, p.name, p.release_date, a.retailer, a.value
-      ORDER BY p.name, a.retailer`,
+    `SELECT l.id, l.product_key, p.name, p.release_date, l.retailer, l.external_id, l.url
+       FROM listings l
+       JOIN products p ON p.key = l.product_key
+      ORDER BY p.name, l.retailer`,
   );
   return rows.map((r) => ({
-    productKey: String(r.key),
+    listingId: Number(r.id),
+    productKey: String(r.product_key),
     name: String(r.name ?? ''),
     retailer: String(r.retailer ?? ''),
     externalId: String(r.external_id ?? ''),
@@ -238,149 +237,178 @@ export async function watchlist(db: Sql): Promise<WatchRow[]> {
   }));
 }
 
-// ─── What the Watcher saw ────────────────────────────────────────────────────
+// ─── Products ────────────────────────────────────────────────────────────────
 
-/** One reading of one product at one retailer, as the Watcher reports it. */
-export interface ObservationIn {
-  productKey: string;
-  retailer: string;
-  externalId?: string;
-  url?: string;
-  state: 'in' | 'out' | 'queue' | 'unknown';
-  confidence?: 'exact' | 'inferred' | 'unknown';
-  price?: number | null;
-  sellerKind?: 'retailer' | 'marketplace' | 'unknown';
-  sellerName?: string;
-  availableQuantity?: number | null;
-  orderLimit?: number | null;
-  isPreOrder?: boolean;
-  releaseDate?: string | null;
-  note?: string;
+export interface ProductRow {
+  key: string;
+  name: string;
+  releaseDate: string | null;
+  imageUrl: string;
+  notes: string;
 }
 
-export interface RecordedObservation {
-  /** Did anything material change? Drives alerts and the history table. */
-  changed: boolean;
-  /** What it was before, when there was a before. */
-  previousState: string | null;
-  previousPrice: number | null;
-  /** True the first time we ever see this watch. Not a change to shout about. */
-  isFirst: boolean;
-}
-
-/**
- * Record a reading.
- *
- * `watch_state` is upserted every single time, so the page can always say how
- * stale it is. `observations` gets a row only when the state, the price or the
- * seller actually moved — polling a static product every minute for a week
- * should leave a history of nothing, because nothing happened.
- *
- * The first sighting is marked `isFirst` rather than `changed`. Otherwise
- * turning the Watcher on for the first time announces every product at once,
- * which is the same mistake the discovery seeding logic exists to avoid.
- */
-export async function recordObservation(
-  db: Sql,
-  obs: ObservationIn,
-): Promise<RecordedObservation> {
-  const prior = await db.query<{
-    state: string;
-    price: unknown;
-    seller_kind: string;
-  }>('SELECT state, price, seller_kind FROM watch_state WHERE product_key = $1 AND retailer = $2', [
-    obs.productKey,
-    obs.retailer,
-  ]);
-
-  const before = prior[0] ?? null;
-  const isFirst = before === null;
-  const previousPrice = before ? toPrice(before.price) : null;
-  const price = obs.price ?? null;
-
-  const changed =
-    !isFirst &&
-    (before.state !== obs.state ||
-      previousPrice !== price ||
-      before.seller_kind !== (obs.sellerKind ?? 'unknown'));
-
-  await db.query(
-    `INSERT INTO watch_state (
-       product_key, retailer, external_id, url, state, confidence, price,
-       seller_kind, seller_name, available_quantity, order_limit,
-       is_preorder, release_date, note, last_checked_at, last_changed_at
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14, now(), now())
-     ON CONFLICT (product_key, retailer) DO UPDATE SET
-       external_id = EXCLUDED.external_id,
-       url = EXCLUDED.url,
-       state = EXCLUDED.state,
-       confidence = EXCLUDED.confidence,
-       price = EXCLUDED.price,
-       seller_kind = EXCLUDED.seller_kind,
-       seller_name = EXCLUDED.seller_name,
-       available_quantity = EXCLUDED.available_quantity,
-       order_limit = EXCLUDED.order_limit,
-       is_preorder = EXCLUDED.is_preorder,
-       release_date = EXCLUDED.release_date,
-       note = EXCLUDED.note,
-       last_checked_at = now(),
-       -- Only move this when something actually moved, so "in stock since"
-       -- means what it says instead of resetting on every poll.
-       last_changed_at = CASE WHEN $15 THEN now() ELSE watch_state.last_changed_at END`,
-    [
-      obs.productKey,
-      obs.retailer,
-      obs.externalId ?? '',
-      obs.url ?? '',
-      obs.state,
-      obs.confidence ?? 'unknown',
-      price,
-      obs.sellerKind ?? 'unknown',
-      obs.sellerName ?? '',
-      obs.availableQuantity ?? null,
-      obs.orderLimit ?? null,
-      obs.isPreOrder ?? false,
-      obs.releaseDate ?? null,
-      (obs.note ?? '').slice(0, 500),
-      changed,
-    ],
-  );
-
-  if (changed || isFirst) {
-    await db.query(
-      `INSERT INTO observations
-         (product_key, retailer, state, confidence, price, seller_kind,
-          seller_name, available_quantity, note)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-      [
-        obs.productKey,
-        obs.retailer,
-        obs.state,
-        obs.confidence ?? 'unknown',
-        price,
-        obs.sellerKind ?? 'unknown',
-        obs.sellerName ?? '',
-        obs.availableQuantity ?? null,
-        (obs.note ?? '').slice(0, 500),
-      ],
-    );
-  }
-
+function toProduct(r: Record<string, unknown>): ProductRow {
   return {
-    changed,
-    isFirst,
-    previousState: before?.state ?? null,
-    previousPrice,
+    key: String(r.key),
+    name: String(r.name ?? ''),
+    releaseDate: r.release_date ? String(r.release_date).slice(0, 10) : null,
+    imageUrl: String(r.image_url ?? ''),
+    notes: String(r.notes ?? ''),
   };
 }
 
-/** One row per watch, as the dashboard renders it. */
-export interface WatchStateRow {
+/**
+ * Mint a product key from its name.
+ *
+ * Deterministic, so adding the same product twice by hand is idempotent rather
+ * than producing two products that will never agree with each other.
+ */
+export function keyForName(name: string): string {
+  const slug = name
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 60);
+  return `prd_${slug || 'unnamed'}`;
+}
+
+export async function listProducts(db: Sql): Promise<ProductRow[]> {
+  const rows = await db.query('SELECT * FROM products ORDER BY name');
+  return rows.map(toProduct);
+}
+
+export async function upsertProduct(
+  db: Sql,
+  p: { key?: string; name: string; releaseDate?: string | null; imageUrl?: string; notes?: string },
+): Promise<ProductRow> {
+  const key = p.key?.trim() || keyForName(p.name);
+  const rows = await db.query(
+    `INSERT INTO products (key, name, release_date, image_url, notes)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (key) DO UPDATE SET
+       name = EXCLUDED.name,
+       -- COALESCE, not EXCLUDED: an edit that omits a field must not blank a
+       -- value someone already took the trouble to set.
+       release_date = COALESCE(EXCLUDED.release_date, products.release_date),
+       image_url = CASE WHEN EXCLUDED.image_url = '' THEN products.image_url ELSE EXCLUDED.image_url END,
+       notes = CASE WHEN EXCLUDED.notes = '' THEN products.notes ELSE EXCLUDED.notes END
+     RETURNING *`,
+    [key, p.name.trim(), p.releaseDate || null, p.imageUrl ?? '', p.notes ?? ''],
+  );
+  return toProduct(rows[0]!);
+}
+
+/** Only ever set an image we actually read off a page; never blank an existing one. */
+export async function setProductImage(db: Sql, key: string, imageUrl: string): Promise<void> {
+  if (!imageUrl) return;
+  await db.query("UPDATE products SET image_url = $1 WHERE key = $2 AND image_url = ''", [
+    imageUrl,
+    key,
+  ]);
+}
+
+export async function deleteProduct(db: Sql, key: string): Promise<void> {
+  // Listings, missions, runs and observations all cascade from here.
+  await db.query('DELETE FROM products WHERE key = $1', [key]);
+}
+
+// ─── Listings ────────────────────────────────────────────────────────────────
+
+export interface ListingRow {
+  id: number;
   productKey: string;
   productName: string;
   retailer: string;
   externalId: string;
   url: string;
+  sellerKind: string;
+  sellerName: string;
+  isPrimary: boolean;
+}
+
+function toListing(r: Record<string, unknown>): ListingRow {
+  return {
+    id: Number(r.id),
+    productKey: String(r.product_key),
+    productName: String(r.product_name ?? ''),
+    retailer: String(r.retailer ?? ''),
+    externalId: String(r.external_id ?? ''),
+    url: String(r.url ?? ''),
+    sellerKind: String(r.seller_kind ?? 'unknown'),
+    sellerName: String(r.seller_name ?? ''),
+    isPrimary: r.is_primary === true,
+  };
+}
+
+export async function listListings(db: Sql, productKey?: string): Promise<ListingRow[]> {
+  const sql = `SELECT l.*, p.name AS product_name FROM listings l
+                 JOIN products p ON p.key = l.product_key
+                ${productKey ? 'WHERE l.product_key = $1' : ''}
+                ORDER BY p.name, l.retailer`;
+  const rows = productKey ? await db.query(sql, [productKey]) : await db.query(sql);
+  return rows.map(toListing);
+}
+
+export async function addListing(
+  db: Sql,
+  l: { productKey: string; retailer: string; externalId: string; url: string },
+): Promise<ListingRow> {
+  const rows = await db.query(
+    `INSERT INTO listings (product_key, retailer, external_id, url)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (retailer, external_id) DO UPDATE SET
+       url = EXCLUDED.url,
+       product_key = EXCLUDED.product_key
+     RETURNING *`,
+    [l.productKey, l.retailer.trim(), l.externalId.trim(), l.url.trim()],
+  );
+  const [full] = await db.query(
+    'SELECT l.*, p.name AS product_name FROM listings l JOIN products p ON p.key = l.product_key WHERE l.id = $1',
+    [rows[0]!.id],
+  );
+  return toListing(full!);
+}
+
+export async function deleteListing(db: Sql, id: number): Promise<void> {
+  await db.query('DELETE FROM listings WHERE id = $1', [id]);
+}
+
+// ─── Missions ────────────────────────────────────────────────────────────────
+
+export type SellerPolicy = 'retailer_only' | 'any';
+
+export interface MissionInput {
+  listingId: number;
+  label?: string;
+  enabled?: boolean;
+  armed?: boolean;
+  ceiling?: number | null;
+  quantity?: number;
+  sellerPolicy?: SellerPolicy;
+  checkEverySeconds?: number;
+  notes?: string;
+}
+
+export interface MissionRow {
+  id: number;
+  listingId: number;
+  productKey: string;
+  productName: string;
+  imageUrl: string;
+  retailer: string;
+  externalId: string;
+  url: string;
+  label: string;
+  enabled: boolean;
+  armed: boolean;
+  ceiling: number | null;
+  quantity: number;
+  sellerPolicy: SellerPolicy;
+  checkEverySeconds: number;
+  notes: string;
+  /** Latest reading for this mission's listing, when there is one. */
   state: string;
   confidence: string;
   price: number | null;
@@ -395,67 +423,433 @@ export interface WatchStateRow {
   lastChangedAt: string;
 }
 
-/**
- * Everything being watched, whether or not it has ever been checked.
- *
- * A LEFT JOIN, deliberately. A watch the Watcher has never reached must appear
- * on the page as never-checked rather than not appear at all — a dashboard that
- * silently omits what it cannot see is how you find out in a week that one
- * retailer stopped working.
- */
-export async function dashboard(db: Sql): Promise<WatchStateRow[]> {
-  const rows = await db.query(
-    `SELECT p.key, p.name AS product_name, a.retailer, a.value AS external_id,
-            COALESCE(w.url, MAX(d.url), '') AS url,
-            COALESCE(w.state, 'unchecked') AS state,
-            COALESCE(w.confidence, 'unknown') AS confidence,
-            w.price, COALESCE(w.seller_kind, 'unknown') AS seller_kind,
-            COALESCE(w.seller_name, '') AS seller_name,
-            w.available_quantity, w.order_limit,
-            COALESCE(w.is_preorder, false) AS is_preorder,
-            COALESCE(w.release_date, p.release_date) AS release_date,
-            COALESCE(w.note, '') AS note,
-            w.last_checked_at, w.last_changed_at
-       FROM products p
-       JOIN aliases a ON a.product_key = p.key AND a.kind = 'retailer_sku'
-       LEFT JOIN watch_state w ON w.product_key = p.key AND w.retailer = a.retailer
-       LEFT JOIN discoveries d ON d.product_key = p.key
-      GROUP BY p.key, p.name, p.release_date, a.retailer, a.value, w.url, w.state,
-               w.confidence, w.price, w.seller_kind, w.seller_name,
-               w.available_quantity, w.order_limit, w.is_preorder, w.release_date,
-               w.note, w.last_checked_at, w.last_changed_at
-      ORDER BY
-        CASE COALESCE(w.state, 'unchecked')
-          WHEN 'in' THEN 0 WHEN 'queue' THEN 1 WHEN 'unknown' THEN 2
-          WHEN 'unchecked' THEN 3 ELSE 4 END,
-        p.name, a.retailer`,
-  );
-
-  return rows.map((r) => ({
-    productKey: String(r.key),
+function toMission(r: Record<string, unknown>): MissionRow {
+  const iso = (v: unknown): string => (v ? new Date(String(v)).toISOString() : '');
+  return {
+    id: Number(r.id),
+    listingId: Number(r.listing_id),
+    productKey: String(r.product_key ?? ''),
     productName: String(r.product_name ?? ''),
+    imageUrl: String(r.image_url ?? ''),
     retailer: String(r.retailer ?? ''),
     externalId: String(r.external_id ?? ''),
     url: String(r.url ?? ''),
+    label: String(r.label ?? ''),
+    enabled: r.enabled === true,
+    armed: r.armed === true,
+    ceiling: toPrice(r.ceiling),
+    quantity: Number(r.quantity ?? 1),
+    sellerPolicy: (String(r.seller_policy ?? 'retailer_only') as SellerPolicy),
+    checkEverySeconds: Number(r.check_every_s ?? 60),
+    notes: String(r.notes ?? ''),
     state: String(r.state ?? 'unchecked'),
     confidence: String(r.confidence ?? 'unknown'),
     price: toPrice(r.price),
-    sellerKind: String(r.seller_kind ?? 'unknown'),
-    sellerName: String(r.seller_name ?? ''),
-    availableQuantity: r.available_quantity === null ? null : Number(r.available_quantity),
-    orderLimit: r.order_limit === null ? null : Number(r.order_limit),
+    sellerKind: String(r.ws_seller_kind ?? r.seller_kind ?? 'unknown'),
+    sellerName: String(r.ws_seller_name ?? r.seller_name ?? ''),
+    availableQuantity: r.available_quantity === null || r.available_quantity === undefined
+      ? null
+      : Number(r.available_quantity),
+    orderLimit: r.order_limit === null || r.order_limit === undefined ? null : Number(r.order_limit),
     isPreOrder: r.is_preorder === true,
     releaseDate: r.release_date ? String(r.release_date).slice(0, 10) : null,
     note: String(r.note ?? ''),
-    lastCheckedAt: r.last_checked_at ? new Date(String(r.last_checked_at)).toISOString() : '',
-    lastChangedAt: r.last_changed_at ? new Date(String(r.last_changed_at)).toISOString() : '',
-  }));
+    lastCheckedAt: iso(r.last_checked_at),
+    lastChangedAt: iso(r.last_changed_at),
+  };
 }
 
-/** Recent changes, newest first. The "what happened" feed. */
+const MISSION_SELECT = `
+  SELECT m.*, l.product_key, l.retailer, l.external_id, l.url,
+         p.name AS product_name, p.image_url,
+         COALESCE(w.state, 'unchecked') AS state,
+         COALESCE(w.confidence, 'unknown') AS confidence,
+         w.price,
+         COALESCE(w.seller_kind, l.seller_kind) AS ws_seller_kind,
+         COALESCE(NULLIF(w.seller_name, ''), l.seller_name) AS ws_seller_name,
+         w.available_quantity, w.order_limit,
+         COALESCE(w.is_preorder, false) AS is_preorder,
+         COALESCE(w.release_date, p.release_date) AS release_date,
+         COALESCE(w.note, '') AS note,
+         w.last_checked_at, w.last_changed_at
+    FROM missions m
+    JOIN listings l ON l.id = m.listing_id
+    JOIN products p ON p.key = l.product_key
+    LEFT JOIN watch_state w ON w.listing_id = l.id`;
+
+/**
+ * Every mission, in the order you care about them.
+ *
+ * In stock first, because that is the thing you opened the page to see. A
+ * LEFT JOIN on watch_state, so a mission the Watcher has never reached still
+ * appears — marked unchecked rather than quietly missing.
+ */
+export async function listMissions(db: Sql): Promise<MissionRow[]> {
+  const rows = await db.query(`${MISSION_SELECT}
+    ORDER BY
+      CASE COALESCE(w.state, 'unchecked')
+        WHEN 'in' THEN 0 WHEN 'queue' THEN 1 WHEN 'unknown' THEN 2
+        WHEN 'unchecked' THEN 3 ELSE 4 END,
+      m.armed DESC, p.name, l.retailer`);
+  return rows.map(toMission);
+}
+
+export async function getMission(db: Sql, id: number): Promise<MissionRow | null> {
+  const rows = await db.query(`${MISSION_SELECT} WHERE m.id = $1`, [id]);
+  return rows[0] ? toMission(rows[0]) : null;
+}
+
+/** Missions the Watcher should be polling right now. */
+export async function activeMissions(db: Sql): Promise<MissionRow[]> {
+  const rows = await db.query(`${MISSION_SELECT} WHERE m.enabled = true ORDER BY m.id`);
+  return rows.map(toMission);
+}
+
+/**
+ * Refuse to arm a mission that has not been told what it may spend.
+ *
+ * `armed` with no ceiling is an open cheque. The Watcher's decision layer
+ * already treats it as unauthorised, but a rule enforced in one place is a rule
+ * waiting to be forgotten in another — so it is refused here too, at the point
+ * where a person could set it.
+ */
+export function validateMission(m: MissionInput): string | null {
+  if (!Number.isFinite(m.listingId) || m.listingId <= 0) return 'a mission needs a listing';
+  const quantity = m.quantity ?? 1;
+  if (!Number.isInteger(quantity) || quantity < 1 || quantity > 20) {
+    return 'quantity must be a whole number between 1 and 20';
+  }
+  if (m.ceiling !== undefined && m.ceiling !== null && !(m.ceiling > 0)) {
+    return 'a price ceiling must be greater than zero';
+  }
+  if (m.armed && (m.ceiling === undefined || m.ceiling === null)) {
+    return 'set a price ceiling before arming — armed with no ceiling is an open cheque';
+  }
+  if (m.sellerPolicy && !['retailer_only', 'any'].includes(m.sellerPolicy)) {
+    return 'seller policy must be retailer_only or any';
+  }
+  const every = m.checkEverySeconds ?? 60;
+  if (!Number.isInteger(every) || every < 30 || every > 86_400) {
+    return 'check interval must be between 30 seconds and a day';
+  }
+  return null;
+}
+
+export async function upsertMission(db: Sql, m: MissionInput): Promise<MissionRow> {
+  const problem = validateMission(m);
+  if (problem) throw new Error(problem);
+
+  const rows = await db.query(
+    `INSERT INTO missions (listing_id, label, enabled, armed, ceiling, quantity,
+                           seller_policy, check_every_s, notes)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+     ON CONFLICT (listing_id) DO UPDATE SET
+       label = EXCLUDED.label,
+       enabled = EXCLUDED.enabled,
+       armed = EXCLUDED.armed,
+       ceiling = EXCLUDED.ceiling,
+       quantity = EXCLUDED.quantity,
+       seller_policy = EXCLUDED.seller_policy,
+       check_every_s = EXCLUDED.check_every_s,
+       notes = EXCLUDED.notes
+     RETURNING id`,
+    [
+      m.listingId,
+      m.label ?? '',
+      m.enabled ?? true,
+      m.armed ?? false,
+      m.ceiling ?? null,
+      m.quantity ?? 1,
+      m.sellerPolicy ?? 'retailer_only',
+      m.checkEverySeconds ?? 60,
+      m.notes ?? '',
+    ],
+  );
+  const mission = await getMission(db, Number(rows[0]!.id));
+  if (!mission) throw new Error('mission vanished immediately after being written');
+  return mission;
+}
+
+export async function deleteMission(db: Sql, id: number): Promise<void> {
+  await db.query('DELETE FROM missions WHERE id = $1', [id]);
+}
+
+// ─── Mission runs ────────────────────────────────────────────────────────────
+
+export type RunOutcome = 'running' | 'in_stock' | 'bought' | 'declined' | 'failed' | 'blocked';
+
+export interface RunRow {
+  id: number;
+  missionId: number;
+  productName: string;
+  retailer: string;
+  startedAt: string;
+  finishedAt: string;
+  outcome: RunOutcome;
+  reason: string;
+  state: string;
+  price: number | null;
+  sellerKind: string;
+  sellerName: string;
+  quantity: number | null;
+  total: number | null;
+  ms: number | null;
+}
+
+/**
+ * Open a run.
+ *
+ * Called when a mission does something — not on every poll. A run that is
+ * started and never finished shows as 'running' forever, which is exactly the
+ * signal you want: something began and nothing closed it.
+ */
+export async function startRun(db: Sql, missionId: number): Promise<number> {
+  const rows = await db.query('INSERT INTO mission_runs (mission_id) VALUES ($1) RETURNING id', [
+    missionId,
+  ]);
+  return Number(rows[0]!.id);
+}
+
+export async function finishRun(
+  db: Sql,
+  runId: number,
+  r: {
+    outcome: Exclude<RunOutcome, 'running'>;
+    reason?: string;
+    state?: string;
+    price?: number | null;
+    sellerKind?: string;
+    sellerName?: string;
+    quantity?: number | null;
+    total?: number | null;
+  },
+): Promise<void> {
+  // Anything that is not a plain success must explain itself. A run marked
+  // 'failed' with an empty reason is the log line you find at 3am and learn
+  // nothing from, so a placeholder is written rather than leaving it blank.
+  const needsReason = r.outcome !== 'bought' && r.outcome !== 'in_stock';
+  const reason = (r.reason ?? '').trim() || (needsReason ? `${r.outcome}, no reason recorded` : '');
+
+  await db.query(
+    `UPDATE mission_runs
+        SET finished_at = now(),
+            outcome = $1, reason = $2, state = $3, price = $4,
+            seller_kind = $5, seller_name = $6, quantity = $7, total = $8,
+            ms = GREATEST(0, EXTRACT(EPOCH FROM (now() - started_at)) * 1000)::int
+      WHERE id = $9`,
+    [
+      r.outcome,
+      reason.slice(0, 500),
+      r.state ?? '',
+      r.price ?? null,
+      r.sellerKind ?? '',
+      r.sellerName ?? '',
+      r.quantity ?? null,
+      r.total ?? null,
+      runId,
+    ],
+  );
+}
+
+/** Record a run that is already over. The common case. */
+export async function recordRun(
+  db: Sql,
+  missionId: number,
+  r: Parameters<typeof finishRun>[2],
+): Promise<number> {
+  const id = await startRun(db, missionId);
+  await finishRun(db, id, r);
+  return id;
+}
+
+function toRun(r: Record<string, unknown>): RunRow {
+  const iso = (v: unknown): string => (v ? new Date(String(v)).toISOString() : '');
+  return {
+    id: Number(r.id),
+    missionId: Number(r.mission_id),
+    productName: String(r.product_name ?? ''),
+    retailer: String(r.retailer ?? ''),
+    startedAt: iso(r.started_at),
+    finishedAt: iso(r.finished_at),
+    outcome: String(r.outcome ?? 'running') as RunOutcome,
+    reason: String(r.reason ?? ''),
+    state: String(r.state ?? ''),
+    price: toPrice(r.price),
+    sellerKind: String(r.seller_kind ?? ''),
+    sellerName: String(r.seller_name ?? ''),
+    quantity: r.quantity === null || r.quantity === undefined ? null : Number(r.quantity),
+    total: toPrice(r.total),
+    ms: r.ms === null || r.ms === undefined ? null : Number(r.ms),
+  };
+}
+
+const RUN_SELECT = `
+  SELECT r.*, p.name AS product_name, l.retailer
+    FROM mission_runs r
+    JOIN missions m ON m.id = r.mission_id
+    JOIN listings l ON l.id = m.listing_id
+    JOIN products p ON p.key = l.product_key`;
+
+export async function missionRuns(db: Sql, missionId: number, limit = 100): Promise<RunRow[]> {
+  const rows = await db.query(
+    `${RUN_SELECT} WHERE r.mission_id = $1 ORDER BY r.started_at DESC, r.id DESC LIMIT $2`,
+    [missionId, Math.min(Math.max(limit, 1), 500)],
+  );
+  return rows.map(toRun);
+}
+
+export async function recentRuns(db: Sql, limit = 50): Promise<RunRow[]> {
+  const rows = await db.query(
+    `${RUN_SELECT} ORDER BY r.started_at DESC, r.id DESC LIMIT $1`,
+    [Math.min(Math.max(limit, 1), 200)],
+  );
+  return rows.map(toRun);
+}
+
+// ─── What the Watcher saw ────────────────────────────────────────────────────
+
+/** One reading of one listing, as the Watcher reports it. */
+export interface ObservationIn {
+  listingId: number;
+  state: 'in' | 'out' | 'queue' | 'unknown';
+  confidence?: 'exact' | 'inferred' | 'unknown';
+  price?: number | null;
+  sellerKind?: 'retailer' | 'marketplace' | 'unknown';
+  sellerName?: string;
+  availableQuantity?: number | null;
+  orderLimit?: number | null;
+  isPreOrder?: boolean;
+  releaseDate?: string | null;
+  imageUrl?: string;
+  note?: string;
+}
+
+export interface RecordedObservation {
+  /** Did anything material change? Drives runs and alerts. */
+  changed: boolean;
+  previousState: string | null;
+  previousPrice: number | null;
+  /** True the first time we ever see this listing. Not a change to shout about. */
+  isFirst: boolean;
+}
+
+/**
+ * Record a reading.
+ *
+ * `watch_state` is upserted every single time, so the page can always say how
+ * stale it is. `observations` gets a row only when the state, the price or the
+ * seller actually moved — polling a static product every minute for a week
+ * should leave a history of nothing, because nothing happened.
+ *
+ * The first sighting is marked `isFirst` rather than `changed`. Otherwise
+ * turning the Watcher on announces every product at once, which is the same
+ * mistake the discovery seeding logic exists to avoid.
+ */
+export async function recordObservation(
+  db: Sql,
+  obs: ObservationIn,
+): Promise<RecordedObservation> {
+  const prior = await db.query<{ state: string; price: unknown; seller_kind: string }>(
+    'SELECT state, price, seller_kind FROM watch_state WHERE listing_id = $1',
+    [obs.listingId],
+  );
+
+  const before = prior[0] ?? null;
+  const isFirst = before === null;
+  const previousPrice = before ? toPrice(before.price) : null;
+  const price = obs.price ?? null;
+  const sellerKind = obs.sellerKind ?? 'unknown';
+
+  const changed =
+    !isFirst &&
+    (before.state !== obs.state ||
+      previousPrice !== price ||
+      before.seller_kind !== sellerKind);
+
+  await db.query(
+    `INSERT INTO watch_state (
+       listing_id, state, confidence, price, seller_kind, seller_name,
+       available_quantity, order_limit, is_preorder, release_date, note,
+       last_checked_at, last_changed_at
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, now(), now())
+     ON CONFLICT (listing_id) DO UPDATE SET
+       state = EXCLUDED.state,
+       confidence = EXCLUDED.confidence,
+       price = EXCLUDED.price,
+       seller_kind = EXCLUDED.seller_kind,
+       seller_name = EXCLUDED.seller_name,
+       available_quantity = EXCLUDED.available_quantity,
+       order_limit = EXCLUDED.order_limit,
+       is_preorder = EXCLUDED.is_preorder,
+       release_date = EXCLUDED.release_date,
+       note = EXCLUDED.note,
+       last_checked_at = now(),
+       -- Only move this when something actually moved, so "in stock since"
+       -- means what it says instead of resetting on every poll.
+       last_changed_at = CASE WHEN $12 THEN now() ELSE watch_state.last_changed_at END`,
+    [
+      obs.listingId,
+      obs.state,
+      obs.confidence ?? 'unknown',
+      price,
+      sellerKind,
+      obs.sellerName ?? '',
+      obs.availableQuantity ?? null,
+      obs.orderLimit ?? null,
+      obs.isPreOrder ?? false,
+      obs.releaseDate ?? null,
+      (obs.note ?? '').slice(0, 500),
+      changed,
+    ],
+  );
+
+  // The listing remembers who was selling it, so a mission's seller policy has
+  // something to read even before the next check.
+  if (sellerKind !== 'unknown') {
+    await db.query('UPDATE listings SET seller_kind = $1, seller_name = $2 WHERE id = $3', [
+      sellerKind,
+      obs.sellerName ?? '',
+      obs.listingId,
+    ]);
+  }
+
+  // An image is worth having the first time we see one, and never worth
+  // overwriting — the retailer's CDN URLs churn and a working one beats a new one.
+  if (obs.imageUrl) {
+    await db.query(
+      `UPDATE products SET image_url = $1
+        WHERE image_url = ''
+          AND key = (SELECT product_key FROM listings WHERE id = $2)`,
+      [obs.imageUrl, obs.listingId],
+    );
+  }
+
+  if (changed || isFirst) {
+    await db.query(
+      `INSERT INTO observations
+         (listing_id, state, confidence, price, seller_kind, seller_name,
+          available_quantity, note)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [
+        obs.listingId,
+        obs.state,
+        obs.confidence ?? 'unknown',
+        price,
+        sellerKind,
+        obs.sellerName ?? '',
+        obs.availableQuantity ?? null,
+        (obs.note ?? '').slice(0, 500),
+      ],
+    );
+  }
+
+  return { changed, isFirst, previousState: before?.state ?? null, previousPrice };
+}
+
+/** Recent readings that actually changed. The "what happened" feed. */
 export async function recentObservations(db: Sql, limit = 50): Promise<
   {
-    productKey: string;
+    listingId: number;
     productName: string;
     retailer: string;
     state: string;
@@ -467,16 +861,17 @@ export async function recentObservations(db: Sql, limit = 50): Promise<
   }[]
 > {
   const rows = await db.query(
-    `SELECT o.product_key, p.name AS product_name, o.retailer, o.state, o.price,
+    `SELECT o.listing_id, p.name AS product_name, l.retailer, o.state, o.price,
             o.seller_kind, o.seller_name, o.note, o.at
        FROM observations o
-       JOIN products p ON p.key = o.product_key
+       JOIN listings l ON l.id = o.listing_id
+       JOIN products p ON p.key = l.product_key
       ORDER BY o.at DESC, o.id DESC
       LIMIT $1`,
     [Math.min(Math.max(limit, 1), 200)],
   );
   return rows.map((r) => ({
-    productKey: String(r.product_key),
+    listingId: Number(r.listing_id),
     productName: String(r.product_name ?? ''),
     retailer: String(r.retailer ?? ''),
     state: String(r.state ?? ''),

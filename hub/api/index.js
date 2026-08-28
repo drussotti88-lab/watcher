@@ -234,6 +234,35 @@ function productKey(name, fallback) {
   const base = (name || fallback).toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 48);
   return `prd_${base || "unknown"}`;
 }
+var HOSTS = [
+  { match: /(^|\.)target\.com$/i, product: /\/p\/(?:[^?#]*\/)?-\/A-\w+/i, retailer: "Target" },
+  {
+    match: /(^|\.)pokemoncenter\.com$/i,
+    product: /\/product\/[^/?#]+/i,
+    retailer: "Pokemon Center"
+  },
+  { match: /(^|\.)walmart\.com$/i, product: /\/ip\/(?:[^/?#]+\/)?\d{5,}/i, retailer: "Walmart" }
+];
+function identifyListing(rawUrl) {
+  let u;
+  try {
+    u = new URL(rawUrl.trim());
+  } catch {
+    return null;
+  }
+  if (u.protocol !== "https:" && u.protocol !== "http:") return null;
+  const host = HOSTS.find((h) => h.match.test(u.hostname));
+  if (!host) return null;
+  if (!host.product.test(u.pathname)) return null;
+  const found = fromUrl(u.toString(), host.retailer);
+  if (!found?.externalId) return null;
+  return {
+    retailer: host.retailer,
+    externalId: found.externalId,
+    name: found.name,
+    url: found.url || u.toString()
+  };
+}
 
 // src/filter.ts
 function fold(s) {
@@ -372,16 +401,14 @@ async function logEvent(db2, kind, message, data = null) {
 }
 async function watchlist(db2) {
   const rows = await db2.query(
-    `SELECT p.key, p.name, p.release_date, a.retailer, a.value AS external_id,
-            COALESCE(MAX(d.url), '') AS url
-       FROM products p
-       JOIN aliases a ON a.product_key = p.key AND a.kind = 'retailer_sku'
-       LEFT JOIN discoveries d ON d.product_key = p.key
-      GROUP BY p.key, p.name, p.release_date, a.retailer, a.value
-      ORDER BY p.name, a.retailer`
+    `SELECT l.id, l.product_key, p.name, p.release_date, l.retailer, l.external_id, l.url
+       FROM listings l
+       JOIN products p ON p.key = l.product_key
+      ORDER BY p.name, l.retailer`
   );
   return rows.map((r) => ({
-    productKey: String(r.key),
+    listingId: Number(r.id),
+    productKey: String(r.product_key),
     name: String(r.name ?? ""),
     retailer: String(r.retailer ?? ""),
     externalId: String(r.external_id ?? ""),
@@ -389,25 +416,299 @@ async function watchlist(db2) {
     releaseDate: r.release_date ? String(r.release_date).slice(0, 10) : null
   }));
 }
-async function recordObservation(db2, obs) {
-  const prior = await db2.query("SELECT state, price, seller_kind FROM watch_state WHERE product_key = $1 AND retailer = $2", [
-    obs.productKey,
-    obs.retailer
+function toProduct(r) {
+  return {
+    key: String(r.key),
+    name: String(r.name ?? ""),
+    releaseDate: r.release_date ? String(r.release_date).slice(0, 10) : null,
+    imageUrl: String(r.image_url ?? ""),
+    notes: String(r.notes ?? "")
+  };
+}
+function keyForName(name) {
+  const slug = name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 60);
+  return `prd_${slug || "unnamed"}`;
+}
+async function listProducts(db2) {
+  const rows = await db2.query("SELECT * FROM products ORDER BY name");
+  return rows.map(toProduct);
+}
+async function upsertProduct(db2, p) {
+  const key = p.key?.trim() || keyForName(p.name);
+  const rows = await db2.query(
+    `INSERT INTO products (key, name, release_date, image_url, notes)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (key) DO UPDATE SET
+       name = EXCLUDED.name,
+       -- COALESCE, not EXCLUDED: an edit that omits a field must not blank a
+       -- value someone already took the trouble to set.
+       release_date = COALESCE(EXCLUDED.release_date, products.release_date),
+       image_url = CASE WHEN EXCLUDED.image_url = '' THEN products.image_url ELSE EXCLUDED.image_url END,
+       notes = CASE WHEN EXCLUDED.notes = '' THEN products.notes ELSE EXCLUDED.notes END
+     RETURNING *`,
+    [key, p.name.trim(), p.releaseDate || null, p.imageUrl ?? "", p.notes ?? ""]
+  );
+  return toProduct(rows[0]);
+}
+async function deleteProduct(db2, key) {
+  await db2.query("DELETE FROM products WHERE key = $1", [key]);
+}
+function toListing(r) {
+  return {
+    id: Number(r.id),
+    productKey: String(r.product_key),
+    productName: String(r.product_name ?? ""),
+    retailer: String(r.retailer ?? ""),
+    externalId: String(r.external_id ?? ""),
+    url: String(r.url ?? ""),
+    sellerKind: String(r.seller_kind ?? "unknown"),
+    sellerName: String(r.seller_name ?? ""),
+    isPrimary: r.is_primary === true
+  };
+}
+async function listListings(db2, productKey2) {
+  const sql = `SELECT l.*, p.name AS product_name FROM listings l
+                 JOIN products p ON p.key = l.product_key
+                ${productKey2 ? "WHERE l.product_key = $1" : ""}
+                ORDER BY p.name, l.retailer`;
+  const rows = productKey2 ? await db2.query(sql, [productKey2]) : await db2.query(sql);
+  return rows.map(toListing);
+}
+async function addListing(db2, l) {
+  const rows = await db2.query(
+    `INSERT INTO listings (product_key, retailer, external_id, url)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (retailer, external_id) DO UPDATE SET
+       url = EXCLUDED.url,
+       product_key = EXCLUDED.product_key
+     RETURNING *`,
+    [l.productKey, l.retailer.trim(), l.externalId.trim(), l.url.trim()]
+  );
+  const [full] = await db2.query(
+    "SELECT l.*, p.name AS product_name FROM listings l JOIN products p ON p.key = l.product_key WHERE l.id = $1",
+    [rows[0].id]
+  );
+  return toListing(full);
+}
+async function deleteListing(db2, id) {
+  await db2.query("DELETE FROM listings WHERE id = $1", [id]);
+}
+function toMission(r) {
+  const iso = (v) => v ? new Date(String(v)).toISOString() : "";
+  return {
+    id: Number(r.id),
+    listingId: Number(r.listing_id),
+    productKey: String(r.product_key ?? ""),
+    productName: String(r.product_name ?? ""),
+    imageUrl: String(r.image_url ?? ""),
+    retailer: String(r.retailer ?? ""),
+    externalId: String(r.external_id ?? ""),
+    url: String(r.url ?? ""),
+    label: String(r.label ?? ""),
+    enabled: r.enabled === true,
+    armed: r.armed === true,
+    ceiling: toPrice(r.ceiling),
+    quantity: Number(r.quantity ?? 1),
+    sellerPolicy: String(r.seller_policy ?? "retailer_only"),
+    checkEverySeconds: Number(r.check_every_s ?? 60),
+    notes: String(r.notes ?? ""),
+    state: String(r.state ?? "unchecked"),
+    confidence: String(r.confidence ?? "unknown"),
+    price: toPrice(r.price),
+    sellerKind: String(r.ws_seller_kind ?? r.seller_kind ?? "unknown"),
+    sellerName: String(r.ws_seller_name ?? r.seller_name ?? ""),
+    availableQuantity: r.available_quantity === null || r.available_quantity === void 0 ? null : Number(r.available_quantity),
+    orderLimit: r.order_limit === null || r.order_limit === void 0 ? null : Number(r.order_limit),
+    isPreOrder: r.is_preorder === true,
+    releaseDate: r.release_date ? String(r.release_date).slice(0, 10) : null,
+    note: String(r.note ?? ""),
+    lastCheckedAt: iso(r.last_checked_at),
+    lastChangedAt: iso(r.last_changed_at)
+  };
+}
+var MISSION_SELECT = `
+  SELECT m.*, l.product_key, l.retailer, l.external_id, l.url,
+         p.name AS product_name, p.image_url,
+         COALESCE(w.state, 'unchecked') AS state,
+         COALESCE(w.confidence, 'unknown') AS confidence,
+         w.price,
+         COALESCE(w.seller_kind, l.seller_kind) AS ws_seller_kind,
+         COALESCE(NULLIF(w.seller_name, ''), l.seller_name) AS ws_seller_name,
+         w.available_quantity, w.order_limit,
+         COALESCE(w.is_preorder, false) AS is_preorder,
+         COALESCE(w.release_date, p.release_date) AS release_date,
+         COALESCE(w.note, '') AS note,
+         w.last_checked_at, w.last_changed_at
+    FROM missions m
+    JOIN listings l ON l.id = m.listing_id
+    JOIN products p ON p.key = l.product_key
+    LEFT JOIN watch_state w ON w.listing_id = l.id`;
+async function listMissions(db2) {
+  const rows = await db2.query(`${MISSION_SELECT}
+    ORDER BY
+      CASE COALESCE(w.state, 'unchecked')
+        WHEN 'in' THEN 0 WHEN 'queue' THEN 1 WHEN 'unknown' THEN 2
+        WHEN 'unchecked' THEN 3 ELSE 4 END,
+      m.armed DESC, p.name, l.retailer`);
+  return rows.map(toMission);
+}
+async function getMission(db2, id) {
+  const rows = await db2.query(`${MISSION_SELECT} WHERE m.id = $1`, [id]);
+  return rows[0] ? toMission(rows[0]) : null;
+}
+async function activeMissions(db2) {
+  const rows = await db2.query(`${MISSION_SELECT} WHERE m.enabled = true ORDER BY m.id`);
+  return rows.map(toMission);
+}
+function validateMission(m) {
+  if (!Number.isFinite(m.listingId) || m.listingId <= 0) return "a mission needs a listing";
+  const quantity = m.quantity ?? 1;
+  if (!Number.isInteger(quantity) || quantity < 1 || quantity > 20) {
+    return "quantity must be a whole number between 1 and 20";
+  }
+  if (m.ceiling !== void 0 && m.ceiling !== null && !(m.ceiling > 0)) {
+    return "a price ceiling must be greater than zero";
+  }
+  if (m.armed && (m.ceiling === void 0 || m.ceiling === null)) {
+    return "set a price ceiling before arming \u2014 armed with no ceiling is an open cheque";
+  }
+  if (m.sellerPolicy && !["retailer_only", "any"].includes(m.sellerPolicy)) {
+    return "seller policy must be retailer_only or any";
+  }
+  const every = m.checkEverySeconds ?? 60;
+  if (!Number.isInteger(every) || every < 30 || every > 86400) {
+    return "check interval must be between 30 seconds and a day";
+  }
+  return null;
+}
+async function upsertMission(db2, m) {
+  const problem = validateMission(m);
+  if (problem) throw new Error(problem);
+  const rows = await db2.query(
+    `INSERT INTO missions (listing_id, label, enabled, armed, ceiling, quantity,
+                           seller_policy, check_every_s, notes)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+     ON CONFLICT (listing_id) DO UPDATE SET
+       label = EXCLUDED.label,
+       enabled = EXCLUDED.enabled,
+       armed = EXCLUDED.armed,
+       ceiling = EXCLUDED.ceiling,
+       quantity = EXCLUDED.quantity,
+       seller_policy = EXCLUDED.seller_policy,
+       check_every_s = EXCLUDED.check_every_s,
+       notes = EXCLUDED.notes
+     RETURNING id`,
+    [
+      m.listingId,
+      m.label ?? "",
+      m.enabled ?? true,
+      m.armed ?? false,
+      m.ceiling ?? null,
+      m.quantity ?? 1,
+      m.sellerPolicy ?? "retailer_only",
+      m.checkEverySeconds ?? 60,
+      m.notes ?? ""
+    ]
+  );
+  const mission = await getMission(db2, Number(rows[0].id));
+  if (!mission) throw new Error("mission vanished immediately after being written");
+  return mission;
+}
+async function deleteMission(db2, id) {
+  await db2.query("DELETE FROM missions WHERE id = $1", [id]);
+}
+async function startRun(db2, missionId) {
+  const rows = await db2.query("INSERT INTO mission_runs (mission_id) VALUES ($1) RETURNING id", [
+    missionId
   ]);
+  return Number(rows[0].id);
+}
+async function finishRun(db2, runId, r) {
+  const needsReason = r.outcome !== "bought" && r.outcome !== "in_stock";
+  const reason = (r.reason ?? "").trim() || (needsReason ? `${r.outcome}, no reason recorded` : "");
+  await db2.query(
+    `UPDATE mission_runs
+        SET finished_at = now(),
+            outcome = $1, reason = $2, state = $3, price = $4,
+            seller_kind = $5, seller_name = $6, quantity = $7, total = $8,
+            ms = GREATEST(0, EXTRACT(EPOCH FROM (now() - started_at)) * 1000)::int
+      WHERE id = $9`,
+    [
+      r.outcome,
+      reason.slice(0, 500),
+      r.state ?? "",
+      r.price ?? null,
+      r.sellerKind ?? "",
+      r.sellerName ?? "",
+      r.quantity ?? null,
+      r.total ?? null,
+      runId
+    ]
+  );
+}
+async function recordRun(db2, missionId, r) {
+  const id = await startRun(db2, missionId);
+  await finishRun(db2, id, r);
+  return id;
+}
+function toRun(r) {
+  const iso = (v) => v ? new Date(String(v)).toISOString() : "";
+  return {
+    id: Number(r.id),
+    missionId: Number(r.mission_id),
+    productName: String(r.product_name ?? ""),
+    retailer: String(r.retailer ?? ""),
+    startedAt: iso(r.started_at),
+    finishedAt: iso(r.finished_at),
+    outcome: String(r.outcome ?? "running"),
+    reason: String(r.reason ?? ""),
+    state: String(r.state ?? ""),
+    price: toPrice(r.price),
+    sellerKind: String(r.seller_kind ?? ""),
+    sellerName: String(r.seller_name ?? ""),
+    quantity: r.quantity === null || r.quantity === void 0 ? null : Number(r.quantity),
+    total: toPrice(r.total),
+    ms: r.ms === null || r.ms === void 0 ? null : Number(r.ms)
+  };
+}
+var RUN_SELECT = `
+  SELECT r.*, p.name AS product_name, l.retailer
+    FROM mission_runs r
+    JOIN missions m ON m.id = r.mission_id
+    JOIN listings l ON l.id = m.listing_id
+    JOIN products p ON p.key = l.product_key`;
+async function missionRuns(db2, missionId, limit = 100) {
+  const rows = await db2.query(
+    `${RUN_SELECT} WHERE r.mission_id = $1 ORDER BY r.started_at DESC, r.id DESC LIMIT $2`,
+    [missionId, Math.min(Math.max(limit, 1), 500)]
+  );
+  return rows.map(toRun);
+}
+async function recentRuns(db2, limit = 50) {
+  const rows = await db2.query(
+    `${RUN_SELECT} ORDER BY r.started_at DESC, r.id DESC LIMIT $1`,
+    [Math.min(Math.max(limit, 1), 200)]
+  );
+  return rows.map(toRun);
+}
+async function recordObservation(db2, obs) {
+  const prior = await db2.query(
+    "SELECT state, price, seller_kind FROM watch_state WHERE listing_id = $1",
+    [obs.listingId]
+  );
   const before = prior[0] ?? null;
   const isFirst = before === null;
   const previousPrice = before ? toPrice(before.price) : null;
   const price = obs.price ?? null;
-  const changed = !isFirst && (before.state !== obs.state || previousPrice !== price || before.seller_kind !== (obs.sellerKind ?? "unknown"));
+  const sellerKind = obs.sellerKind ?? "unknown";
+  const changed = !isFirst && (before.state !== obs.state || previousPrice !== price || before.seller_kind !== sellerKind);
   await db2.query(
     `INSERT INTO watch_state (
-       product_key, retailer, external_id, url, state, confidence, price,
-       seller_kind, seller_name, available_quantity, order_limit,
-       is_preorder, release_date, note, last_checked_at, last_changed_at
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14, now(), now())
-     ON CONFLICT (product_key, retailer) DO UPDATE SET
-       external_id = EXCLUDED.external_id,
-       url = EXCLUDED.url,
+       listing_id, state, confidence, price, seller_kind, seller_name,
+       available_quantity, order_limit, is_preorder, release_date, note,
+       last_checked_at, last_changed_at
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, now(), now())
+     ON CONFLICT (listing_id) DO UPDATE SET
        state = EXCLUDED.state,
        confidence = EXCLUDED.confidence,
        price = EXCLUDED.price,
@@ -421,16 +722,13 @@ async function recordObservation(db2, obs) {
        last_checked_at = now(),
        -- Only move this when something actually moved, so "in stock since"
        -- means what it says instead of resetting on every poll.
-       last_changed_at = CASE WHEN $15 THEN now() ELSE watch_state.last_changed_at END`,
+       last_changed_at = CASE WHEN $12 THEN now() ELSE watch_state.last_changed_at END`,
     [
-      obs.productKey,
-      obs.retailer,
-      obs.externalId ?? "",
-      obs.url ?? "",
+      obs.listingId,
       obs.state,
       obs.confidence ?? "unknown",
       price,
-      obs.sellerKind ?? "unknown",
+      sellerKind,
       obs.sellerName ?? "",
       obs.availableQuantity ?? null,
       obs.orderLimit ?? null,
@@ -440,91 +738,54 @@ async function recordObservation(db2, obs) {
       changed
     ]
   );
+  if (sellerKind !== "unknown") {
+    await db2.query("UPDATE listings SET seller_kind = $1, seller_name = $2 WHERE id = $3", [
+      sellerKind,
+      obs.sellerName ?? "",
+      obs.listingId
+    ]);
+  }
+  if (obs.imageUrl) {
+    await db2.query(
+      `UPDATE products SET image_url = $1
+        WHERE image_url = ''
+          AND key = (SELECT product_key FROM listings WHERE id = $2)`,
+      [obs.imageUrl, obs.listingId]
+    );
+  }
   if (changed || isFirst) {
     await db2.query(
       `INSERT INTO observations
-         (product_key, retailer, state, confidence, price, seller_kind,
-          seller_name, available_quantity, note)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+         (listing_id, state, confidence, price, seller_kind, seller_name,
+          available_quantity, note)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
       [
-        obs.productKey,
-        obs.retailer,
+        obs.listingId,
         obs.state,
         obs.confidence ?? "unknown",
         price,
-        obs.sellerKind ?? "unknown",
+        sellerKind,
         obs.sellerName ?? "",
         obs.availableQuantity ?? null,
         (obs.note ?? "").slice(0, 500)
       ]
     );
   }
-  return {
-    changed,
-    isFirst,
-    previousState: before?.state ?? null,
-    previousPrice
-  };
-}
-async function dashboard(db2) {
-  const rows = await db2.query(
-    `SELECT p.key, p.name AS product_name, a.retailer, a.value AS external_id,
-            COALESCE(w.url, MAX(d.url), '') AS url,
-            COALESCE(w.state, 'unchecked') AS state,
-            COALESCE(w.confidence, 'unknown') AS confidence,
-            w.price, COALESCE(w.seller_kind, 'unknown') AS seller_kind,
-            COALESCE(w.seller_name, '') AS seller_name,
-            w.available_quantity, w.order_limit,
-            COALESCE(w.is_preorder, false) AS is_preorder,
-            COALESCE(w.release_date, p.release_date) AS release_date,
-            COALESCE(w.note, '') AS note,
-            w.last_checked_at, w.last_changed_at
-       FROM products p
-       JOIN aliases a ON a.product_key = p.key AND a.kind = 'retailer_sku'
-       LEFT JOIN watch_state w ON w.product_key = p.key AND w.retailer = a.retailer
-       LEFT JOIN discoveries d ON d.product_key = p.key
-      GROUP BY p.key, p.name, p.release_date, a.retailer, a.value, w.url, w.state,
-               w.confidence, w.price, w.seller_kind, w.seller_name,
-               w.available_quantity, w.order_limit, w.is_preorder, w.release_date,
-               w.note, w.last_checked_at, w.last_changed_at
-      ORDER BY
-        CASE COALESCE(w.state, 'unchecked')
-          WHEN 'in' THEN 0 WHEN 'queue' THEN 1 WHEN 'unknown' THEN 2
-          WHEN 'unchecked' THEN 3 ELSE 4 END,
-        p.name, a.retailer`
-  );
-  return rows.map((r) => ({
-    productKey: String(r.key),
-    productName: String(r.product_name ?? ""),
-    retailer: String(r.retailer ?? ""),
-    externalId: String(r.external_id ?? ""),
-    url: String(r.url ?? ""),
-    state: String(r.state ?? "unchecked"),
-    confidence: String(r.confidence ?? "unknown"),
-    price: toPrice(r.price),
-    sellerKind: String(r.seller_kind ?? "unknown"),
-    sellerName: String(r.seller_name ?? ""),
-    availableQuantity: r.available_quantity === null ? null : Number(r.available_quantity),
-    orderLimit: r.order_limit === null ? null : Number(r.order_limit),
-    isPreOrder: r.is_preorder === true,
-    releaseDate: r.release_date ? String(r.release_date).slice(0, 10) : null,
-    note: String(r.note ?? ""),
-    lastCheckedAt: r.last_checked_at ? new Date(String(r.last_checked_at)).toISOString() : "",
-    lastChangedAt: r.last_changed_at ? new Date(String(r.last_changed_at)).toISOString() : ""
-  }));
+  return { changed, isFirst, previousState: before?.state ?? null, previousPrice };
 }
 async function recentObservations(db2, limit = 50) {
   const rows = await db2.query(
-    `SELECT o.product_key, p.name AS product_name, o.retailer, o.state, o.price,
+    `SELECT o.listing_id, p.name AS product_name, l.retailer, o.state, o.price,
             o.seller_kind, o.seller_name, o.note, o.at
        FROM observations o
-       JOIN products p ON p.key = o.product_key
+       JOIN listings l ON l.id = o.listing_id
+       JOIN products p ON p.key = l.product_key
       ORDER BY o.at DESC, o.id DESC
       LIMIT $1`,
     [Math.min(Math.max(limit, 1), 200)]
   );
   return rows.map((r) => ({
-    productKey: String(r.product_key),
+    listingId: Number(r.listing_id),
     productName: String(r.product_name ?? ""),
     retailer: String(r.retailer ?? ""),
     state: String(r.state ?? ""),
@@ -853,6 +1114,42 @@ table { width: 100%; border-collapse: collapse; font-size: 13px; }
 td { padding: 6px 8px; border-top: 1px solid var(--line); vertical-align: top; }
 h2 { font-size: 14px; text-transform: uppercase; letter-spacing: 0.06em;
      color: var(--muted); margin: 34px 0 10px; }
+
+/* \u2500\u2500 mission management \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */
+.tabs { display: flex; gap: 4px; margin: 18px 0 16px; border-bottom: 1px solid var(--line); }
+.tab {
+  padding: 8px 14px; cursor: pointer; border: none; background: none;
+  color: var(--muted); border-bottom: 2px solid transparent; border-radius: 0;
+  font: inherit;
+}
+.tab:hover { color: var(--ink); border-color: var(--line); }
+.tab.on { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
+.thumb {
+  width: 56px; height: 56px; border-radius: 8px; object-fit: contain;
+  background: var(--out-bg); flex: 0 0 auto;
+}
+.thumb.ph { display: flex; align-items: center; justify-content: center;
+            color: var(--muted); font-size: 20px; }
+form.stack { display: grid; gap: 8px; max-width: 560px; }
+label.f { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
+input[type=text], input[type=url], input[type=number], input[type=date], select, textarea {
+  font: inherit; padding: 8px 10px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--bg); color: var(--ink); width: 100%;
+}
+.inline { display: flex; gap: 8px; flex-wrap: wrap; align-items: end; }
+.inline > * { flex: 1 1 160px; }
+.inline > button { flex: 0 0 auto; }
+.danger { color: var(--alert); border-color: var(--alert); }
+.armed { background: var(--alert-bg); color: var(--alert); }
+.off { opacity: 0.55; }
+.msg { font-size: 13px; min-height: 18px; }
+.msg.bad { color: var(--alert); }
+.msg.good { color: var(--in); }
+details > summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+.runs td:first-child { white-space: nowrap; }
+.o-bought { color: var(--in); font-weight: 600; }
+.o-failed, .o-blocked { color: var(--alert); font-weight: 600; }
+.o-declined { color: var(--warn); }
 .login { max-width: 340px; margin: 16vh auto; }
 input[type=password] {
   font: inherit; width: 100%; padding: 9px 11px; border-radius: 8px;
@@ -883,9 +1180,15 @@ function dashboardPage() {
 <title>Hub</title><style>${STYLE}</style></head>
 <body><main>
   <header>
-    <h1>Watching</h1>
+    <h1>Hub</h1>
     <span class="sub" id="summary">loading\u2026</span>
   </header>
+
+  <div class="tabs">
+    <button class="tab on" data-tab="missions">Missions</button>
+    <button class="tab" data-tab="products">Products</button>
+    <button class="tab" data-tab="activity">Activity</button>
+  </div>
 
   <div class="bar">
     <button id="refresh">Refresh</button>
@@ -894,10 +1197,39 @@ function dashboardPage() {
     <a class="btn" href="/logout">Sign out</a>
   </div>
 
-  <div id="watches"></div>
+  <section id="tab-missions"><div id="missions"></div></section>
 
-  <h2>Recent changes</h2>
-  <div class="card"><table id="feed"><tbody></tbody></table></div>
+  <section id="tab-products" hidden>
+    <div class="card">
+      <div class="name">Add a product</div>
+      <p class="meta">The thing itself. Where to buy it comes next.</p>
+      <form class="stack" id="product-form" style="margin-top:10px">
+        <label class="f">Name
+          <input type="text" name="name" required placeholder="Pok\xE9mon TCG: Pitch Black Elite Trainer Box">
+        </label>
+        <label class="f">Release date <span style="opacity:.7">(optional)</span>
+          <input type="date" name="releaseDate">
+        </label>
+        <div class="inline">
+          <button type="submit">Add product</button>
+          <span class="msg" id="product-msg"></span>
+        </div>
+      </form>
+    </div>
+    <div id="products"></div>
+  </section>
+
+  <section id="tab-activity" hidden>
+    <h2 style="margin-top:0">Mission runs</h2>
+    <p class="meta" style="margin:-6px 0 10px">
+      Only written when a mission did something, or could not. Routine checks
+      that found nothing are not runs.
+    </p>
+    <div class="card"><table class="runs" id="runs"><tbody></tbody></table></div>
+
+    <h2>Stock and price changes</h2>
+    <div class="card"><table id="feed"><tbody></tbody></table></div>
+  </section>
 </main>
 <script>
 const money = (n) => n === null || n === undefined ? '\u2014' : '$' + Number(n).toFixed(2);
@@ -915,6 +1247,8 @@ function ago(iso) {
 // rather than showing a stale price as though it were current.
 const STALE_MS = 5 * 60 * 1000;
 
+let DATA = { missions: [], runs: [], changes: [], products: [], listings: [] };
+
 function el(tag, cls, text) {
   const n = document.createElement(tag);
   if (cls) n.className = cls;
@@ -922,115 +1256,344 @@ function el(tag, cls, text) {
   return n;
 }
 
-function watchCard(w) {
-  const card = el('div', 'card');
+async function api(method, path, body) {
+  const res = await fetch(path, {
+    method,
+    headers: body ? { 'Content-Type': 'application/json' } : {},
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (res.status === 401) { location.href = '/login'; throw new Error('signed out'); }
+  const data = await res.json().catch(() => ({}));
+  // The API answers failures in sentences. Show the sentence, not the status.
+  if (!res.ok) throw new Error(data.error || (method + ' ' + path + ' failed'));
+  return data;
+}
+
+function say(id, text, ok) {
+  const n = document.getElementById(id);
+  n.textContent = text;
+  n.className = 'msg ' + (ok ? 'good' : 'bad');
+  if (ok) setTimeout(() => { n.textContent = ''; }, 4000);
+}
+
+function thumb(url, alt) {
+  if (!url) {
+    const ph = el('div', 'thumb ph', '\u25A6');
+    ph.title = 'no image yet \u2014 the Watcher fills this in on its first read';
+    return ph;
+  }
+  const img = el('img', 'thumb');
+  img.src = url;
+  img.alt = alt || '';
+  img.loading = 'lazy';
+  // A dead CDN URL should degrade to the placeholder, not a broken-image icon.
+  img.addEventListener('error', () => img.replaceWith(thumb('', alt)));
+  return img;
+}
+
+/* \u2500\u2500 missions \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */
+
+function missionCard(m) {
+  const card = el('div', 'card' + (m.enabled ? '' : ' off'));
   const row = el('div', 'row');
+  row.appendChild(thumb(m.imageUrl, m.productName));
 
   const left = el('div', 'grow');
-  const name = el('div', 'name', w.productName);
-  left.appendChild(name);
+  left.appendChild(el('div', 'name', m.productName));
 
   const meta = el('div', 'meta');
-  meta.append(w.retailer + ' \xB7 ' + (w.externalId || '\u2014'));
-  if (w.url) {
-    meta.append(' \xB7 ');
-    const a = el('a', null, 'open');
-    a.href = w.url; a.target = '_blank'; a.rel = 'noreferrer';
-    meta.appendChild(a);
-  }
+  meta.append(m.retailer + ' \xB7 ' + (m.externalId || '\u2014') + ' \xB7 ');
+  const a = el('a', null, 'open');
+  a.href = m.url; a.target = '_blank'; a.rel = 'noreferrer';
+  meta.appendChild(a);
   left.appendChild(meta);
 
   const flags = el('div', 'meta');
   flags.style.marginTop = '6px';
+  const label = m.state === 'in' ? 'IN STOCK'
+    : m.state === 'out' ? 'out of stock'
+    : m.state === 'unchecked' ? 'never checked' : m.state;
+  flags.appendChild(el('span', 'pill s-' + m.state, label));
 
-  const pill = el('span', 'pill s-' + w.state,
-    w.state === 'in' ? 'IN STOCK' :
-    w.state === 'out' ? 'out of stock' :
-    w.state === 'unchecked' ? 'never checked' : w.state);
-  flags.appendChild(pill);
-
-  // A marketplace seller at any price is not a restock at retail. This is the
-  // Walmart trap made visible rather than left in a note nobody reads.
-  if (w.sellerKind === 'marketplace') {
+  if (!m.enabled) { flags.append(' '); flags.appendChild(el('span', 'pill s-out', 'paused')); }
+  if (m.armed) {
     flags.append(' ');
-    const s = el('span', 'pill flag', 'marketplace: ' + (w.sellerName || 'third party'));
-    flags.appendChild(s);
+    flags.appendChild(el('span', 'pill armed', 'ARMED \xB7 ' + m.quantity + ' @ ' + money(m.ceiling)));
   }
-  if (w.confidence !== 'exact' && w.state !== 'unchecked') {
+  // The Walmart trap, made visible rather than buried in a note nobody reads.
+  if (m.sellerKind === 'marketplace') {
     flags.append(' ');
-    flags.appendChild(el('span', 'pill s-unknown', w.confidence + ' read'));
+    flags.appendChild(el('span', 'pill flag', 'marketplace: ' + (m.sellerName || 'third party')));
   }
-  if (w.isPreOrder) {
+  if (m.confidence !== 'exact' && m.state !== 'unchecked') {
+    flags.append(' ');
+    flags.appendChild(el('span', 'pill s-unknown', m.confidence + ' read'));
+  }
+  if (m.isPreOrder) {
     flags.append(' ');
     flags.appendChild(el('span', 'pill s-queue',
-      'preorder' + (w.releaseDate ? ' \xB7 ' + w.releaseDate : '')));
+      'preorder' + (m.releaseDate ? ' \xB7 ' + m.releaseDate : '')));
   }
   left.appendChild(flags);
-
-  if (w.note) {
-    const note = el('div', 'meta', w.note);
+  if (m.note) {
+    const note = el('div', 'meta', m.note);
     note.style.marginTop = '6px';
     left.appendChild(note);
   }
 
   const right = el('div');
   right.style.textAlign = 'right';
-  right.appendChild(el('div', 'price', money(w.price)));
-
-  const checked = el('div', 'meta');
-  const stale = w.lastCheckedAt && (Date.now() - new Date(w.lastCheckedAt).getTime()) > STALE_MS;
-  checked.textContent = 'checked ' + ago(w.lastCheckedAt);
-  if (stale || !w.lastCheckedAt) checked.className = 'meta stale';
+  right.appendChild(el('div', 'price', money(m.price)));
+  const stale = m.lastCheckedAt && (Date.now() - new Date(m.lastCheckedAt).getTime()) > STALE_MS;
+  const checked = el('div', (stale || !m.lastCheckedAt) ? 'meta stale' : 'meta',
+    'checked ' + ago(m.lastCheckedAt));
   right.appendChild(checked);
+  if (m.state === 'in' && m.lastChangedAt) {
+    right.appendChild(el('div', 'meta', 'since ' + ago(m.lastChangedAt)));
+  }
+  if (m.availableQuantity !== null && m.availableQuantity !== undefined) {
+    right.appendChild(el('div', 'meta', m.availableQuantity + ' available'));
+  }
 
-  if (w.state === 'in' && w.lastChangedAt) {
-    right.appendChild(el('div', 'meta', 'since ' + ago(w.lastChangedAt)));
+  row.append(left, right);
+  card.appendChild(row);
+  card.appendChild(missionControls(m));
+  return card;
+}
+
+function missionControls(m) {
+  const wrap = el('details');
+  wrap.style.marginTop = '10px';
+  wrap.appendChild(el('summary', null, 'Settings and history'));
+
+  const form = el('form', 'stack');
+  form.style.marginTop = '10px';
+  form.innerHTML = \`
+    <div class="inline">
+      <label class="f">Price ceiling
+        <input type="number" name="ceiling" step="0.01" min="0.01" placeholder="none">
+      </label>
+      <label class="f">Quantity
+        <input type="number" name="quantity" min="1" max="20" value="1">
+      </label>
+      <label class="f">Check every
+        <select name="checkEverySeconds">
+          <option value="30">30 seconds</option>
+          <option value="60">1 minute</option>
+          <option value="300">5 minutes</option>
+          <option value="1800">30 minutes</option>
+          <option value="3600">1 hour</option>
+        </select>
+      </label>
+      <label class="f">Sellers
+        <select name="sellerPolicy">
+          <option value="retailer_only">The retailer only</option>
+          <option value="any">Any seller, under the ceiling</option>
+        </select>
+      </label>
+    </div>
+    <div class="inline">
+      <label class="f" style="flex:0 0 auto">
+        <span><input type="checkbox" name="enabled"> Watching</span>
+      </label>
+      <label class="f" style="flex:0 0 auto">
+        <span><input type="checkbox" name="armed"> Armed \u2014 may buy</span>
+      </label>
+      <span class="grow"></span>
+      <button type="submit">Save</button>
+      <button type="button" class="danger" data-del="\${m.id}">Delete</button>
+    </div>
+    <span class="msg" id="m-msg-\${m.id}"></span>\`;
+
+  form.ceiling.value = m.ceiling ?? '';
+  form.quantity.value = m.quantity;
+  form.checkEverySeconds.value = String(m.checkEverySeconds);
+  form.sellerPolicy.value = m.sellerPolicy;
+  form.enabled.checked = m.enabled;
+  form.armed.checked = m.armed;
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+      await api('POST', '/api/missions', {
+        listingId: m.listingId,
+        label: m.label,
+        enabled: form.enabled.checked,
+        armed: form.armed.checked,
+        ceiling: form.ceiling.value === '' ? null : Number(form.ceiling.value),
+        quantity: Number(form.quantity.value),
+        sellerPolicy: form.sellerPolicy.value,
+        checkEverySeconds: Number(form.checkEverySeconds.value),
+      });
+      say('m-msg-' + m.id, 'saved', true);
+      load();
+    } catch (err) {
+      say('m-msg-' + m.id, err.message, false);
+    }
+  });
+
+  form.querySelector('[data-del]').addEventListener('click', async () => {
+    if (!confirm('Delete this mission? The product and its listing stay.')) return;
+    try {
+      await api('DELETE', '/api/missions/' + m.id);
+      load();
+    } catch (err) { say('m-msg-' + m.id, err.message, false); }
+  });
+
+  wrap.appendChild(form);
+
+  const runs = el('div');
+  runs.style.marginTop = '10px';
+  const btn = el('button', null, 'Show this mission\u2019s runs');
+  btn.addEventListener('click', async () => {
+    btn.remove();
+    try {
+      const data = await api('GET', '/api/missions/' + m.id + '/runs');
+      runs.appendChild(runTable(data.runs, 'This mission has not run yet.'));
+    } catch (err) {
+      runs.appendChild(el('div', 'msg bad', err.message));
+    }
+  });
+  runs.appendChild(btn);
+  wrap.appendChild(runs);
+  return wrap;
+}
+
+function runTable(runs, emptyText) {
+  const table = el('table', 'runs');
+  const body = el('tbody');
+  if (!runs.length) {
+    const tr = el('tr');
+    const td = el('td', 'meta', emptyText);
+    td.colSpan = 5; tr.appendChild(td); body.appendChild(tr);
   }
-  if (w.availableQuantity !== null && w.availableQuantity !== undefined) {
-    right.appendChild(el('div', 'meta', w.availableQuantity + ' available'));
+  for (const r of runs) {
+    const tr = el('tr');
+    tr.appendChild(el('td', 'meta', ago(r.startedAt)));
+    tr.appendChild(el('td', null, r.productName));
+    tr.appendChild(el('td', 'o-' + r.outcome, r.outcome));
+    // Every non-success carries a reason. Showing it here is the whole point
+    // of recording it.
+    tr.appendChild(el('td', 'meta', r.reason || ''));
+    const right = el('td', 'meta',
+      [r.price !== null ? money(r.price) : '', r.ms !== null ? r.ms + 'ms' : '']
+        .filter(Boolean).join(' \xB7 '));
+    right.style.textAlign = 'right';
+    tr.appendChild(right);
+    body.appendChild(tr);
   }
+  table.appendChild(body);
+  return table;
+}
+
+/* \u2500\u2500 products \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */
+
+function productCard(p) {
+  const card = el('div', 'card');
+  const row = el('div', 'row');
+  row.appendChild(thumb(p.imageUrl, p.name));
+
+  const left = el('div', 'grow');
+  left.appendChild(el('div', 'name', p.name));
+  const meta = el('div', 'meta',
+    p.releaseDate ? 'releases ' + p.releaseDate : 'no release date set');
+  left.appendChild(meta);
+
+  const mine = DATA.listings.filter((l) => l.productKey === p.key);
+  const list = el('div', 'meta');
+  list.style.marginTop = '6px';
+  if (!mine.length) {
+    list.textContent = 'No listings yet \u2014 paste a product URL below.';
+  } else {
+    for (const l of mine) {
+      const line = el('div');
+      line.append(l.retailer + ' \xB7 ' + l.externalId + ' ');
+      const del = el('button', 'danger');
+      del.textContent = 'remove';
+      del.style.padding = '0 6px';
+      del.style.fontSize = '12px';
+      del.addEventListener('click', async () => {
+        if (!confirm('Remove this listing? Its mission and history go with it.')) return;
+        try { await api('DELETE', '/api/listings/' + l.id); load(); }
+        catch (err) { say('p-msg-' + p.key, err.message, false); }
+      });
+      line.appendChild(del);
+      list.appendChild(line);
+    }
+  }
+  left.appendChild(list);
+
+  const form = el('form', 'inline');
+  form.style.marginTop = '8px';
+  form.innerHTML = \`
+    <input type="url" name="url" required placeholder="Paste a Target / Pok\xE9mon Center / Walmart product URL">
+    <button type="submit">Add listing</button>\`;
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+      const { listing } = await api('POST', '/api/listings',
+        { productKey: p.key, url: form.url.value });
+      // A listing with no mission is a thing you meant to watch and didn't.
+      await api('POST', '/api/missions', { listingId: listing.id, label: p.name, enabled: true });
+      form.reset();
+      say('p-msg-' + p.key, 'added ' + listing.retailer + ' ' + listing.externalId, true);
+      load();
+    } catch (err) { say('p-msg-' + p.key, err.message, false); }
+  });
+  left.appendChild(form);
+  left.appendChild(Object.assign(el('span', 'msg'), { id: 'p-msg-' + p.key }));
+
+  const right = el('div');
+  right.style.textAlign = 'right';
+  const del = el('button', 'danger', 'Delete product');
+  del.addEventListener('click', async () => {
+    if (!confirm('Delete "' + p.name + '"? Every listing, mission and run for it goes too.')) return;
+    try { await api('DELETE', '/api/products/' + encodeURIComponent(p.key)); load(); }
+    catch (err) { say('p-msg-' + p.key, err.message, false); }
+  });
+  right.appendChild(del);
 
   row.append(left, right);
   card.appendChild(row);
   return card;
 }
 
-async function load() {
-  let data;
-  try {
-    const res = await fetch('/api/dashboard', { headers: { 'Accept': 'application/json' } });
-    if (res.status === 401) { location.href = '/login'; return; }
-    data = await res.json();
-  } catch (err) {
-    document.getElementById('summary').textContent = 'could not reach the hub';
-    return;
+/* \u2500\u2500 wiring \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */
+
+function render() {
+  const missions = document.getElementById('missions');
+  missions.textContent = '';
+  if (!DATA.missions.length) {
+    missions.appendChild(el('div', 'empty',
+      'No missions yet. Add a product, paste a listing URL, and one is created for you.'));
   }
+  for (const m of DATA.missions) missions.appendChild(missionCard(m));
 
-  const list = document.getElementById('watches');
-  list.textContent = '';
+  const products = document.getElementById('products');
+  products.textContent = '';
+  for (const p of DATA.products) products.appendChild(productCard(p));
 
-  if (!data.watches.length) {
-    list.appendChild(el('div', 'empty', 'Nothing is being watched yet. Run the seed.'));
-  } else {
-    for (const w of data.watches) list.appendChild(watchCard(w));
-  }
-
-  const inStock = data.watches.filter((w) => w.state === 'in').length;
-  const never = data.watches.filter((w) => w.state === 'unchecked').length;
-  const parts = [data.watches.length + ' watched'];
+  const inStock = DATA.missions.filter((m) => m.state === 'in').length;
+  const armed = DATA.missions.filter((m) => m.armed).length;
+  const never = DATA.missions.filter((m) => m.state === 'unchecked').length;
+  const parts = [DATA.missions.length + ' missions'];
   if (inStock) parts.push(inStock + ' in stock');
+  if (armed) parts.push(armed + ' armed');
   if (never) parts.push(never + ' never checked');
   document.getElementById('summary').textContent = parts.join(' \xB7 ');
 
+  const runs = document.getElementById('runs');
+  runs.replaceWith(Object.assign(runTable(DATA.runs, 'Nothing has run yet.'), { id: 'runs' }));
+
   const feed = document.querySelector('#feed tbody');
   feed.textContent = '';
-  if (!data.recent.length) {
-    const tr = document.createElement('tr');
+  if (!DATA.changes.length) {
+    const tr = el('tr');
     const td = el('td', 'meta', 'Nothing has changed yet.');
     td.colSpan = 4; tr.appendChild(td); feed.appendChild(tr);
   }
-  for (const o of data.recent) {
-    const tr = document.createElement('tr');
+  for (const o of DATA.changes) {
+    const tr = el('tr');
     tr.appendChild(el('td', 'meta', ago(o.at)));
     tr.appendChild(el('td', null, o.productName));
     tr.appendChild(el('td', 'meta', o.retailer));
@@ -1040,6 +1603,37 @@ async function load() {
     tr.appendChild(td);
     feed.appendChild(tr);
   }
+}
+
+async function load() {
+  try {
+    DATA = await api('GET', '/api/dashboard');
+  } catch (err) {
+    document.getElementById('summary').textContent = err.message;
+    return;
+  }
+  render();
+}
+
+document.getElementById('product-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  try {
+    await api('POST', '/api/products',
+      { name: f.name.value, releaseDate: f.releaseDate.value || null });
+    f.reset();
+    say('product-msg', 'added \u2014 now give it a listing URL below', true);
+    load();
+  } catch (err) { say('product-msg', err.message, false); }
+});
+
+for (const tab of document.querySelectorAll('.tab')) {
+  tab.addEventListener('click', () => {
+    for (const t of document.querySelectorAll('.tab')) t.classList.toggle('on', t === tab);
+    for (const name of ['missions', 'products', 'activity']) {
+      document.getElementById('tab-' + name).hidden = name !== tab.dataset.tab;
+    }
+  });
 }
 
 document.getElementById('refresh').addEventListener('click', load);
@@ -1138,45 +1732,122 @@ function createHandler(db2, env2) {
       return html(dashboardPage());
     }
     if (request.method === "GET" && path === "/api/dashboard") {
-      const [watches, recent] = await Promise.all([
-        dashboard(db2),
-        recentObservations(db2, 40)
+      const [missions, runs, changes, products, listings] = await Promise.all([
+        listMissions(db2),
+        recentRuns(db2, 40),
+        recentObservations(db2, 40),
+        listProducts(db2),
+        listListings(db2)
       ]);
-      return json({ watches, recent, now });
+      return json({ missions, runs, changes, products, listings, now });
+    }
+    if (request.method === "GET" && path.startsWith("/api/missions/") && path.endsWith("/runs")) {
+      const id = Number(path.split("/")[3]);
+      if (!Number.isInteger(id)) return json({ error: "bad mission id" }, 400);
+      const mission = await getMission(db2, id);
+      if (!mission) return json({ error: "no such mission" }, 404);
+      return json({ mission, runs: await missionRuns(db2, id, 200) });
+    }
+    const body = async () => await request.json().catch(() => null);
+    if (request.method === "POST" && path === "/api/products") {
+      const b = await body();
+      if (!b?.name?.trim()) return json({ error: "a product needs a name" }, 400);
+      return json({ product: await upsertProduct(db2, { name: b.name, releaseDate: b.releaseDate || null, notes: b.notes }) });
+    }
+    if (request.method === "DELETE" && path.startsWith("/api/products/")) {
+      const key = decodeURIComponent(path.slice("/api/products/".length));
+      if (!key) return json({ error: "no product key" }, 400);
+      await deleteProduct(db2, key);
+      return json({ deleted: key });
+    }
+    if (request.method === "POST" && path === "/api/listings") {
+      const b = await body();
+      if (!b?.productKey || !b?.url) return json({ error: "need a product and a URL" }, 400);
+      const parsed = identifyListing(b.url);
+      if (!parsed) {
+        return json(
+          {
+            error: "could not read a retailer and product id out of that URL. Expected a target.com/p/\u2026/A-123, pokemoncenter.com/product/100-123/\u2026 or walmart.com/ip/\u2026/123 link."
+          },
+          400
+        );
+      }
+      const listing = await addListing(db2, {
+        productKey: b.productKey,
+        retailer: parsed.retailer,
+        externalId: parsed.externalId,
+        url: b.url.trim()
+      });
+      return json({ listing });
+    }
+    if (request.method === "DELETE" && path.startsWith("/api/listings/")) {
+      const id = Number(path.slice("/api/listings/".length));
+      if (!Number.isInteger(id)) return json({ error: "bad listing id" }, 400);
+      await deleteListing(db2, id);
+      return json({ deleted: id });
+    }
+    if (request.method === "POST" && path === "/api/missions") {
+      const b = await body();
+      if (!b) return json({ error: "body must be JSON" }, 400);
+      try {
+        return json({ mission: await upsertMission(db2, b) });
+      } catch (err) {
+        return json({ error: err.message }, 400);
+      }
+    }
+    if (request.method === "DELETE" && path.startsWith("/api/missions/")) {
+      const id = Number(path.slice("/api/missions/".length));
+      if (!Number.isInteger(id)) return json({ error: "bad mission id" }, 400);
+      await deleteMission(db2, id);
+      return json({ deleted: id });
+    }
+    if (request.method === "GET" && path === "/api/missions/active") {
+      return json({ missions: await activeMissions(db2) });
+    }
+    if (request.method === "POST" && path === "/api/runs") {
+      const b = await body();
+      if (!b?.missionId || !b?.outcome || b.outcome === "running") {
+        return json({ error: "need missionId and a settled outcome" }, 400);
+      }
+      const id = await recordRun(db2, b.missionId, {
+        outcome: b.outcome,
+        reason: b.reason,
+        state: b.state,
+        price: b.price,
+        sellerKind: b.sellerKind,
+        sellerName: b.sellerName,
+        quantity: b.quantity,
+        total: b.total
+      });
+      return json({ run: id });
     }
     if (request.method === "POST" && path === "/observations") {
-      let body;
+      let body2;
       try {
-        body = await request.json();
+        body2 = await request.json();
       } catch {
         return json({ error: "body must be JSON" }, 400);
       }
-      if (!Array.isArray(body.observations)) {
+      if (!Array.isArray(body2.observations)) {
         return json({ error: "need observations[]" }, 400);
       }
       const results = [];
       const changes = [];
-      for (const obs of body.observations) {
-        if (!obs?.productKey || !obs?.retailer || !obs?.state) {
+      for (const obs of body2.observations) {
+        if (!obs?.listingId || !obs?.state) {
           results.push({
-            productKey: obs?.productKey ?? "",
-            retailer: obs?.retailer ?? "",
+            listingId: obs?.listingId ?? 0,
             changed: false,
-            error: "need productKey, retailer and state"
+            error: "need listingId and state"
           });
           continue;
         }
         try {
           const outcome = await recordObservation(db2, obs);
-          results.push({ productKey: obs.productKey, retailer: obs.retailer, changed: outcome.changed });
+          results.push({ listingId: obs.listingId, changed: outcome.changed });
           if (outcome.changed) changes.push({ obs, was: outcome.previousState });
         } catch (err) {
-          results.push({
-            productKey: obs.productKey,
-            retailer: obs.retailer,
-            changed: false,
-            error: err.message
-          });
+          results.push({ listingId: obs.listingId, changed: false, error: err.message });
         }
       }
       const cameIntoStock = changes.filter((c) => c.obs.state === "in" && c.was !== "in");
@@ -1184,11 +1855,11 @@ function createHandler(db2, env2) {
         await announce(
           env2.DISCORD_WEBHOOK_URL,
           "In stock",
-          cameIntoStock[0].obs.retailer,
+          "",
           cameIntoStock.map((c) => ({
-            externalId: c.obs.externalId ?? c.obs.productKey,
-            name: c.obs.productKey,
-            url: c.obs.url ?? "",
+            externalId: String(c.obs.listingId),
+            name: c.obs.note || `listing ${c.obs.listingId}`,
+            url: "",
             price: c.obs.price ?? null
           })),
           now
@@ -1223,14 +1894,14 @@ function createHandler(db2, env2) {
       });
     }
     if (request.method === "POST" && path === "/ingest") {
-      let body;
+      let body2;
       try {
-        body = await request.json();
+        body2 = await request.json();
       } catch {
         return json({ error: "body must be JSON" }, 400);
       }
-      const sourceId = (body.sourceId ?? "").trim();
-      if (!sourceId || !Array.isArray(body.items)) {
+      const sourceId = (body2.sourceId ?? "").trim();
+      if (!sourceId || !Array.isArray(body2.items)) {
         return json({ error: "need sourceId and items[]" }, 400);
       }
       const source = await getSource(db2, sourceId);
@@ -1238,7 +1909,7 @@ function createHandler(db2, env2) {
       const config = source.config;
       const clean = dedupe(
         applyFilters(
-          body.items.filter((i) => i && typeof i.externalId === "string" && i.externalId),
+          body2.items.filter((i) => i && typeof i.externalId === "string" && i.externalId),
           config.filters
         )
       );
@@ -1257,13 +1928,7 @@ function createHandler(db2, env2) {
         true
       );
       if (toAnnounce.length > 0) {
-        await announce(
-          env2.DISCORD_WEBHOOK_URL,
-          source.label,
-          source.retailer,
-          toAnnounce,
-          now
-        );
+        await announce(env2.DISCORD_WEBHOOK_URL, source.label, source.retailer, toAnnounce, now);
         await markAnnounced(
           db2,
           sourceId,

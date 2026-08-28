@@ -29,6 +29,7 @@ import { applyFilters, dedupe } from './filter.ts';
 import { probeUrl } from './fetcher.ts';
 import { identify, mintSession, safeEqual, sessionCookie, clearCookie } from './auth.ts';
 import { loginPage, dashboardPage } from './page.ts';
+import { identifyListing } from './parsers/identify.ts';
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body, null, 2), {
@@ -140,18 +141,143 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
 
     /** Everything the page renders, in one request. */
     if (request.method === 'GET' && path === '/api/dashboard') {
-      const [watches, recent] = await Promise.all([
-        store.dashboard(db),
+      const [missions, runs, changes, products, listings] = await Promise.all([
+        store.listMissions(db),
+        store.recentRuns(db, 40),
         store.recentObservations(db, 40),
+        store.listProducts(db),
+        store.listListings(db),
       ]);
-      return json({ watches, recent, now });
+      return json({ missions, runs, changes, products, listings, now });
+    }
+
+    /** A single mission's whole run history. */
+    if (request.method === 'GET' && path.startsWith('/api/missions/') && path.endsWith('/runs')) {
+      const id = Number(path.split('/')[3]);
+      if (!Number.isInteger(id)) return json({ error: 'bad mission id' }, 400);
+      const mission = await store.getMission(db, id);
+      if (!mission) return json({ error: 'no such mission' }, 404);
+      return json({ mission, runs: await store.missionRuns(db, id, 200) });
+    }
+
+    // ── Managing what is watched ─────────────────────────────────────────────
+    //
+    // Everything below is a plain JSON verb the page calls. Deliberately not
+    // REST-pure: one endpoint per thing a person actually does, so the failure
+    // messages can say what went wrong in words rather than in status codes.
+
+    const body = async <T>(): Promise<T | null> =>
+      (await request.json().catch(() => null)) as T | null;
+
+    if (request.method === 'POST' && path === '/api/products') {
+      const b = await body<{ name?: string; releaseDate?: string; notes?: string }>();
+      if (!b?.name?.trim()) return json({ error: 'a product needs a name' }, 400);
+      return json({ product: await store.upsertProduct(db, { name: b.name, releaseDate: b.releaseDate || null, notes: b.notes }) });
+    }
+
+    if (request.method === 'DELETE' && path.startsWith('/api/products/')) {
+      const key = decodeURIComponent(path.slice('/api/products/'.length));
+      if (!key) return json({ error: 'no product key' }, 400);
+      await store.deleteProduct(db, key);
+      return json({ deleted: key });
+    }
+
+    /**
+     * Add a listing, working out the retailer and its id from the URL.
+     *
+     * The person pastes a product URL; asking them to also type the retailer
+     * and the SKU is asking them to repeat what the URL already says, and to
+     * get it wrong occasionally.
+     */
+    if (request.method === 'POST' && path === '/api/listings') {
+      const b = await body<{ productKey?: string; url?: string }>();
+      if (!b?.productKey || !b?.url) return json({ error: 'need a product and a URL' }, 400);
+
+      const parsed = identifyListing(b.url);
+      if (!parsed) {
+        return json(
+          {
+            error:
+              'could not read a retailer and product id out of that URL. Expected a ' +
+              'target.com/p/…/A-123, pokemoncenter.com/product/100-123/… or ' +
+              'walmart.com/ip/…/123 link.',
+          },
+          400,
+        );
+      }
+      const listing = await store.addListing(db, {
+        productKey: b.productKey,
+        retailer: parsed.retailer,
+        externalId: parsed.externalId,
+        url: b.url.trim(),
+      });
+      return json({ listing });
+    }
+
+    if (request.method === 'DELETE' && path.startsWith('/api/listings/')) {
+      const id = Number(path.slice('/api/listings/'.length));
+      if (!Number.isInteger(id)) return json({ error: 'bad listing id' }, 400);
+      await store.deleteListing(db, id);
+      return json({ deleted: id });
+    }
+
+    if (request.method === 'POST' && path === '/api/missions') {
+      const b = await body<store.MissionInput>();
+      if (!b) return json({ error: 'body must be JSON' }, 400);
+      try {
+        return json({ mission: await store.upsertMission(db, b) });
+      } catch (err) {
+        // validateMission speaks in sentences, so pass it straight through.
+        return json({ error: (err as Error).message }, 400);
+      }
+    }
+
+    if (request.method === 'DELETE' && path.startsWith('/api/missions/')) {
+      const id = Number(path.slice('/api/missions/'.length));
+      if (!Number.isInteger(id)) return json({ error: 'bad mission id' }, 400);
+      await store.deleteMission(db, id);
+      return json({ deleted: id });
+    }
+
+    /** What the Watcher polls: enabled missions, with their mandate attached. */
+    if (request.method === 'GET' && path === '/api/missions/active') {
+      return json({ missions: await store.activeMissions(db) });
+    }
+
+    /** The Watcher reporting a run it has already finished. */
+    if (request.method === 'POST' && path === '/api/runs') {
+      const b = await body<{
+        missionId?: number;
+        outcome?: store.RunOutcome;
+        reason?: string;
+        state?: string;
+        price?: number | null;
+        sellerKind?: string;
+        sellerName?: string;
+        quantity?: number | null;
+        total?: number | null;
+      }>();
+      if (!b?.missionId || !b?.outcome || b.outcome === 'running') {
+        return json({ error: 'need missionId and a settled outcome' }, 400);
+      }
+      const id = await store.recordRun(db, b.missionId, {
+        outcome: b.outcome,
+        reason: b.reason,
+        state: b.state,
+        price: b.price,
+        sellerKind: b.sellerKind,
+        sellerName: b.sellerName,
+        quantity: b.quantity,
+        total: b.total,
+      });
+      return json({ run: id });
     }
 
     /**
      * The Watcher reporting what it saw.
      *
      * Accepts a batch, and answers per-item rather than all-or-nothing: one
-     * unreadable product must not throw away the other eleven readings in the
+     * unreadable listing must not throw away the other eleven readings in the
      * same run.
      */
     if (request.method === 'POST' && path === '/observations') {
@@ -165,31 +291,24 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
         return json({ error: 'need observations[]' }, 400);
       }
 
-      const results: { productKey: string; retailer: string; changed: boolean; error?: string }[] =
-        [];
+      const results: { listingId: number; changed: boolean; error?: string }[] = [];
       const changes: { obs: store.ObservationIn; was: string | null }[] = [];
 
       for (const obs of body.observations) {
-        if (!obs?.productKey || !obs?.retailer || !obs?.state) {
+        if (!obs?.listingId || !obs?.state) {
           results.push({
-            productKey: obs?.productKey ?? '',
-            retailer: obs?.retailer ?? '',
+            listingId: obs?.listingId ?? 0,
             changed: false,
-            error: 'need productKey, retailer and state',
+            error: 'need listingId and state',
           });
           continue;
         }
         try {
           const outcome = await store.recordObservation(db, obs);
-          results.push({ productKey: obs.productKey, retailer: obs.retailer, changed: outcome.changed });
+          results.push({ listingId: obs.listingId, changed: outcome.changed });
           if (outcome.changed) changes.push({ obs, was: outcome.previousState });
         } catch (err) {
-          results.push({
-            productKey: obs.productKey,
-            retailer: obs.retailer,
-            changed: false,
-            error: (err as Error).message,
-          });
+          results.push({ listingId: obs.listingId, changed: false, error: (err as Error).message });
         }
       }
 
@@ -200,11 +319,11 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
         await announce(
           env.DISCORD_WEBHOOK_URL,
           'In stock',
-          cameIntoStock[0]!.obs.retailer,
+          '',
           cameIntoStock.map((c) => ({
-            externalId: c.obs.externalId ?? c.obs.productKey,
-            name: c.obs.productKey,
-            url: c.obs.url ?? '',
+            externalId: String(c.obs.listingId),
+            name: c.obs.note || `listing ${c.obs.listingId}`,
+            url: '',
             price: c.obs.price ?? null,
           })),
           now,
@@ -243,10 +362,14 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
     }
 
     /**
-     * Watcher ingest. The extension posts what it saw on a site the Hub can't
-     * reach. Identical downstream handling: diff, seed-or-announce, identity.
+     * Watcher ingest — the *discovery* path, not the watching one.
      *
-     * { "sourceId": "pc-newreleases", "items": [{ externalId, name, url, price }] }
+     * The Watcher posts what it saw on a category page the Hub cannot reach.
+     * Identical downstream handling to a sweep: diff, seed-or-announce, mint
+     * identity. This is how a SKU nobody has seen before becomes a product you
+     * can then point a mission at.
+     *
+     * { "sourceId": "target-tcg", "items": [{ externalId, name, url, price }] }
      */
     if (request.method === 'POST' && path === '/ingest') {
       let body: { sourceId?: string; items?: Discovered[] };
@@ -287,13 +410,7 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       );
 
       if (toAnnounce.length > 0) {
-        await announce(
-          env.DISCORD_WEBHOOK_URL,
-          source.label,
-          source.retailer,
-          toAnnounce,
-          now,
-        );
+        await announce(env.DISCORD_WEBHOOK_URL, source.label, source.retailer, toAnnounce, now);
         await store.markAnnounced(
           db,
           sourceId,
@@ -308,6 +425,7 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
         seeded: isFirstSweep,
       });
     }
+
 
     /**
      * Reachability check. The single most useful thing to run after deploying:

@@ -45,16 +45,41 @@ test('every source is via the Watcher — no datacentre fetches all three 403', 
 test('the watchlist is not empty on day one', async () => {
   const db = await seeded();
   const watches = await store.watchlist(db);
-  assert.equal(watches.length, 3, 'one known-good product per retailer');
+  assert.equal(watches.length, 3, 'one known-good listing per retailer');
 
   for (const w of watches) {
     assert.ok(w.url, `${w.productKey} has no URL, so nothing can poll it`);
     assert.match(w.url, /^https:\/\//);
     assert.ok(w.externalId, `${w.productKey} has no retailer id`);
+    assert.ok(w.listingId > 0, `${w.productKey} has no listing to report against`);
   }
 
   const retailers = watches.map((w) => w.retailer).sort();
   assert.deepEqual(retailers, ['Pokemon Center', 'Target', 'Walmart']);
+});
+
+test('TARGET ONLY on the first run — one retailer is one failure mode', async () => {
+  // Three at once means three ways to be wrong about which thing broke. The
+  // other two readers are written and tested; their missions are one toggle
+  // away in the app.
+  const db = await seeded();
+  const missions = await store.listMissions(db);
+  assert.equal(missions.length, 3, 'all three exist');
+
+  const on = missions.filter((m) => m.enabled);
+  assert.equal(on.length, 1);
+  assert.equal(on[0]!.retailer, 'Target');
+
+  const active = await store.activeMissions(db);
+  assert.equal(active.length, 1, 'and only Target is polled');
+});
+
+test('the seed arms nothing — spending is never a side effect of setup', async () => {
+  const db = await seeded();
+  for (const m of await store.listMissions(db)) {
+    assert.equal(m.armed, false, `${m.retailer} was armed by a seed file`);
+    assert.equal(m.ceiling, null);
+  }
 });
 
 test('seeding announces nothing — three alerts on first run would be noise', async () => {

@@ -122,10 +122,52 @@ egress, which sources are fetchable — and every retailer that comes back
 `BLOCKED` belongs to the Watcher. Right now that is all of them, which is why
 `seed.sql` puts every source on `via = 'watcher'`.
 
+## Products, listings, missions
+
+Three things, and the distinction between them is the design:
+
+- **product** — the thing itself. "Pitch Black Elite Trainer Box."
+- **listing** — somewhere you can buy it: a retailer, its id, a URL. A product
+  has many listings, **including several at the same retailer**. Walmart puts
+  every seller's offer on one item page; Target's third-party sellers appear to
+  get their own item id. Today each product has one listing per retailer, and a
+  second one is an INSERT rather than a migration.
+- **mission** — a listing plus what you have authorised: enabled, armed,
+  ceiling, quantity, seller policy, how often to check.
+
+**One mission per listing, enforced by the schema.** Two armed missions pointing
+at the same listing is two purchases of the same item.
+
+**A mission cannot arm without a ceiling.** `armed` with no ceiling is an open
+cheque; it is refused where a person sets it, not only where the Watcher reads
+it.
+
+**Seller policy defaults to `retailer_only`.** The point of this is buying at
+retail before the resellers do. An IN_STOCK marketplace listing at 1.5× MSRP is
+the thing you are racing, not the thing you want.
+
+Paste a product URL and the retailer and id are read out of it. Category URLs
+are refused — Target's `A-` is an item and `N-` is a category, and a mission
+pointed at a category polls a page with no product on it forever.
+
+## Mission runs
+
+**Not one row per poll.** A run is written when a mission *did something or
+could not*: stock appeared and it acted, or a check failed. Routine "still out
+of stock" is not a run, or the four rows that matter drown under ten thousand
+that don't.
+
+Outcomes: `in_stock`, `bought`, `declined`, `failed`, `blocked` — and every one
+that isn't a plain success carries a **reason in words**, filled in with a
+placeholder if the caller forgets. A run marked `failed` with an empty reason is
+the log line you find at 3am and learn nothing from.
+
+Each run records its duration, so detection-to-order time is measured rather
+than estimated.
+
 ## Two tables for what the Watcher sees
 
-`watch_state` holds one row per (product, retailer) and is **upserted on every
-check**, so the page can always say how stale a reading is. A dashboard that
+`watch_state` holds one row per **listing** and is **upserted on every check**, so the page can always say how stale a reading is. A dashboard that
 cannot tell you it is out of date is worse than no dashboard.
 
 `observations` is append-only history and is written **only when something
@@ -164,7 +206,7 @@ looked at — Supabase gives you a table editor, so use it.
 npm test
 ```
 
-73 tests, running against **real Postgres** — PGlite, compiled to WebAssembly,
+98 tests, running against **real Postgres** — PGlite, compiled to WebAssembly,
 in the test process. The previous version tested SQL against SQLite, which
 agrees with Postgres right up until it doesn't:
 

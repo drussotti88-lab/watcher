@@ -26,19 +26,40 @@ const env: Env = {
   APP_PASSWORD: PASSWORD,
 };
 
-async function setup(): Promise<TestDb> {
+interface Fixture {
+  db: TestDb;
+  etb: number;
+  tin: number;
+  etbMission: number;
+  tinMission: number;
+}
+
+async function setup(): Promise<Fixture> {
   const db = await TestDb.create();
   await db.query(
     `INSERT INTO products (key, name) VALUES
        ('prd_etb', 'Mega Evolution Elite Trainer Box'),
        ('prd_tin', 'Ascended Heroes Tin')`,
   );
-  await db.query(
-    `INSERT INTO aliases (product_key, kind, retailer, value) VALUES
-       ('prd_etb', 'retailer_sku', 'Walmart', '19988614228'),
-       ('prd_tin', 'retailer_sku', 'Target', '1012644666')`,
+  const listings = await db.query<{ id: number; product_key: string }>(
+    `INSERT INTO listings (product_key, retailer, external_id, url) VALUES
+       ('prd_etb', 'Walmart', '19988614228', 'https://www.walmart.com/ip/x/19988614228'),
+       ('prd_tin', 'Target', '1012644666', 'https://www.target.com/p/-/A-1012644666')
+     RETURNING id, product_key`,
   );
-  return db;
+  const etb = Number(listings.find((l) => l.product_key === 'prd_etb')!.id);
+  const tin = Number(listings.find((l) => l.product_key === 'prd_tin')!.id);
+  const missions = await db.query<{ id: number; listing_id: number }>(
+    `INSERT INTO missions (listing_id) VALUES ($1), ($2) RETURNING id, listing_id`,
+    [etb, tin],
+  );
+  return {
+    db,
+    etb,
+    tin,
+    etbMission: Number(missions.find((m) => Number(m.listing_id) === etb)!.id),
+    tinMission: Number(missions.find((m) => Number(m.listing_id) === tin)!.id),
+  };
 }
 
 const call = async (
@@ -80,20 +101,20 @@ const call = async (
 // ── Getting in ───────────────────────────────────────────────────────────────
 
 test('a signed-out browser is sent to the login page, not shown the data', async () => {
-  const db = await setup();
+  const { db } = await setup();
   const res = await call(db, 'GET', '/', { accept: 'text/html' });
   assert.equal(res.status, 303);
   assert.equal(res.headers.get('location'), '/login');
 });
 
 test('a signed-out API call gets 401, not a redirect it cannot follow', async () => {
-  const db = await setup();
+  const { db } = await setup();
   const res = await call(db, 'GET', '/api/dashboard');
   assert.equal(res.status, 401);
 });
 
 test('the right password mints a session and the page then loads', async () => {
-  const db = await setup();
+  const { db } = await setup();
   const login = await call(db, 'POST', '/login', {
     form: `password=${encodeURIComponent(PASSWORD)}`,
   });
@@ -111,7 +132,7 @@ test('the right password mints a session and the page then loads', async () => {
 });
 
 test('the wrong password gets in nowhere', async () => {
-  const db = await setup();
+  const { db } = await setup();
   const res = await call(db, 'POST', '/login', { form: 'password=hunter2' });
   assert.equal(res.status, 401);
   assert.equal(res.headers.get('set-cookie'), null, 'a failed login must not set a cookie');
@@ -120,7 +141,7 @@ test('the wrong password gets in nowhere', async () => {
 test('NO PASSWORD SET MEANS CLOSED, never open', async () => {
   // The failure this exists to prevent: deploying without APP_PASSWORD and
   // publishing a dashboard of your own spending to the open internet.
-  const db = await setup();
+  const { db } = await setup();
   const openEnv: Env = { ...env, APP_PASSWORD: undefined };
   const res = await createHandler(db, openEnv)(
     new Request('https://hub.test/api/dashboard', { headers: { accept: 'application/json' } }),
@@ -129,7 +150,7 @@ test('NO PASSWORD SET MEANS CLOSED, never open', async () => {
 });
 
 test('no ingest token set means the Watcher cannot get in either', async () => {
-  const db = await setup();
+  const { db } = await setup();
   const closed: Env = { ...env, INGEST_TOKEN: undefined };
   const res = await createHandler(db, closed)(
     new Request('https://hub.test/observations', {
@@ -142,7 +163,7 @@ test('no ingest token set means the Watcher cannot get in either', async () => {
 });
 
 test('a forged session cookie is refused', async () => {
-  const db = await setup();
+  const { db } = await setup();
   const forged = `${Date.now() + 999999}.notarealsignature`;
   const res = await call(db, 'GET', '/api/dashboard', { cookie: forged });
   assert.equal(res.status, 401, 'the signature is the whole point of signing it');
@@ -162,7 +183,7 @@ test('a session signed with a different password is refused', async () => {
 });
 
 test('signing out clears the cookie', async () => {
-  const db = await setup();
+  const { db } = await setup();
   const res = await call(db, 'GET', '/logout');
   assert.match(res.headers.get('set-cookie') ?? '', /hub_session=;.*Max-Age=0/);
 });
@@ -175,7 +196,7 @@ test('the comparison does not leak by returning early', async () => {
 });
 
 test('health stays public — it is how you check a deploy worked', async () => {
-  const db = await setup();
+  const { db } = await setup();
   const res = await call(db, 'GET', '/health');
   assert.equal(res.status, 200);
   assert.equal(res.body.ok, true);
@@ -186,24 +207,21 @@ test('health stays public — it is how you check a deploy worked', async () => 
 test('a watch that has never been checked still appears, marked unchecked', async () => {
   // A dashboard that silently omits what it cannot see is how you discover in a
   // week that one retailer stopped working.
-  const db = await setup();
+  const { db } = await setup();
   const res = await call(db, 'GET', '/api/dashboard', { token: TOKEN });
   assert.equal(res.status, 200);
-  assert.equal(res.body.watches.length, 2);
-  assert.ok(res.body.watches.every((w: any) => w.state === 'unchecked'));
+  assert.equal(res.body.missions.length, 2);
+  assert.ok(res.body.missions.every((w: any) => w.state === 'unchecked'));
 });
 
 test('the Watcher posts a reading and the page shows it', async () => {
-  const db = await setup();
+  const { db, etb } = await setup();
   const post = await call(db, 'POST', '/observations', {
     token: TOKEN,
     body: {
       observations: [
         {
-          productKey: 'prd_etb',
-          retailer: 'Walmart',
-          externalId: '19988614228',
-          url: 'https://www.walmart.com/ip/x/19988614228',
+          listingId: etb,
           state: 'in',
           confidence: 'exact',
           price: 73.76,
@@ -218,7 +236,7 @@ test('the Watcher posts a reading and the page shows it', async () => {
   assert.equal(post.body.recorded, 1);
 
   const { body } = await call(db, 'GET', '/api/dashboard', { token: TOKEN });
-  const watch = body.watches.find((w: any) => w.productKey === 'prd_etb');
+  const watch = body.missions.find((w: any) => w.productKey === 'prd_etb');
   assert.equal(watch.state, 'in');
   assert.equal(watch.price, 73.76, 'a number, not the string Postgres returns');
   assert.equal(watch.sellerKind, 'marketplace', 'the scalper flag has to survive the round trip');
@@ -227,30 +245,30 @@ test('the Watcher posts a reading and the page shows it', async () => {
 });
 
 test('in-stock sorts above out-of-stock, because that is what you look for', async () => {
-  const db = await setup();
+  const { db, etb, tin } = await setup();
   await call(db, 'POST', '/observations', {
     token: TOKEN,
     body: {
       observations: [
-        { productKey: 'prd_tin', retailer: 'Target', state: 'out', price: 24.99 },
-        { productKey: 'prd_etb', retailer: 'Walmart', state: 'in', price: 73.76 },
+        { listingId: tin, state: 'out', price: 24.99 },
+        { listingId: etb, state: 'in', price: 73.76 },
       ],
     },
   });
   const { body } = await call(db, 'GET', '/api/dashboard', { token: TOKEN });
-  assert.equal(body.watches[0].state, 'in');
+  assert.equal(body.missions[0].state, 'in');
 });
 
 test('one bad reading does not throw away the good ones in the same batch', async () => {
-  const db = await setup();
+  const { db, etb, tin } = await setup();
   const { body } = await call(db, 'POST', '/observations', {
     token: TOKEN,
     body: {
       observations: [
-        { productKey: 'prd_tin', retailer: 'Target', state: 'out', price: 24.99 },
-        { retailer: 'Target', state: 'out' }, // no productKey
-        { productKey: 'prd_nonexistent', retailer: 'Target', state: 'in' }, // no such product
-        { productKey: 'prd_etb', retailer: 'Walmart', state: 'in', price: 73.76 },
+        { listingId: tin, state: 'out', price: 24.99 },
+        { state: 'out' }, // no listingId
+        { listingId: 999999, state: 'in' }, // no such listing
+        { listingId: etb, state: 'in', price: 73.76 },
       ],
     },
   });
@@ -259,7 +277,7 @@ test('one bad reading does not throw away the good ones in the same batch', asyn
 
   const dash = await call(db, 'GET', '/api/dashboard', { token: TOKEN });
   assert.equal(
-    dash.body.watches.filter((w: any) => w.state !== 'unchecked').length,
+    dash.body.missions.filter((w: any) => w.state !== 'unchecked').length,
     2,
     'both readable products still landed',
   );
@@ -270,9 +288,9 @@ test('one bad reading does not throw away the good ones in the same batch', asyn
 test('polling an unchanged product writes no history at all', async () => {
   // Every minute for a week is ten thousand checks. A product that never moves
   // should leave a history of nothing, or the history is unreadable.
-  const db = await setup();
+  const { db, tin } = await setup();
   const reading = {
-    observations: [{ productKey: 'prd_tin', retailer: 'Target', state: 'out', price: 24.99 }],
+    observations: [{ listingId: tin, state: 'out', price: 24.99 }],
   };
 
   await call(db, 'POST', '/observations', { token: TOKEN, body: reading });
@@ -285,9 +303,9 @@ test('polling an unchanged product writes no history at all', async () => {
 });
 
 test('but the page always knows how stale it is', async () => {
-  const db = await setup();
+  const { db, tin } = await setup();
   const reading = {
-    observations: [{ productKey: 'prd_tin', retailer: 'Target', state: 'out', price: 24.99 }],
+    observations: [{ listingId: tin, state: 'out', price: 24.99 }],
   };
   await call(db, 'POST', '/observations', { token: TOKEN, body: reading });
   const [first] = await db.query<{ last_checked_at: string }>(
@@ -307,11 +325,11 @@ test('but the page always knows how stale it is', async () => {
 });
 
 test('coming into stock is a change; being checked again is not', async () => {
-  const db = await setup();
+  const { db, tin } = await setup();
   const post = (state: string, price: number) =>
     call(db, 'POST', '/observations', {
       token: TOKEN,
-      body: { observations: [{ productKey: 'prd_tin', retailer: 'Target', state, price }] },
+      body: { observations: [{ listingId: tin, state, price }] },
     });
 
   const first = await post('out', 24.99);
@@ -324,11 +342,11 @@ test('coming into stock is a change; being checked again is not', async () => {
 });
 
 test('"in stock since" does not reset every time we look', async () => {
-  const db = await setup();
+  const { db, tin } = await setup();
   const post = () =>
     call(db, 'POST', '/observations', {
       token: TOKEN,
-      body: { observations: [{ productKey: 'prd_tin', retailer: 'Target', state: 'in', price: 24.99 }] },
+      body: { observations: [{ listingId: tin, state: 'in', price: 24.99 }] },
     });
 
   await post();
@@ -345,11 +363,11 @@ test('"in stock since" does not reset every time we look', async () => {
 });
 
 test('a zero price is stored as absent, never as free', async () => {
-  const db = await setup();
+  const { db, tin } = await setup();
   await call(db, 'POST', '/observations', {
     token: TOKEN,
-    body: { observations: [{ productKey: 'prd_tin', retailer: 'Target', state: 'in', price: 0 }] },
+    body: { observations: [{ listingId: tin, state: 'in', price: 0 }] },
   });
-  const [w] = await store.dashboard(db);
+  const [w] = await store.listMissions(db);
   assert.equal(w!.price, null);
 });

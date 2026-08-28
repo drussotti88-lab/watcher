@@ -163,7 +163,7 @@ test('an item with no external id is dropped, not stored with an empty key', asy
   assert.equal(body.received, 0, 'an id-less row would collide with the next id-less row');
 });
 
-test('the watchlist gives the Watcher products, not just places to look', async () => {
+test('the watchlist gives the Watcher listings, not just places to look', async () => {
   const db = await setup();
   await call(db, 'POST', '/ingest', {
     token: TOKEN,
@@ -179,13 +179,28 @@ test('the watchlist gives the Watcher products, not just places to look', async 
     },
   });
 
+  // Ingest mints the product and its alias, but a *listing* is the thing a
+  // mission hangs off, and discovery does not create one — you point a mission
+  // at a URL yourself. So the watchlist is empty until that happens.
+  const empty = await call(db, 'GET', '/watchlist', { token: TOKEN });
+  assert.equal(empty.status, 200);
+  assert.deepEqual(empty.body.products, [], 'a discovery is not yet something to watch');
+  assert.ok(Array.isArray(empty.body.sources), 'but it still says where to hunt');
+
+  await db.query(
+    `INSERT INTO listings (product_key, retailer, external_id, url)
+     SELECT product_key, 'Pokemon Center', '100-10326',
+            'https://www.pokemoncenter.com/product/100-10326/x'
+       FROM aliases WHERE value = '100-10326'`,
+  );
+
   const { status, body } = await call(db, 'GET', '/watchlist', { token: TOKEN });
   assert.equal(status, 200);
   assert.equal(body.products.length, 1);
   assert.equal(body.products[0].retailer, 'Pokemon Center');
   assert.equal(body.products[0].externalId, '100-10326');
+  assert.ok(body.products[0].listingId > 0, 'the Watcher reports against a listing id');
   assert.match(body.products[0].url, /pokemoncenter\.com/, 'a watch with no URL cannot be polled');
-  assert.ok(Array.isArray(body.sources), 'and still says where to hunt for new ones');
 });
 
 test('an unknown path is a 404, not a 200 with an empty answer', async () => {
