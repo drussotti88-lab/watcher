@@ -5,10 +5,11 @@
   },
   "browser": {
     "channel": "chrome",
-    "profileDir": "./chrome-profile",
     "headed": true,
     "navigationTimeoutMs": 45000,
-    "executablePath": ""
+    "executablePath": "",
+    "watchProfileDir": "./chrome-profile-watch",
+    "buyProfileDir": "./chrome-profile-buy"
   },
   "budget": {
     "perRun": 150,

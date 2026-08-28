@@ -23,11 +23,21 @@ export interface Config {
      */
     channel: 'chrome' | 'msedge' | 'chromium';
     /**
-     * A dedicated profile directory. Deliberately NOT your everyday profile:
-     * Chrome locks a profile to one process, and you don't want this fighting
-     * your browser. Log in to the retailers once, here, and it persists.
+     * TWO profiles, and the split is the whole point.
+     *
+     *   watchProfileDir  signed OUT. Does all the polling, generates all the
+     *                    traffic, and carries none of the risk — the worst case
+     *                    is an IP challenge that clears itself.
+     *   buyProfileDir    signed IN. Opens rarely, does one thing. Kept out of
+     *                    the polling loop so the noisy half cannot cost you the
+     *                    account that holds your payment details.
+     *
+     * Both are dedicated directories, deliberately NOT your everyday profile:
+     * Chrome locks a profile to one process and you don't want this fighting
+     * your browser.
      */
-    profileDir: string;
+    watchProfileDir: string;
+    buyProfileDir: string;
     /** Watch it work. Strongly recommended until you trust it. */
     headed: boolean;
     /**
@@ -55,7 +65,8 @@ export const DEFAULTS: Config = {
   hub: { url: '', token: '' },
   browser: {
     channel: 'chrome',
-    profileDir: './chrome-profile',
+    watchProfileDir: './chrome-profile-watch',
+    buyProfileDir: './chrome-profile-buy',
     headed: true,
     executablePath: '',
     navigationTimeoutMs: 45_000,
@@ -90,6 +101,20 @@ export function loadConfig(): Config {
   } catch (err) {
     throw new Error(`watcher.config.json is not valid JSON: ${(err as Error).message}`);
   }
+  // A config written before the profile split would silently keep its old
+  // `profileDir` and get the default watch/buy dirs — which happens to be
+  // right, but only by luck. Say so rather than letting it pass.
+  const legacy = (parsed.browser as Record<string, unknown> | undefined)?.profileDir;
+  if (legacy !== undefined) {
+    throw new Error(
+      `watcher.config.json still has browser.profileDir, which no longer exists.\n` +
+        `  There are two profiles now:\n` +
+        `    watchProfileDir  signed OUT — does all the polling\n` +
+        `    buyProfileDir    signed IN  — opens rarely, holds your card\n` +
+        `  Replace profileDir with those two. See watcher.config.example.json.`,
+    );
+  }
+
   const config = merge(DEFAULTS, parsed);
 
   // Fail loudly on a nonsensical budget rather than discovering it at 3am.

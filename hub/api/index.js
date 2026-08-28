@@ -297,6 +297,16 @@ function toPrice(v) {
   const n = typeof v === "number" ? v : Number(v);
   return Number.isFinite(n) && n > 0 ? n : null;
 }
+function toDate(v) {
+  if (v === null || v === void 0 || v === "") return null;
+  if (v instanceof Date) {
+    return Number.isNaN(v.getTime()) ? null : v.toISOString().slice(0, 10);
+  }
+  const s = String(v);
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  const parsed = new Date(s);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString().slice(0, 10);
+}
 function toConfig(v) {
   if (v && typeof v === "object") return v;
   try {
@@ -413,14 +423,14 @@ async function watchlist(db2) {
     retailer: String(r.retailer ?? ""),
     externalId: String(r.external_id ?? ""),
     url: String(r.url ?? ""),
-    releaseDate: r.release_date ? String(r.release_date).slice(0, 10) : null
+    releaseDate: toDate(r.release_date)
   }));
 }
 function toProduct(r) {
   return {
     key: String(r.key),
     name: String(r.name ?? ""),
-    releaseDate: r.release_date ? String(r.release_date).slice(0, 10) : null,
+    releaseDate: toDate(r.release_date),
     msrp: toPrice(r.msrp),
     imageUrl: String(r.image_url ?? ""),
     notes: String(r.notes ?? "")
@@ -539,7 +549,7 @@ function toMission(r) {
     availableQuantity: r.available_quantity === null || r.available_quantity === void 0 ? null : Number(r.available_quantity),
     orderLimit: r.order_limit === null || r.order_limit === void 0 ? null : Number(r.order_limit),
     isPreOrder: r.is_preorder === true,
-    releaseDate: r.release_date ? String(r.release_date).slice(0, 10) : null,
+    releaseDate: toDate(r.release_date),
     note: String(r.note ?? ""),
     lastCheckedAt: iso(r.last_checked_at),
     lastChangedAt: iso(r.last_changed_at)

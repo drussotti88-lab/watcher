@@ -21,17 +21,34 @@ export {
   type TextSource,
 } from './settle.ts';
 
+/**
+ * Which browser this is.
+ *
+ * 'watch' is signed out and does all the polling. 'buy' is signed in and opens
+ * rarely. Keeping them apart is what stops the high-volume half putting the
+ * account that holds your payment details at risk.
+ */
+export type Persona = 'watch' | 'buy';
+
 export class Browser {
   private context: BrowserContext | null = null;
   private readonly config: Config;
+  private readonly persona: Persona;
 
-  constructor(config: Config) {
+  constructor(config: Config, persona: Persona = 'watch') {
     this.config = config;
+    this.persona = persona;
+  }
+
+  get profileDir(): string {
+    return this.persona === 'buy'
+      ? this.config.browser.buyProfileDir
+      : this.config.browser.watchProfileDir;
   }
 
   async open(): Promise<BrowserContext> {
     if (this.context) return this.context;
-    const dir = resolve(process.cwd(), this.config.browser.profileDir);
+    const dir = resolve(process.cwd(), this.profileDir);
     mkdirSync(dir, { recursive: true });
 
     try {

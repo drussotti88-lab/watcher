@@ -24,6 +24,29 @@ function toPrice(v: unknown): number | null {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
+/**
+ * A DATE column, as a plain YYYY-MM-DD string.
+ *
+ * The driver hands DATE back as a JavaScript Date, not a string, so the
+ * obvious `String(v).slice(0, 10)` yields "Sat Sep 26" — a release date that
+ * looks almost right, sorts wrong, and has lost the year. Half B's whole job
+ * is knowing which day money is needed on, so this is coerced in one place.
+ *
+ * Deliberately UTC: the value in the column is a calendar date with no time
+ * in it, and running it through a local timezone is how a release date moves
+ * a day for anyone west of Greenwich.
+ */
+function toDate(v: unknown): string | null {
+  if (v === null || v === undefined || v === '') return null;
+  if (v instanceof Date) {
+    return Number.isNaN(v.getTime()) ? null : v.toISOString().slice(0, 10);
+  }
+  const s = String(v);
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  const parsed = new Date(s);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString().slice(0, 10);
+}
+
 /** JSONB arrives parsed; a TEXT column would arrive as a string. Take either. */
 function toConfig(v: unknown): SourceConfig {
   if (v && typeof v === 'object') return v as SourceConfig;
@@ -233,7 +256,7 @@ export async function watchlist(db: Sql): Promise<WatchRow[]> {
     retailer: String(r.retailer ?? ''),
     externalId: String(r.external_id ?? ''),
     url: String(r.url ?? ''),
-    releaseDate: r.release_date ? String(r.release_date).slice(0, 10) : null,
+    releaseDate: toDate(r.release_date),
   }));
 }
 
@@ -252,7 +275,7 @@ function toProduct(r: Record<string, unknown>): ProductRow {
   return {
     key: String(r.key),
     name: String(r.name ?? ''),
-    releaseDate: r.release_date ? String(r.release_date).slice(0, 10) : null,
+    releaseDate: toDate(r.release_date),
     msrp: toPrice(r.msrp),
     imageUrl: String(r.image_url ?? ''),
     notes: String(r.notes ?? ''),
@@ -490,7 +513,7 @@ function toMission(r: Record<string, unknown>): MissionRow {
       : Number(r.available_quantity),
     orderLimit: r.order_limit === null || r.order_limit === undefined ? null : Number(r.order_limit),
     isPreOrder: r.is_preorder === true,
-    releaseDate: r.release_date ? String(r.release_date).slice(0, 10) : null,
+    releaseDate: toDate(r.release_date),
     note: String(r.note ?? ''),
     lastCheckedAt: iso(r.last_checked_at),
     lastChangedAt: iso(r.last_changed_at),

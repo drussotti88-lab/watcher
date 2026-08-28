@@ -8,6 +8,9 @@
     "node": ">=22"
   },
   "scripts": {
+    "watch": "node --experimental-strip-types src/index.ts watch",
+    "once": "node --experimental-strip-types src/index.ts once",
+    "signin": "node --experimental-strip-types src/index.ts signin",
     "probe": "node --experimental-strip-types src/index.ts probe",
     "browser": "node --experimental-strip-types src/index.ts browser",
     "help": "node --experimental-strip-types src/index.ts help",
