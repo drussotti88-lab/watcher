@@ -1,4 +1,17 @@
 node_modules/
-chrome-profile/
+
+# Both browser profiles, and any future one. This used to say
+# "chrome-profile/" and then the profile was split into a signed-out watch
+# profile and a signed-in buy profile -- so the new directories were not
+# ignored, and 523 files of browsing state went into a public repository
+# before anyone noticed. The glob is deliberate.
+chrome-profile*/
+
+# The Hub token lives here.
 watcher.config.json
+
+# Captured pages. Target embeds a visitor id, the home store and its postcode
+# in every request, so these never leave the machine.
+probe-artifacts/
+
 *.log
