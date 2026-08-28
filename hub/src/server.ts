@@ -26,6 +26,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import postgres from 'postgres';
 import { createHandler } from './app.ts';
 import { fromPostgres, connectionStringFrom, type Sql } from './db.ts';
+import { withDeadline } from './deadline.ts';
 import type { Env } from './types.ts';
 
 /**
@@ -37,6 +38,7 @@ import type { Env } from './types.ts';
  * transaction pooler — `connectionStringFrom` refuses the direct one.
  */
 let cached: Sql | null = null;
+let cachedClient: { end: (opts?: unknown) => Promise<void> } | null = null;
 
 function db(): Sql {
   if (cached) return cached;
@@ -46,9 +48,50 @@ function db(): Sql {
     max: 1,
     idle_timeout: 20,
     connect_timeout: 10,
+    // A query that cannot finish in eight seconds is not going to finish. Let
+    // Postgres kill it rather than letting it sit on the one connection this
+    // instance has.
+    connection: { statement_timeout: 8_000 },
   });
+  cachedClient = client as unknown as { end: (opts?: unknown) => Promise<void> };
   cached = fromPostgres(client as never);
   return cached;
+}
+
+/**
+ * Throw away the cached connection.
+ *
+ * The failure this exists for: the pooler drops the single connection this
+ * instance holds, postgres.js queues the next query waiting for a connection
+ * that never comes back, and the request hangs until Vercel kills it at 30
+ * seconds. Reconnecting costs a few hundred milliseconds; hanging costs a
+ * whole pass and tells nobody why.
+ */
+function dropConnection(): void {
+  const client = cachedClient;
+  cached = null;
+  cachedClient = null;
+  // Fire and forget: we are already answering, and a socket we have given up
+  // on must not be able to delay the response.
+  void client?.end({ timeout: 0 }).catch(() => {});
+}
+
+const ANSWER_WITHIN_MS = 12_000;
+
+/** The answer given when the work does not come back in time. */
+function tooSlow(): Response {
+  return new Response(
+    JSON.stringify(
+      {
+        error:
+          `the Hub could not answer within ${ANSWER_WITHIN_MS / 1000}s — ` +
+          `the database connection was reset, try again`,
+      },
+      null,
+      2,
+    ),
+    { status: 503, headers: { 'Content-Type': 'application/json; charset=utf-8' } },
+  );
 }
 
 function env(): Env {
@@ -87,8 +130,15 @@ export default async function handler(
 
   let response: Response;
   try {
-    response = await createHandler(db(), env())(request);
+    response = await withDeadline(createHandler(db(), env())(request), {
+      ms: ANSWER_WITHIN_MS,
+      onTimeout: dropConnection,
+      late: tooSlow,
+    });
   } catch (err) {
+    // Whatever went wrong, do not hand the next request a connection we have
+    // just seen fail.
+    dropConnection();
     // A misconfigured database must say so loudly. The failure mode this
     // avoids is a Hub that answers /health cheerfully while dropping
     // everything the Watcher posts to it.

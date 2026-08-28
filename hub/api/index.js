@@ -2338,8 +2338,31 @@ function connectionStringFrom(env2) {
   return url;
 }
 
+// src/deadline.ts
+async function withDeadline(work, opts) {
+  const setTimer = opts.setTimer ?? setTimeout;
+  const clearTimer = opts.clearTimer ?? clearTimeout;
+  let timer;
+  let firedLate = false;
+  const late = new Promise((resolve) => {
+    timer = setTimer(() => {
+      firedLate = true;
+      opts.onTimeout?.();
+      resolve(opts.late());
+    }, opts.ms);
+  });
+  try {
+    return await Promise.race([work, late]);
+  } finally {
+    if (!firedLate) clearTimer(timer);
+    void work.catch(() => {
+    });
+  }
+}
+
 // src/server.ts
 var cached = null;
+var cachedClient = null;
 function db() {
   if (cached) return cached;
   const client = postgres(connectionStringFrom(process.env), {
@@ -2347,10 +2370,35 @@ function db() {
     prepare: false,
     max: 1,
     idle_timeout: 20,
-    connect_timeout: 10
+    connect_timeout: 10,
+    // A query that cannot finish in eight seconds is not going to finish. Let
+    // Postgres kill it rather than letting it sit on the one connection this
+    // instance has.
+    connection: { statement_timeout: 8e3 }
   });
+  cachedClient = client;
   cached = fromPostgres(client);
   return cached;
+}
+function dropConnection() {
+  const client = cachedClient;
+  cached = null;
+  cachedClient = null;
+  void client?.end({ timeout: 0 }).catch(() => {
+  });
+}
+var ANSWER_WITHIN_MS = 12e3;
+function tooSlow() {
+  return new Response(
+    JSON.stringify(
+      {
+        error: `the Hub could not answer within ${ANSWER_WITHIN_MS / 1e3}s \u2014 the database connection was reset, try again`
+      },
+      null,
+      2
+    ),
+    { status: 503, headers: { "Content-Type": "application/json; charset=utf-8" } }
+  );
 }
 function env() {
   return {
@@ -2381,8 +2429,13 @@ async function handler(req, res) {
   });
   let response;
   try {
-    response = await createHandler(db(), env())(request);
+    response = await withDeadline(createHandler(db(), env())(request), {
+      ms: ANSWER_WITHIN_MS,
+      onTimeout: dropConnection,
+      late: tooSlow
+    });
   } catch (err) {
+    dropConnection();
     response = new Response(
       JSON.stringify({ error: err.message }, null, 2),
       { status: 500, headers: { "Content-Type": "application/json; charset=utf-8" } }
