@@ -59,6 +59,10 @@ npm run db:seed                # three retailers, three known-good products
 
 ### 2. Deploy
 
+The build bundles `src/server.ts` and everything it imports into a single
+`api/index.js`, so nothing is left for the platform to interpret. That is not
+a preference — see the testing section for what happened when it was.
+
 ```bash
 npx vercel link
 npx vercel env add DATABASE_URL production
@@ -151,7 +155,7 @@ looked at — Supabase gives you a table editor, so use it.
 npm test
 ```
 
-66 tests, running against **real Postgres** — PGlite, compiled to WebAssembly,
+72 tests, running against **real Postgres** — PGlite, compiled to WebAssembly,
 in the test process. The previous version tested SQL against SQLite, which
 agrees with Postgres right up until it doesn't:
 
@@ -170,10 +174,19 @@ The HTTP surface is tested too, which the Worker version never was: the handler
 is `Request → Response` and takes its database as an argument, so the whole API
 runs in-process with no server and no platform mocks.
 
+And `bundle.test.ts` tests **the artifact that actually deploys** — it runs
+esbuild and serves the output over real HTTP. That test exists because the
+first deploy had 66 green tests, a successful build, and a function that died
+on startup with `Cannot find module '/var/task/hub/src/app.ts'`. Vercel had
+compiled the entry file, left the `./app.ts` specifier exactly as written, and
+never compiled `src/` at all. Every test passed because they all import the
+TypeScript directly and none of them cared how it was packaged.
+
 ## Layout
 
 ```
-api/index.ts       Vercel adapter — the only platform-specific file
+api/index.js       The deployed bundle. Generated — do not edit
+src/server.ts      Vercel adapter — the only platform-specific file
 src/app.ts         The API and pages, as Request → Response
 src/auth.ts        Bearer token for the Watcher, signed cookie for the browser
 src/page.ts        The two HTML documents. No framework, no build step

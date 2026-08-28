@@ -4,3 +4,6 @@ node_modules/
 .env.local
 .env*.local
 dist/
+
+# Built by the bundle test.
+.tmp-bundle/

@@ -5,12 +5,28 @@
  * Vercel's Node request into one of those and writes the answer back. Keeping
  * it this thin is what made moving off Cloudflare a morning's work rather than
  * a rewrite, and it is why the API can be tested without starting a server.
+ *
+ * ── Why this is bundled rather than deployed as TypeScript ───────────────────
+ *
+ * This file used to live at api/index.ts, and the first deploy crashed:
+ *
+ *   Cannot find module '/var/task/hub/src/app.ts'
+ *   imported from /var/task/hub/api/index.js
+ *
+ * Vercel compiled the entry file, left the `./app.ts` import specifier exactly
+ * as written, and never compiled src/ at all. Node then went looking for a .ts
+ * file that was not there.
+ *
+ * Rather than contort the imports to guess what the platform will do with them,
+ * `npm run build` bundles this and everything it imports into a single
+ * api/index.js with esbuild. Nothing is left for Vercel to interpret. The same
+ * bundle would run on any Node host.
  */
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import postgres from 'postgres';
-import { createHandler } from '../src/app.ts';
-import { fromPostgres, connectionStringFrom, type Sql } from '../src/db.ts';
-import type { Env } from '../src/types.ts';
+import { createHandler } from './app.ts';
+import { fromPostgres, connectionStringFrom, type Sql } from './db.ts';
+import type { Env } from './types.ts';
 
 /**
  * One client per warm instance.
