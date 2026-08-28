@@ -139,14 +139,27 @@ export class Hub {
       });
       const text = await res.text();
       let parsed: unknown = null;
+      let isJson = false;
       try {
         parsed = text ? JSON.parse(text) : null;
+        isJson = true;
       } catch {
-        /* a non-JSON body is reported as-is below */
+        /* reported below, with the body, because the body is the clue */
       }
       if (!res.ok) {
         const detail = (parsed as { error?: string })?.error ?? text.slice(0, 200);
         throw new HubError(`${method} ${path} → ${res.status}: ${detail}`, res.status);
+      }
+      if (!isJson) {
+        // Vercel serves a plain-text error page with a 200 while a deployment
+        // swaps: "An error occurred with your deployment". Reading `.missions`
+        // off that gives a TypeError three frames away from the cause, which
+        // is how a two-minute deploy window becomes an afternoon of confusion.
+        throw new HubError(
+          `${method} ${path} → ${res.status} but the body is not JSON: ` +
+            `${text.slice(0, 120).replace(/\s+/g, ' ').trim() || '(empty)'}`,
+          res.status,
+        );
       }
       return parsed as T;
     } finally {
@@ -156,8 +169,15 @@ export class Hub {
 
   /** What to watch. Throws when the Hub is unreachable — the caller decides. */
   async missions(now: number = Date.now()): Promise<Mission[]> {
-    const data = await this.call<{ missions: Mission[] }>('GET', '/api/missions/active');
-    const missions = data.missions ?? [];
+    const data = await this.call<{ missions: Mission[] } | null>('GET', '/api/missions/active');
+    if (!data || !Array.isArray(data.missions)) {
+      // An empty or shapeless body is not "you have no missions". Treating it
+      // as that would empty the watchlist and go quiet, which looks exactly
+      // like working correctly. Throw, so the caller falls back to the list it
+      // already had.
+      throw new HubError('the Hub answered without a missions list', 200);
+    }
+    const missions = data.missions;
     this.cached = missions;
     this.cachedAt = now;
     return missions;

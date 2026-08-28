@@ -92,9 +92,13 @@ test('an error body is surfaced rather than a bare status', async () => {
   await assert.rejects(() => hub.missions(), /401: bad token/);
 });
 
-test('a missing missions array reads as none, not as a crash', async () => {
+test('a body with no missions array is refused, not read as none', async () => {
+  // This test used to assert the opposite, and it was wrong: silently
+  // returning [] turns a broken answer into "you have nothing to watch",
+  // which is indistinguishable from working. See AN EMPTY ANSWER IS NOT AN
+  // EMPTY WATCHLIST below.
   const { hub } = hubWith([{ body: {} }]);
-  assert.deepEqual(await hub.missions(), []);
+  await assert.rejects(() => hub.missions(), /without a missions list/);
 });
 
 test('a reading the Hub refused is kept, not dropped', async () => {
@@ -323,4 +327,36 @@ test('a request that takes too long is aborted rather than hanging the pass', as
   const result = await hub.missionsOrCached();
   assert.equal(result.stale, true);
   assert.match(result.reason, /aborted/);
+});
+
+test('A 200 THAT IS NOT JSON IS AN ERROR, not a TypeError three frames away', async () => {
+  // Vercel serves exactly this, with a 200, while a deployment swaps. Reading
+  // `.missions` off it blows up somewhere unrelated; the deploy window is the
+  // actual answer and the message should say so.
+  const impl = (async () =>
+    ({
+      ok: true,
+      status: 200,
+      text: async () => 'An error occurred with your deployment',
+    }) as Response) as unknown as typeof fetch;
+  const hub = new Hub({ url: 'https://hub.test', token: 'tok', fetchImpl: impl });
+
+  await assert.rejects(() => hub.missions(), /not JSON/);
+  await assert.rejects(() => hub.missions(), /An error occurred with your deployment/);
+});
+
+test('AN EMPTY ANSWER IS NOT AN EMPTY WATCHLIST', async () => {
+  // The difference matters: "you have no missions" makes the Watcher go quiet
+  // and look like it is working. An answer with no missions list is a broken
+  // answer, and the loop should fall back to the list it already had.
+  const impl = (async () =>
+    ({ ok: true, status: 200, text: async () => '' }) as Response) as unknown as typeof fetch;
+  const hub = new Hub({ url: 'https://hub.test', token: 'tok', fetchImpl: impl });
+
+  await assert.rejects(() => hub.missions(), /without a missions list/);
+});
+
+test('a genuinely empty watchlist is still an empty watchlist', async () => {
+  const { hub } = hubWith([{ body: { missions: [] } }]);
+  assert.deepEqual(await hub.missions(), []);
 });
