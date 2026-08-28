@@ -207,6 +207,14 @@ export interface PassResult {
   runs: number;
   /** Checks that threw rather than returning a reading. */
   failed: number;
+  /**
+   * Milliseconds until the soonest mission is due, when nothing was checked.
+   *
+   * A pass that prints "0 checked" and no reason is the same quiet that a
+   * broken Watcher produces. Null when something was checked, or when the
+   * wait is a retailer holding us back rather than the schedule.
+   */
+  nextDueInMs: number | null;
   blocked: string[];
   waitingOn: string[];
 }
@@ -226,6 +234,7 @@ export async function pass(missions: Mission[], pacer: Pacer, deps: WatchDeps): 
     reported: 0,
     runs: 0,
     failed: 0,
+    nextDueInMs: null,
     blocked: [],
     waitingOn: [],
   };
@@ -295,6 +304,20 @@ export async function pass(missions: Mission[], pacer: Pacer, deps: WatchDeps): 
     const label = pacer.standingDown(m.retailer, nowMs) ? 'standing down' : 'pacing';
     named.add(m.retailer);
     result.waitingOn.push(`${m.retailer} (${label}, ${Math.ceil(wait / 1000)}s)`);
+  }
+
+  // Nothing checked and nobody holding us back means everything is simply on
+  // schedule. Say when the next one is, rather than printing a bare zero.
+  if (result.checked === 0 && result.waitingOn.length === 0) {
+    let soonest: number | null = null;
+    for (const m of missions) {
+      if (!m.lastCheckedAt) return result; // due now; something else is wrong
+      const dueAt = new Date(m.lastCheckedAt).getTime() + m.checkEverySeconds * 1000;
+      if (!Number.isFinite(dueAt)) continue;
+      const wait = Math.max(0, dueAt - nowMs);
+      if (soonest === null || wait < soonest) soonest = wait;
+    }
+    result.nextDueInMs = soonest;
   }
 
   return result;

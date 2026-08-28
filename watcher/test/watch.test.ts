@@ -375,3 +375,69 @@ test('a read that throws does not take the pass down with it', async () => {
   assert.equal(result.checked, 2);
   assert.equal(result.failed, 1);
 });
+
+test('a pass that checks nothing says when the next one is due', async () => {
+  // "0 checked" and no reason is the same quiet a broken Watcher produces.
+  const { hub } = recorder();
+  const pacer = new Pacer(STEADY, () => 0);
+  const recent = mission({ checkEverySeconds: 60, lastCheckedAt: new Date(T0 - 42_000).toISOString() });
+
+  const result = await pass([recent], pacer, {
+    browser,
+    hub,
+    now: () => T0,
+    read: reads(() => reading()),
+  });
+
+  assert.equal(result.checked, 0);
+  assert.equal(result.nextDueInMs, 18_000);
+});
+
+test('the soonest mission is the one reported, not the first', async () => {
+  const { hub } = recorder();
+  const pacer = new Pacer(STEADY, () => 0);
+  const missions = [
+    mission({ id: 1, checkEverySeconds: 600, lastCheckedAt: new Date(T0 - 60_000).toISOString() }),
+    mission({ id: 2, checkEverySeconds: 60, lastCheckedAt: new Date(T0 - 50_000).toISOString() }),
+  ];
+
+  const result = await pass(missions, pacer, {
+    browser,
+    hub,
+    now: () => T0,
+    read: reads(() => reading()),
+  });
+  assert.equal(result.nextDueInMs, 10_000);
+});
+
+test('a pass that checked something does not also claim nothing was due', async () => {
+  const { hub } = recorder();
+  const pacer = new Pacer(STEADY, () => 0);
+  const result = await pass([mission()], pacer, {
+    browser,
+    hub,
+    now: () => T0,
+    read: reads(() => reading()),
+  });
+  assert.equal(result.checked, 1);
+  assert.equal(result.nextDueInMs, null);
+});
+
+test('a retailer holding us back is reported as that, not as nothing being due', async () => {
+  // Two different silences with two different fixes. Conflating them sends you
+  // looking at the schedule when the real answer is a bot check.
+  const { hub } = recorder();
+  const pacer = new Pacer(STEADY, () => 0);
+  pacer.challenged('Target', T0);
+
+  const result = await pass([mission()], pacer, {
+    browser,
+    hub,
+    now: () => T0,
+    read: reads(() => reading()),
+  });
+
+  assert.equal(result.checked, 0);
+  assert.equal(result.nextDueInMs, null);
+  assert.deepEqual(result.waitingOn, ['Target (standing down, 1200s)']);
+});

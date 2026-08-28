@@ -104,6 +104,9 @@ async function runPasses(once: boolean): Promise<void> {
           if (hub.lastError) parts.push(`Hub said: ${hub.lastError}`);
         }
         if (result.waitingOn.length) parts.push(`waiting on ${result.waitingOn.join(', ')}`);
+        if (result.nextDueInMs !== null) {
+          parts.push(`nothing due — next in ${Math.ceil(result.nextDueInMs / 1000)}s`);
+        }
         console.log(`  ${timestamp()}  ${parts.join(' · ')}`);
       }
 
