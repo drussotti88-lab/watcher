@@ -102,7 +102,11 @@ async function runPasses(once: boolean): Promise<void> {
         const parts = [`${result.checked} checked`];
         if (result.runs) parts.push(`${result.runs} runs`);
         if (result.failed) parts.push(`${result.failed} failed`);
-        if (hub.backlog) parts.push(`${hub.backlog} queued to send`);
+        if (hub.backlog) {
+          parts.push(`${hub.backlog} queued to send`);
+          // Never let a growing buffer be the only symptom.
+          if (hub.lastError) parts.push(`Hub said: ${hub.lastError}`);
+        }
         if (result.waitingOn.length) parts.push(`waiting on ${result.waitingOn.join(', ')}`);
         console.log(`  ${timestamp()}  ${parts.join(' · ')}`);
       }

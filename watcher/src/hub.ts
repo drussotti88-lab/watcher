@@ -102,6 +102,20 @@ export class Hub {
     return this.pending.length + this.pendingRuns.length;
   }
 
+  /**
+   * Why the last delivery failed.
+   *
+   * report() and recordRun() deliberately never throw — losing a reading is
+   * worse than the outage that caused it. But a buffer that grows with no
+   * stated reason is the same silent failure in a nicer coat, so the reason is
+   * kept here and printed by the loop.
+   */
+  private lastFailure = '';
+
+  get lastError(): string {
+    return this.lastFailure;
+  }
+
   private async call<T>(method: string, path: string, body?: unknown): Promise<T> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
@@ -153,8 +167,10 @@ export class Hub {
     try {
       await this.call('POST', '/observations', { observations: batch });
       this.pending.splice(0, batch.length);
+      this.lastFailure = '';
       return { sent: batch.length, buffered: this.pending.length };
-    } catch {
+    } catch (err) {
+      this.lastFailure = (err as Error).message;
       return { sent: 0, buffered: this.pending.length };
     }
   }
@@ -168,7 +184,8 @@ export class Hub {
       try {
         await this.call('POST', '/api/runs', r);
         delivered.push(r);
-      } catch {
+      } catch (err) {
+        this.lastFailure = (err as Error).message;
         break; // stop on the first failure; order matters in a log
       }
     }

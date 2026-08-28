@@ -1,0 +1,10 @@
+2026/08/28-14:36:14.336 6f50 Reusing MANIFEST C:\Users\danru\Pokemon\watcher\chrome-profile-watch\Default\Local Storage\leveldb/MANIFEST-000001
+2026/08/28-14:36:14.340 6f50 Recovering log #3
+2026/08/28-14:36:14.341 6f50 Level-0 table #3: started
+2026/08/28-14:36:14.349 6f50 Level-0 table #3: 164869 bytes OK
+2026/08/28-14:36:14.349 6f50 Recovering log #4
+2026/08/28-14:36:14.355 6f50 Reusing old log C:\Users\danru\Pokemon\watcher\chrome-profile-watch\Default\Local Storage\leveldb/000004.log 
+2026/08/28-14:36:14.357 6f50 Delete type=0 #3
+2026/08/28-14:36:14.357 6f50 Delete type=2 #5
+2026/08/28-14:36:21.403 72e0 Level-0 table #6: started
+2026/08/28-14:36:21.415 72e0 Level-0 table #6: 166347 bytes OK

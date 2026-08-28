@@ -178,3 +178,29 @@ test('a Hub with no token cannot authorise spending', async () => {
   assert.equal(verdict.ok, false);
   assert.match(verdict.reason, /no Hub configured/);
 });
+
+test('a buffer that is not emptying says why', async () => {
+  // "1 queued to send" with no reason is the same silent failure in a nicer
+  // coat. Whatever the Hub objected to has to reach the terminal.
+  const { hub } = hubWith([{ status: 413, body: { error: 'payload too large' } }]);
+  await hub.report([observation(1)]);
+
+  assert.match(hub.lastError, /413/);
+  assert.match(hub.lastError, /payload too large/);
+});
+
+test('the reason is cleared once the backlog goes out', async () => {
+  const { impl } = stubFetch([{ throws: 'down' }, { status: 200 }]);
+  const hub = new Hub({ url: 'https://hub.test', token: 'tok', fetchImpl: impl });
+
+  await hub.report([observation(1)]);
+  assert.notEqual(hub.lastError, '', 'a stale reason is worse than none');
+  await hub.report([observation(2)]);
+  assert.equal(hub.lastError, '');
+});
+
+test('a refused run also leaves a reason behind', async () => {
+  const { hub } = hubWith([{ status: 400, body: { error: 'need missionId' } }]);
+  await hub.recordRun(run(1));
+  assert.match(hub.lastError, /need missionId/);
+});
