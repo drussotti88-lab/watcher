@@ -2612,6 +2612,19 @@ function fromPostgres(client) {
     }
   };
 }
+var POOL_OPTIONS = {
+  /** The pooler does not support prepared statements. */
+  prepare: false,
+  /** Enough for the widest Promise.all on the busiest route, and no more. */
+  max: 5,
+  idle_timeout: 20,
+  connect_timeout: 10,
+  /**
+   * A query that cannot finish in eight seconds is not going to finish, and it
+   * should not sit on a connection while it fails to.
+   */
+  connection: { statement_timeout: 8e3 }
+};
 var CONNECTION_CODES = /* @__PURE__ */ new Set([
   "CONNECTION_DESTROYED",
   "CONNECTION_CLOSED",
@@ -2690,17 +2703,7 @@ async function withDeadline(work, opts) {
 var cached = null;
 function db() {
   if (cached) return cached;
-  const client = postgres(connectionStringFrom(process.env), {
-    // The pooler does not support prepared statements.
-    prepare: false,
-    max: 1,
-    idle_timeout: 20,
-    connect_timeout: 10,
-    // A query that cannot finish in eight seconds is not going to finish. Let
-    // Postgres kill it rather than letting it sit on the one connection this
-    // instance has.
-    connection: { statement_timeout: 8e3 }
-  });
+  const client = postgres(connectionStringFrom(process.env), { ...POOL_OPTIONS });
   cached = fromPostgres(client);
   return cached;
 }

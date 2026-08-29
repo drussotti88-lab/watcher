@@ -25,7 +25,13 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import postgres from 'postgres';
 import { createHandler } from './app.ts';
-import { fromPostgres, connectionStringFrom, isConnectionFailure, type Sql } from './db.ts';
+import {
+  fromPostgres,
+  connectionStringFrom,
+  isConnectionFailure,
+  POOL_OPTIONS,
+  type Sql,
+} from './db.ts';
 import { withDeadline } from './deadline.ts';
 import type { Env } from './types.ts';
 
@@ -41,17 +47,7 @@ let cached: Sql | null = null;
 
 function db(): Sql {
   if (cached) return cached;
-  const client = postgres(connectionStringFrom(process.env), {
-    // The pooler does not support prepared statements.
-    prepare: false,
-    max: 1,
-    idle_timeout: 20,
-    connect_timeout: 10,
-    // A query that cannot finish in eight seconds is not going to finish. Let
-    // Postgres kill it rather than letting it sit on the one connection this
-    // instance has.
-    connection: { statement_timeout: 8_000 },
-  });
+  const client = postgres(connectionStringFrom(process.env), { ...POOL_OPTIONS });
   cached = fromPostgres(client as never);
   return cached;
 }

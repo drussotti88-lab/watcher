@@ -71,6 +71,46 @@ export function fromPostgres(client: PostgresLike): Sql {
  * request is a Hub that looks healthy while losing everything posted to it.
  */
 /**
+ * How the pooled client is built. Exported so the reasoning has one home and a
+ * test can hold the line.
+ *
+ * ── Why `max` is not 1 ──────────────────────────────────────────────────────
+ *
+ * It was, and it deadlocked. `/api/dashboard` runs five queries in a
+ * `Promise.all`, and on a single pooled connection through pgbouncer in
+ * transaction mode those five never come back — not slowly, at all. Measured
+ * against the live database:
+ *
+ *   Promise.all, max: 1   hung, still hung at 15s
+ *   Promise.all, max: 5   294ms
+ *
+ * Each of the five run on their own in under 300ms, which is what made this
+ * look like an intermittent platform problem for hours: every request that
+ * asked for one thing was fine, and the one request that asked for five never
+ * answered. It is also, almost certainly, what the 504
+ * FUNCTION_INVOCATION_TIMEOUTs were — a dashboard open somewhere, polling.
+ *
+ * `max: 1` was chosen to avoid exhausting Postgres' connection limit from a
+ * platform that creates and destroys instances constantly. That worry is real
+ * and it is exactly what the transaction pooler exists to absorb: multiplexing
+ * many client connections onto few server ones is its entire job. A handful
+ * per instance is what it is built for.
+ */
+export const POOL_OPTIONS = {
+  /** The pooler does not support prepared statements. */
+  prepare: false,
+  /** Enough for the widest Promise.all on the busiest route, and no more. */
+  max: 5,
+  idle_timeout: 20,
+  connect_timeout: 10,
+  /**
+   * A query that cannot finish in eight seconds is not going to finish, and it
+   * should not sit on a connection while it fails to.
+   */
+  connection: { statement_timeout: 8_000 },
+} as const;
+
+/**
  * Is this error the connection failing, rather than the query being wrong?
  *
  * The distinction decides whether the pooled client gets thrown away. Getting

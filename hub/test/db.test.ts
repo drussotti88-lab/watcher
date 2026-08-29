@@ -9,7 +9,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { connectionStringFrom, isConnectionFailure } from '../src/db.ts';
+import { connectionStringFrom, isConnectionFailure, POOL_OPTIONS } from '../src/db.ts';
 
 const REF = 'riwdybozflszkpcpdinc';
 const SHARED = `postgresql://postgres.${REF}:pw@aws-0-us-east-1.pooler.supabase.com:6543/postgres`;
@@ -94,4 +94,36 @@ test('A BAD QUERY IS NOT — it must not cost everybody a reconnect', async () =
   for (const err of notConnection) {
     assert.equal(isConnectionFailure(err), false, String(err));
   }
+});
+
+// ── The pool ─────────────────────────────────────────────────────────────────
+
+test('THE POOL IS BIG ENOUGH FOR THE WIDEST PROMISE.ALL', async () => {
+  // This cannot be reproduced in-process: PGlite is a single embedded engine
+  // and the failure lives in pgbouncer's transaction mode. So the test guards
+  // the number, and the number is the fix.
+  //
+  // With max: 1, /api/dashboard's five parallel queries never returned — not
+  // slowly, at all — while each of the five ran alone in under 300ms.
+  assert.ok(
+    POOL_OPTIONS.max >= 5,
+    'max must cover the widest Promise.all in app.ts (/api/dashboard runs five); ' +
+      'at 1 those queries deadlock through the pooler',
+  );
+});
+
+test('prepared statements stay off — the transaction pooler cannot do them', async () => {
+  assert.equal(POOL_OPTIONS.prepare, false);
+});
+
+test('a query cannot hold a connection indefinitely', async () => {
+  assert.ok(POOL_OPTIONS.connection.statement_timeout > 0);
+  assert.ok(
+    POOL_OPTIONS.connection.statement_timeout < 12_000,
+    'it has to fire before the handler deadline, or the deadline is what you see',
+  );
+});
+
+test('idle connections are given back rather than held forever', async () => {
+  assert.ok(POOL_OPTIONS.idle_timeout > 0, 'serverless instances vanish; sockets should not linger');
 });
