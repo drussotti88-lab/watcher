@@ -2612,6 +2612,33 @@ function fromPostgres(client) {
     }
   };
 }
+var CONNECTION_CODES = /* @__PURE__ */ new Set([
+  "CONNECTION_DESTROYED",
+  "CONNECTION_CLOSED",
+  "CONNECTION_ENDED",
+  "CONNECTION_REFUSED",
+  "CONNECT_TIMEOUT",
+  "ECONNRESET",
+  "ECONNREFUSED",
+  "EPIPE",
+  "ETIMEDOUT",
+  "ENOTFOUND",
+  // Postgres' own: admin shutdown, crash shutdown, cannot connect now.
+  "57P01",
+  "57P02",
+  "57P03",
+  "08006",
+  "08003"
+]);
+function isConnectionFailure(err) {
+  if (!err) return false;
+  const code = String(err.code ?? "");
+  if (CONNECTION_CODES.has(code)) return true;
+  const message = String(err.message ?? err);
+  return /CONNECTION_(DESTROYED|CLOSED|ENDED)|ECONNRESET|EPIPE|connection.*(closed|terminated|refused)/i.test(
+    message
+  );
+}
 function connectionStringFrom(env2) {
   const url = env2.DATABASE_URL ?? env2.POSTGRES_URL ?? "";
   if (!url) {
@@ -2661,7 +2688,6 @@ async function withDeadline(work, opts) {
 
 // src/server.ts
 var cached = null;
-var cachedClient = null;
 function db() {
   if (cached) return cached;
   const client = postgres(connectionStringFrom(process.env), {
@@ -2675,16 +2701,11 @@ function db() {
     // instance has.
     connection: { statement_timeout: 8e3 }
   });
-  cachedClient = client;
   cached = fromPostgres(client);
   return cached;
 }
 function dropConnection() {
-  const client = cachedClient;
   cached = null;
-  cachedClient = null;
-  void client?.end({ timeout: 0 }).catch(() => {
-  });
 }
 var ANSWER_WITHIN_MS = 12e3;
 function tooSlow() {
@@ -2734,7 +2755,7 @@ async function handler(req, res) {
       late: tooSlow
     });
   } catch (err) {
-    dropConnection();
+    if (isConnectionFailure(err)) dropConnection();
     response = new Response(
       JSON.stringify({ error: err.message }, null, 2),
       { status: 500, headers: { "Content-Type": "application/json; charset=utf-8" } }

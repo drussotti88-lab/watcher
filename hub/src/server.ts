@@ -25,7 +25,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import postgres from 'postgres';
 import { createHandler } from './app.ts';
-import { fromPostgres, connectionStringFrom, type Sql } from './db.ts';
+import { fromPostgres, connectionStringFrom, isConnectionFailure, type Sql } from './db.ts';
 import { withDeadline } from './deadline.ts';
 import type { Env } from './types.ts';
 
@@ -38,7 +38,6 @@ import type { Env } from './types.ts';
  * transaction pooler — `connectionStringFrom` refuses the direct one.
  */
 let cached: Sql | null = null;
-let cachedClient: { end: (opts?: unknown) => Promise<void> } | null = null;
 
 function db(): Sql {
   if (cached) return cached;
@@ -53,27 +52,36 @@ function db(): Sql {
     // instance has.
     connection: { statement_timeout: 8_000 },
   });
-  cachedClient = client as unknown as { end: (opts?: unknown) => Promise<void> };
   cached = fromPostgres(client as never);
   return cached;
 }
 
 /**
- * Throw away the cached connection.
+ * Stop handing out the cached connection.
  *
  * The failure this exists for: the pooler drops the single connection this
- * instance holds, postgres.js queues the next query waiting for a connection
- * that never comes back, and the request hangs until Vercel kills it at 30
- * seconds. Reconnecting costs a few hundred milliseconds; hanging costs a
- * whole pass and tells nobody why.
+ * instance holds, postgres.js queues the next query against a connection that
+ * never comes back, and the request hangs until Vercel kills it at 30 seconds.
+ *
+ * ── Why this does not close anything ────────────────────────────────────────
+ *
+ * It used to call `client.end({ timeout: 0 })`, and that was a bug I shipped.
+ * A warm instance can be serving several requests on that one client. Ending
+ * it destroys the socket underneath every query already in flight, so an
+ * unrelated, perfectly healthy request dies with
+ *
+ *   write CONNECTION_DESTROYED aws-0-us-east-2.pooler.supabase.com:6543
+ *
+ * — which is what a person saw on screen while adding a product, caused by a
+ * different request timing out beside it.
+ *
+ * Un-caching alone is enough. The next request builds a fresh client, queries
+ * already running finish on the old one, and postgres.js closes that socket
+ * itself once `idle_timeout` passes. Reconnecting costs a few hundred
+ * milliseconds. Killing someone else's write costs their write.
  */
 function dropConnection(): void {
-  const client = cachedClient;
   cached = null;
-  cachedClient = null;
-  // Fire and forget: we are already answering, and a socket we have given up
-  // on must not be able to delay the response.
-  void client?.end({ timeout: 0 }).catch(() => {});
 }
 
 const ANSWER_WITHIN_MS = 12_000;
@@ -136,9 +144,10 @@ export default async function handler(
       late: tooSlow,
     });
   } catch (err) {
-    // Whatever went wrong, do not hand the next request a connection we have
-    // just seen fail.
-    dropConnection();
+    // Only when the connection itself is implicated. Throwing away a healthy
+    // client because a query had a bad parameter would turn one bad request
+    // into a reconnect for everybody.
+    if (isConnectionFailure(err)) dropConnection();
     // A misconfigured database must say so loudly. The failure mode this
     // avoids is a Hub that answers /health cheerfully while dropping
     // everything the Watcher posts to it.

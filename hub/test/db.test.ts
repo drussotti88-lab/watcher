@@ -9,7 +9,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { connectionStringFrom } from '../src/db.ts';
+import { connectionStringFrom, isConnectionFailure } from '../src/db.ts';
 
 const REF = 'riwdybozflszkpcpdinc';
 const SHARED = `postgresql://postgres.${REF}:pw@aws-0-us-east-1.pooler.supabase.com:6543/postgres`;
@@ -62,4 +62,36 @@ test('a non-Supabase Postgres host is left alone', () => {
 
 test('POSTGRES_URL is accepted as an alias', () => {
   assert.equal(connectionStringFrom({ POSTGRES_URL: SHARED }), SHARED);
+});
+
+// ── Which failures cost us the connection ────────────────────────────────────
+
+test('A DEAD SOCKET IS A CONNECTION FAILURE', async () => {
+  // The one that started this: a request timed out, the handler ended the
+  // shared client, and an unrelated "Add product" running beside it died with
+  // exactly this. The text is kept verbatim because it is what reaches a user.
+  const seen = [
+    { code: 'CONNECTION_DESTROYED' },
+    new Error('write CONNECTION_DESTROYED aws-0-us-east-2.pooler.supabase.com:6543'),
+    { code: 'ECONNRESET' },
+    { code: '57P01' },
+    new Error('Connection terminated unexpectedly'),
+  ];
+  for (const err of seen) {
+    assert.equal(isConnectionFailure(err), true, JSON.stringify(String((err as any).code ?? err)));
+  }
+});
+
+test('A BAD QUERY IS NOT — it must not cost everybody a reconnect', async () => {
+  const notConnection = [
+    null,
+    undefined,
+    new Error('a product needs a name'),
+    new Error('duplicate key value violates unique constraint "products_pkey"'),
+    { code: '23505' },
+    { code: '42703', message: 'column "nope" does not exist' },
+  ];
+  for (const err of notConnection) {
+    assert.equal(isConnectionFailure(err), false, String(err));
+  }
 });

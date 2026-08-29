@@ -70,6 +70,46 @@ export function fromPostgres(client: PostgresLike): Sql {
  * A Hub that starts up against no database and only fails on the first real
  * request is a Hub that looks healthy while losing everything posted to it.
  */
+/**
+ * Is this error the connection failing, rather than the query being wrong?
+ *
+ * The distinction decides whether the pooled client gets thrown away. Getting
+ * it wrong in one direction keeps handing out a dead socket; in the other, one
+ * bad parameter makes every later request pay for a reconnect.
+ *
+ * postgres.js reports these as `code` on the error; the network ones arrive as
+ * Node syscall codes. Both are matched, and so is the message, because an error
+ * that has crossed a wrapper sometimes only has the text left.
+ */
+const CONNECTION_CODES = new Set([
+  'CONNECTION_DESTROYED',
+  'CONNECTION_CLOSED',
+  'CONNECTION_ENDED',
+  'CONNECTION_REFUSED',
+  'CONNECT_TIMEOUT',
+  'ECONNRESET',
+  'ECONNREFUSED',
+  'EPIPE',
+  'ETIMEDOUT',
+  'ENOTFOUND',
+  // Postgres' own: admin shutdown, crash shutdown, cannot connect now.
+  '57P01',
+  '57P02',
+  '57P03',
+  '08006',
+  '08003',
+]);
+
+export function isConnectionFailure(err: unknown): boolean {
+  if (!err) return false;
+  const code = String((err as { code?: unknown }).code ?? '');
+  if (CONNECTION_CODES.has(code)) return true;
+  const message = String((err as { message?: unknown }).message ?? err);
+  return /CONNECTION_(DESTROYED|CLOSED|ENDED)|ECONNRESET|EPIPE|connection.*(closed|terminated|refused)/i.test(
+    message,
+  );
+}
+
 export function connectionStringFrom(env: Record<string, string | undefined>): string {
   const url = env.DATABASE_URL ?? env.POSTGRES_URL ?? '';
   if (!url) {
