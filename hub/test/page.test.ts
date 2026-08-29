@@ -809,3 +809,126 @@ test('a successful add closes the dialog', async () => {
 
   assert.equal($(h, '#add-dialog').open, false);
 });
+
+// ── Numbers that add something, and a log that does not lie by omission ──────
+
+test('"0 AVAILABLE" IS NOT SHOWN NEXT TO OUT OF STOCK', async () => {
+  // The same fact twice, which is the shape of noise this card has already
+  // been cleaned of once.
+  const d = JSON.parse(JSON.stringify(DASHBOARD));
+  d.missions[0].state = 'out';
+  d.missions[0].availableQuantity = 0;
+  const h = await boot(d);
+  assert.doesNotMatch($(h, '#missions').textContent, /0 available/);
+});
+
+test('a real count is shown when it tells you something', async () => {
+  // Target states a genuine number in its fulfillment API. How much runway a
+  // restock has is worth knowing.
+  const d = JSON.parse(JSON.stringify(DASHBOARD));
+  d.missions[0].state = 'in';
+  d.missions[0].availableQuantity = 12;
+  const h = await boot(d);
+  assert.match($(h, '#missions').textContent, /12 available/);
+});
+
+test('a retailer that never states a count says nothing at all', async () => {
+  // Pokémon Center and Walmart do not give one. null means "not stated", which
+  // is not "none".
+  const d = JSON.parse(JSON.stringify(DASHBOARD));
+  d.missions[0].availableQuantity = null;
+  const h = await boot(d);
+  assert.doesNotMatch($(h, '#missions').textContent, /available/);
+});
+
+test('A RECOVERED SYSTEM DOES NOT READ AS PERMANENTLY BROKEN', async () => {
+  // Runs are only written when something happened, so after an outage the log
+  // is nothing but failures for ever. A check newer than the newest failure is
+  // the proof it recovered, and the log has to say so.
+  const d = JSON.parse(JSON.stringify(DASHBOARD));
+  d.runs = [
+    {
+      startedAt: new Date(Date.now() - 3600_000).toISOString(),
+      productName: 'Pitch Black ETB', outcome: 'failed',
+      reason: 'browser has been closed', price: null, ms: 26,
+    },
+  ];
+  d.missions[0].lastCheckedAt = new Date(Date.now() - 30_000).toISOString();
+
+  const h = await boot(d);
+  (h.doc.querySelector('[data-tab=activity]') as any).click();
+  const text = $(h, '#runs-card').textContent;
+
+  assert.match(text, /Checked successfully/);
+  assert.match(text, /nothing has failed since/);
+});
+
+test('a system still failing is not told it recovered', async () => {
+  const d = JSON.parse(JSON.stringify(DASHBOARD));
+  const failedAt = new Date(Date.now() - 30_000).toISOString();
+  d.runs = [
+    {
+      startedAt: failedAt, productName: 'Pitch Black ETB', outcome: 'failed',
+      reason: 'browser has been closed', price: null, ms: 26,
+    },
+  ];
+  d.missions[0].lastCheckedAt = new Date(Date.now() - 3600_000).toISOString();
+
+  const h = await boot(d);
+  (h.doc.querySelector('[data-tab=activity]') as any).click();
+  assert.doesNotMatch($(h, '#runs-card').textContent, /Checked successfully/);
+});
+
+test('a clean log is not given a recovery note either', async () => {
+  const d = JSON.parse(JSON.stringify(DASHBOARD));
+  d.runs = [
+    {
+      startedAt: new Date(Date.now() - 60_000).toISOString(),
+      productName: 'Pitch Black ETB', outcome: 'in_stock',
+      reason: 'in stock at $49.99', price: 49.99, ms: 812,
+    },
+  ];
+  const h = await boot(d);
+  (h.doc.querySelector('[data-tab=activity]') as any).click();
+  assert.doesNotMatch($(h, '#runs-card').textContent, /nothing has failed since/);
+});
+
+test('the run table stacks on a phone instead of one word per line', async () => {
+  // A five-column table at 390px wraps the product name down the screen while
+  // "when" and "outcome" sit in slivers beside it.
+  const html = dashboardPage();
+  assert.match(html, /@media \(max-width: 640px\)/);
+  assert.match(html, /table, tbody, tr, td \{ display: block/);
+  assert.match(html, /td\[data-label\]::before/);
+});
+
+test('every stacked cell carries the label its column header gave it', async () => {
+  const d = JSON.parse(JSON.stringify(DASHBOARD));
+  d.runs = [
+    {
+      startedAt: new Date().toISOString(), productName: 'Pitch Black ETB',
+      outcome: 'failed', reason: 'because', price: null, ms: 26,
+    },
+  ];
+  const h = await boot(d);
+  (h.doc.querySelector('[data-tab=activity]') as any).click();
+  const labels = [...h.doc.querySelectorAll('#runs-card td[data-label]')].map(
+    (td: any) => td.dataset.label,
+  );
+  assert.deepEqual(labels, ['when', 'outcome', 'why']);
+});
+
+test('the run log trims the shared prefix too', async () => {
+  const d = JSON.parse(JSON.stringify(DASHBOARD));
+  d.runs = [
+    {
+      startedAt: new Date().toISOString(),
+      productName: 'Pokémon Trading Card Game: 30th Celebration Elite Trainer Box',
+      outcome: 'failed', reason: 'because', price: null, ms: 26,
+    },
+  ];
+  const h = await boot(d);
+  (h.doc.querySelector('[data-tab=activity]') as any).click();
+  assert.match($(h, '#runs-card').textContent, /30th Celebration Elite Trainer Box/);
+  assert.doesNotMatch($(h, '#runs-card').textContent, /Trading Card Game/);
+});

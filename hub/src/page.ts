@@ -191,6 +191,26 @@ textarea { min-height: 64px; resize: vertical; }
                 font: 700 15px/1.4 var(--display); }
 
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
+
+/*
+ * Below 640px a five-column table becomes one word per line — the product name
+ * wrapping down the screen while "when" and "outcome" sit in slivers beside it.
+ * Each row becomes a block instead, with the headers hidden and the labels
+ * carried on the cells themselves.
+ */
+@media (max-width: 640px) {
+  table, tbody, tr, td { display: block; width: 100%; }
+  table th { display: none; }
+  tr { border-top: 1px solid var(--line); padding: 10px 0; }
+  tr:first-child { border-top: none; }
+  td { border: none; padding: 1px 0; text-align: left !important; }
+  td[data-label]::before {
+    content: attr(data-label) ' ';
+    color: var(--dim); text-transform: uppercase;
+    font: 600 10.5px/1.4 var(--sans); letter-spacing: .09em;
+  }
+  td.nowrap { white-space: normal; }
+}
 td, th { padding: 8px; border-top: 1px solid var(--line); vertical-align: top; text-align: left; }
 th { color: var(--dim); font: 600 10.5px/1.4 var(--sans); text-transform: uppercase;
      letter-spacing: .09em; border-top: none; }
@@ -672,7 +692,14 @@ function missionCard(m) {
   if (m.state === 'in' && m.lastChangedAt) {
     right.appendChild(el('div', 'meta', 'in stock since ' + ago(m.lastChangedAt)));
   }
-  if (m.availableQuantity !== null && m.availableQuantity !== undefined) {
+  // How many the retailer says it can ship. Target states a real number in its
+  // fulfillment API; Pokémon Center and Walmart do not, and null means "not
+  // stated" rather than "none".
+  //
+  // Only shown when it adds something. "0 available" next to OUT OF STOCK is
+  // the same fact twice — the shape of noise this card has already been
+  // cleaned of once.
+  if (m.availableQuantity > 0) {
     right.appendChild(el('div', 'meta', m.availableQuantity + ' available'));
   }
 
@@ -818,7 +845,7 @@ function missionPanel(m) {
     await withButton(btn, 'Loading…', null, async () => {
       const data = await api('GET', '/api/missions/' + m.id + '/runs');
       btn.remove();
-      runs.appendChild(runTable(data.runs, 'This mission has not run yet.'));
+      runs.appendChild(runTable(data.runs, 'This mission has not run yet.', m.lastCheckedAt));
     });
   });
   runs.appendChild(btn);
@@ -826,8 +853,40 @@ function missionPanel(m) {
   return wrap;
 }
 
-function runTable(runs, emptyText) {
+/**
+ * Has anything succeeded since the newest recorded problem?
+ *
+ * Runs are only written when a mission acted or could not, so a routine check
+ * that found nothing leaves no trace. That is right — it keeps the four rows
+ * that matter out of ten thousand that don't — but it has a cost: after an
+ * outage the log is nothing but failures, for ever, and a system that
+ * recovered an hour ago still reads as broken.
+ *
+ * A check newer than the newest failure is the proof that it isn't.
+ */
+function recoveredSince(runs, lastCheckedAt) {
+  if (!runs.length || !lastCheckedAt) return null;
+  const newestBad = runs.find((r) => r.outcome === 'failed' || r.outcome === 'blocked');
+  if (!newestBad) return null;
+  const checked = new Date(lastCheckedAt).getTime();
+  const failed = new Date(newestBad.startedAt).getTime();
+  return checked > failed ? { failed: newestBad.startedAt, checked: lastCheckedAt } : null;
+}
+
+function runTable(runs, emptyText, lastCheckedAt) {
   if (!runs.length) return el('div', 'meta', emptyText);
+
+  const wrap = el('div');
+  const good = recoveredSince(runs, lastCheckedAt);
+  if (good) {
+    const note = el('div', 'msg good');
+    note.style.marginBottom = '8px';
+    note.textContent =
+      'Checked successfully ' + ago(good.checked) + ' — nothing has failed since ' +
+      ago(good.failed) + '. Routine checks that find nothing are not recorded, ' +
+      'so the newest rows below are older than they look.';
+    wrap.appendChild(note);
+  }
   const table = el('table');
   const head = el('tr');
   for (const h of ['When', 'Product', 'Outcome', 'Reason', '']) head.appendChild(el('th', null, h));
@@ -835,11 +894,22 @@ function runTable(runs, emptyText) {
   body.appendChild(head);
   for (const r of runs) {
     const tr = el('tr');
-    tr.appendChild(el('td', 'meta nowrap', ago(r.startedAt)));
-    tr.appendChild(el('td', null, r.productName));
-    tr.appendChild(el('td', 'o-' + r.outcome + ' nowrap', r.outcome.replace('_', ' ')));
+    const when = el('td', 'meta nowrap', ago(r.startedAt));
+    when.dataset.label = 'when';
+    tr.appendChild(when);
+
+    const what = el('td', null, shortName(r.productName));
+    what.title = r.productName;
+    tr.appendChild(what);
+
+    const outcome = el('td', 'o-' + r.outcome + ' nowrap', r.outcome.replace('_', ' '));
+    outcome.dataset.label = 'outcome';
+    tr.appendChild(outcome);
+
     // Every non-success carries a reason. Showing it is the point of recording it.
-    tr.appendChild(el('td', 'meta', r.reason || ''));
+    const why = el('td', 'meta', r.reason || '');
+    why.dataset.label = 'why';
+    tr.appendChild(why);
     const right = el('td', 'meta nowrap mono',
       [r.price !== null ? money(r.price) : '', r.ms !== null ? r.ms + 'ms' : '']
         .filter(Boolean).join(' · '));
@@ -848,7 +918,8 @@ function runTable(runs, emptyText) {
     body.appendChild(tr);
   }
   table.appendChild(body);
-  return table;
+  wrap.appendChild(table);
+  return wrap;
 }
 
 /* ── products ───────────────────────────────────────────────────────────── */
@@ -1031,7 +1102,12 @@ function render() {
 
   const runsCard = document.getElementById('runs-card');
   runsCard.textContent = '';
-  runsCard.appendChild(runTable(DATA.runs, 'Nothing has run yet.'));
+  const newestCheck = DATA.missions
+    .map((m) => m.lastCheckedAt)
+    .filter(Boolean)
+    .sort()
+    .pop();
+  runsCard.appendChild(runTable(DATA.runs, 'Nothing has run yet.', newestCheck));
 
   const changesCard = document.getElementById('changes-card');
   changesCard.textContent = '';
