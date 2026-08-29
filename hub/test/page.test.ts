@@ -536,3 +536,75 @@ test('the page asks the browser to register a service worker', async () => {
   assert.match(html, /\/sw\.js/);
   assert.match(html, /rel="manifest"/);
 });
+
+// ── The ceiling, MSRP, and what is true of every mission ─────────────────────
+
+test('A SUGGESTED CEILING IS FILLED IN AND LABELLED AS A SUGGESTION', async () => {
+  // A number that appears in a spending field without saying where it came
+  // from is a limit nobody chose.
+  const d = JSON.parse(JSON.stringify(DASHBOARD));
+  d.missions[0].ceiling = null;
+  d.missions[0].msrp = 49.99;
+  d.settings = { taxRate: 0.0975, shippingAllowance: 0 };
+
+  const h = await boot(d);
+  const form = $(h, 'form[data-mission="1"]');
+  assert.equal(form.querySelector('[name=ceiling]').value, '54.86');
+  assert.match(form.querySelector('[data-hint=ceiling]').textContent, /suggested/i);
+  assert.match(form.querySelector('[data-hint=ceiling]').textContent, /9\.75% tax/);
+});
+
+test('a ceiling already set is never overwritten by a suggestion', async () => {
+  const d = JSON.parse(JSON.stringify(DASHBOARD));
+  d.missions[0].ceiling = 40;
+  d.missions[0].msrp = 49.99;
+  d.settings = { taxRate: 0.0975, shippingAllowance: 0 };
+
+  const h = await boot(d);
+  assert.equal($(h, 'form[data-mission="1"]').querySelector('[name=ceiling]').value, '40');
+});
+
+test('with no MSRP the box stays empty and says why', async () => {
+  const d = JSON.parse(JSON.stringify(DASHBOARD));
+  d.missions[0].ceiling = null;
+  d.missions[0].msrp = null;
+
+  const h = await boot(d);
+  const form = $(h, 'form[data-mission="1"]');
+  assert.equal(form.querySelector('[name=ceiling]').value, '');
+  assert.match(form.querySelector('[data-hint=ceiling]').textContent, /no MSRP/i);
+});
+
+test('THE TAX BOX SPEAKS PERCENT AND THE WIRE SPEAKS FRACTION', async () => {
+  // 9.75 sent as a rate would price every mission out of its own ceiling. The
+  // conversion lives in one place and this is the test that keeps it there.
+  const d = JSON.parse(JSON.stringify(DASHBOARD));
+  d.settings = { taxRate: 0, shippingAllowance: 0 };
+  const h = await boot(d);
+
+  const form = $(h, '#settings-form');
+  form.querySelector('[name=taxRatePercent]').value = '9.75';
+  form.querySelector('[name=shippingAllowance]').value = '9.99';
+  h.reply('POST /api/settings', { settings: {} });
+
+  submit(form, h.dom.window);
+  await h.settle();
+
+  const { body } = h.calls.find((c) => c.path === '/api/settings')!;
+  assert.equal(body.taxRate, 0.0975);
+  assert.equal(body.shippingAllowance, 9.99);
+});
+
+test('a saved rate comes back into the box as a percentage', async () => {
+  const d = JSON.parse(JSON.stringify(DASHBOARD));
+  d.settings = { taxRate: 0.0975, shippingAllowance: 9.99 };
+  const h = await boot(d);
+  assert.equal($(h, '#settings-form').querySelector('[name=taxRatePercent]').value, '9.75');
+  assert.equal($(h, '#settings-form').querySelector('[name=shippingAllowance]').value, '9.99');
+});
+
+test('the ceiling field says what it covers', async () => {
+  const h = await boot();
+  const label = $(h, 'form[data-mission="1"]').textContent;
+  assert.match(label, /per unit, including tax/);
+});

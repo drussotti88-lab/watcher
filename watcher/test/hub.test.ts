@@ -360,3 +360,41 @@ test('a genuinely empty watchlist is still an empty watchlist', async () => {
   const { hub } = hubWith([{ body: { missions: [] } }]);
   assert.deepEqual(await hub.missions(), []);
 });
+
+// ── Settings travel with the watchlist ───────────────────────────────────────
+
+test('settings arrive with the missions and are kept', async () => {
+  const { hub } = hubWith([
+    { body: { missions: [], settings: { taxRate: 0.0975, shippingAllowance: 9.99 } } },
+  ]);
+  await hub.missions();
+  assert.deepEqual(hub.settings, { taxRate: 0.0975, shippingAllowance: 9.99 });
+});
+
+test('settings default to the safe direction before the Hub has spoken', async () => {
+  // No tax estimate, and postage must be free. Both refuse rather than assume.
+  const hub = new Hub({ url: 'https://hub.test', token: 'tok' });
+  assert.deepEqual(hub.settings, { taxRate: 0, shippingAllowance: 0 });
+});
+
+test('A HALF-ANSWER DOES NOT SILENTLY RESET THE TAX RATE', async () => {
+  // An older Hub, or a truncated response, must not quietly turn a 9.75% rate
+  // into zero — that widens every ceiling by the tax and nothing says so.
+  const { impl } = stubFetch([
+    { body: { missions: [], settings: { taxRate: 0.0975, shippingAllowance: 9.99 } } },
+    { body: { missions: [] } },
+  ]);
+  const hub = new Hub({ url: 'https://hub.test', token: 'tok', fetchImpl: impl });
+
+  await hub.missions();
+  await hub.missions();
+  assert.equal(hub.settings.taxRate, 0.0975, 'the last known good rate stands');
+});
+
+test('a negative rate from the wire is clamped, not trusted', async () => {
+  const { hub } = hubWith([
+    { body: { missions: [], settings: { taxRate: -1, shippingAllowance: -5 } } },
+  ]);
+  await hub.missions();
+  assert.deepEqual(hub.settings, { taxRate: 0, shippingAllowance: 0 });
+});

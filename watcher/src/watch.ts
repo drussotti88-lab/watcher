@@ -22,7 +22,7 @@
  * check the detection half worked.
  */
 import type { Browser } from './browser.ts';
-import type { Hub, Mission, ObservationOut, RunOut } from './hub.ts';
+import { DEFAULT_SETTINGS, type Hub, type Mission, type ObservationOut, type RunOut, type Settings } from './hub.ts';
 import { Pacer, isDue, nextUp } from './rate.ts';
 import { readListing, type Reading } from './read.ts';
 import { unknownRead } from './readers/types.ts';
@@ -41,7 +41,11 @@ export interface Verdict {
  * judgements live, so they can be tested without a browser, a clock or a
  * network.
  */
-export function judge(mission: Mission, reading: Reading): Verdict {
+export function judge(
+  mission: Mission,
+  reading: Reading,
+  settings: Settings = DEFAULT_SETTINGS,
+): Verdict {
   const observation: ObservationOut = {
     listingId: mission.listingId,
     state: reading.state,
@@ -131,13 +135,24 @@ export function judge(mission: Mission, reading: Reading): Verdict {
     };
   }
 
-  if (reading.price > mission.ceiling) {
+  // The ceiling means item + tax per unit, and a listed price is always
+  // pre-tax. Comparing the two directly would let through everything priced
+  // just under the ceiling, every time, and only find out at the checkout.
+  //
+  // With no tax rate set this is the listed price unchanged, which is the old
+  // behaviour and still safe — the real number is caught by verifyCart before
+  // anything is submitted.
+  const withTax = round2(reading.price * (1 + settings.taxRate));
+  if (withTax > mission.ceiling) {
+    const taxNote = settings.taxRate > 0
+      ? ` (${money(reading.price)} + ${(settings.taxRate * 100).toFixed(2)}% tax)`
+      : '';
     return {
       observation,
       run: {
         ...base,
         outcome: 'declined',
-        reason: `${money(reading.price)} is over the ${money(mission.ceiling)} ceiling`,
+        reason: `${money(withTax)}${taxNote} is over the ${money(mission.ceiling)} ceiling`,
       },
     };
   }
@@ -155,18 +170,30 @@ export function judge(mission: Mission, reading: Reading): Verdict {
 
   // Everything a purchase needs is true. The one missing piece is the checkout
   // flow itself, which is written with a browser open and a person watching.
+  // Tax is charged on the order, not rounded onto each unit and then summed —
+  // doing it the other way loses a cent per item and the log stops matching
+  // the receipt.
+  const goods = round2(reading.price * mission.quantity * (1 + settings.taxRate));
   return {
     observation,
     run: {
       ...base,
       outcome: 'declined',
       quantity: mission.quantity,
-      total: reading.price * mission.quantity,
+      total: goods,
       reason:
         `would have bought ${mission.quantity} at ${money(reading.price)} ` +
-        `(${money(reading.price * mission.quantity)} total) — checkout is not built yet`,
+        `(${money(goods)} with tax` +
+        (settings.shippingAllowance > 0
+          ? `, plus up to ${money(settings.shippingAllowance)} shipping`
+          : ', shipping must be free') +
+        `) — checkout is not built yet`,
     },
   };
+}
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
 }
 
 function money(n: number | null): string {
@@ -260,7 +287,7 @@ export async function pass(missions: Mission[], pacer: Pacer, deps: WatchDeps): 
     }
     result.checked += 1;
 
-    const { observation, run } = judge(mission, reading);
+    const { observation, run } = judge(mission, reading, deps.hub.settings);
 
     if (reading.challenged) {
       const until = pacer.challenged(mission.retailer, now());

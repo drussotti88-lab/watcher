@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { judge, pass, type ReadFn } from '../src/watch.ts';
 import { Pacer, nextUp, DEFAULT_PACING, type Pacing } from '../src/rate.ts';
 import type { Browser } from '../src/browser.ts';
-import type { Hub, Mission, ObservationOut, RunOut } from '../src/hub.ts';
+import type { Hub, Mission, ObservationOut, RunOut, Settings } from '../src/hub.ts';
 import type { Reading } from '../src/read.ts';
 
 const T0 = 1_700_000_000_000;
@@ -184,8 +184,68 @@ test('a would-be purchase is declined honestly, with the total', () => {
   assert.equal(v.run?.outcome, 'declined');
   assert.equal(v.run?.quantity, 2);
   assert.equal(v.run?.total, 99.98);
-  assert.match(v.run!.reason, /would have bought 2 at \$49\.99 \(\$99\.98 total\)/);
+  assert.match(v.run!.reason, /would have bought 2 at \$49\.99 \(\$99\.98 with tax/);
   assert.match(v.run!.reason, /checkout is not built yet/);
+});
+
+// ── The ceiling means item + tax ─────────────────────────────────────────────
+
+const taxed = (rate: number, shipping = 0): Settings => ({
+  taxRate: rate,
+  shippingAllowance: shipping,
+});
+
+test('A PRICE UNDER THE CEILING CAN STILL BE OVER IT ONCE TAX IS ON', () => {
+  // $29.99 fits a $31 ceiling. At 9.75% it does not, and tax is what gets
+  // charged. Finding this out at the checkout instead is how you learn that
+  // your ceiling never meant what you thought.
+  const v = judge(
+    mission({ armed: true, ceiling: 31, quantity: 1 }),
+    reading({ state: 'in', price: 29.99 }),
+    taxed(0.0975),
+  );
+  assert.equal(v.run?.outcome, 'declined');
+  assert.match(v.run!.reason, /\$32\.91/);
+  assert.match(v.run!.reason, /9\.75% tax/);
+  assert.match(v.run!.reason, /\$31\.00 ceiling/);
+});
+
+test('with no tax rate set, the listed price is judged as-is', () => {
+  // Zero is a legitimate answer and means "do not estimate". The real number
+  // is still caught by verifyCart before anything is submitted.
+  const v = judge(
+    mission({ armed: true, ceiling: 31, quantity: 1 }),
+    reading({ state: 'in', price: 29.99 }),
+    taxed(0),
+  );
+  assert.match(v.run!.reason, /would have bought/);
+});
+
+test('the would-be total is the tax-inclusive one, not the sticker', () => {
+  const v = judge(
+    mission({ armed: true, ceiling: 60, quantity: 2 }),
+    reading({ state: 'in', price: 49.99 }),
+    taxed(0.0975),
+  );
+  assert.equal(v.run?.total, 109.73, '49.99 + tax, times two');
+});
+
+test('a shipping allowance is stated in the reason, and its absence is too', () => {
+  // "Shipping must be free" is a real constraint and the log should say so
+  // rather than leaving it out and looking like it does not apply.
+  const withAllowance = judge(
+    mission({ armed: true, ceiling: 60 }),
+    reading({ state: 'in', price: 49.99 }),
+    taxed(0, 9.99),
+  );
+  assert.match(withAllowance.run!.reason, /plus up to \$9\.99 shipping/);
+
+  const none = judge(
+    mission({ armed: true, ceiling: 60 }),
+    reading({ state: 'in', price: 49.99 }),
+    taxed(0, 0),
+  );
+  assert.match(none.run!.reason, /shipping must be free/);
 });
 
 test('nothing judge() can return ever says bought', () => {

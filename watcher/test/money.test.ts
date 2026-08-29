@@ -6,7 +6,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { decide, verifyCart, worstCase } from '../src/money.ts';
+import {
+  decide,
+  verifyCart,
+  worstCase,
+  type CartLimits,
+  type CartTotals,
+} from '../src/money.ts';
 import type { Observation, Watch } from '../src/types.ts';
 
 const budget = { perRun: 200, perDay: 500 };
@@ -172,75 +178,174 @@ test('every refusal explains itself', () => {
 
 // --------------------------------------------------------------------------
 // The cart gate — what the page said earlier is not what you'll be charged
+//
+// The ceiling means item + tax, per unit. Shipping is checked separately
+// against an account-wide allowance, so a refusal can say which one was too
+// much instead of quietly inflating the ceiling to cover postage.
 // --------------------------------------------------------------------------
+
+const limits = (over: Partial<CartLimits> = {}): CartLimits => ({
+  budget,
+  spent: fresh,
+  shippingAllowance: 10,
+  ...over,
+});
+const cart = (over: Partial<CartTotals> = {}): CartTotals => ({
+  unitPrice: 29.99,
+  quantity: 2,
+  tax: 5.85,
+  shipping: 0,
+  ...over,
+});
+
+test('a good cart passes, and says what it added up', () => {
+  const v = verifyCart({ watch: watch({ ceiling: 33 }), cart: cart(), limits: limits() });
+  assert.equal(v.ok, true);
+  assert.equal(v.total, 65.83);
+  assert.match(v.note, /29\.99.*5\.85 tax.*0\.00 shipping.*65\.83/);
+});
+
+test('THE CEILING INCLUDES TAX — a price that fits without it can still fail', () => {
+  // $29.99 is under a $30 ceiling. With tax it is not, and tax is what gets
+  // charged. This is the whole reason the rule changed.
+  const v = verifyCart({
+    watch: watch({ ceiling: 30, quantity: 2 }),
+    cart: cart({ unitPrice: 29.99, quantity: 2, tax: 5.85 }),
+    limits: limits(),
+  });
+  assert.equal(v.ok, false);
+  assert.equal(v.outcome, 'price_exceeded');
+  assert.match(v.note, /32\.92 per unit with tax/);
+  assert.match(v.note, /\$30\.00 ceiling/);
+});
 
 test('cart price drifting above the ceiling stops the submit', () => {
   const v = verifyCart({
     watch: watch({ ceiling: 30 }),
-    cartUnitPrice: 54.99,
-    cartQuantity: 2,
-    budget,
-    spent: fresh,
+    cart: cart({ unitPrice: 54.99, quantity: 2, tax: 10.72 }),
+    limits: limits(),
   });
   assert.equal(v.ok, false);
   assert.equal(v.outcome, 'price_exceeded');
 });
 
+test('SHIPPING IS ITS OWN REFUSAL, not a bigger ceiling', () => {
+  // Guppy adds $15 to the max price and calls it a shipping buffer, which
+  // turns a $30 limit into $45 while the log still says $30. Here the item
+  // passes and the postage is refused, by name.
+  const v = verifyCart({
+    watch: watch({ ceiling: 33 }),
+    cart: cart({ shipping: 14.99 }),
+    limits: limits({ shippingAllowance: 10 }),
+  });
+  assert.equal(v.ok, false);
+  assert.equal(v.outcome, 'shipping_exceeded');
+  assert.match(v.note, /shipping is \$14\.99 and the allowance is \$10\.00/);
+});
+
+test('shipping exactly at the allowance is allowed', () => {
+  const v = verifyCart({
+    watch: watch({ ceiling: 33 }),
+    cart: cart({ shipping: 10 }),
+    limits: limits({ shippingAllowance: 10 }),
+  });
+  assert.equal(v.ok, true);
+});
+
+test('an allowance of zero means free shipping or no purchase', () => {
+  const free = verifyCart({
+    watch: watch({ ceiling: 33 }),
+    cart: cart({ shipping: 0 }),
+    limits: limits({ shippingAllowance: 0 }),
+  });
+  assert.equal(free.ok, true);
+
+  const paid = verifyCart({
+    watch: watch({ ceiling: 33 }),
+    cart: cart({ shipping: 4.99 }),
+    limits: limits({ shippingAllowance: 0 }),
+  });
+  assert.equal(paid.outcome, 'shipping_exceeded');
+});
+
 test('cart quantity not matching the mandate stops the submit', () => {
   const v = verifyCart({
     watch: watch({ quantity: 2 }),
-    cartUnitPrice: 29.99,
-    cartQuantity: 10,
-    budget,
-    spent: fresh,
+    cart: cart({ quantity: 10 }),
+    limits: limits(),
   });
   assert.equal(v.ok, false);
   assert.equal(v.outcome, 'qty_unavailable');
   assert.match(v.note, /10.*2/);
 });
 
+test('AN UNREADABLE TAX LINE IS A FAILURE, NEVER ZERO TAX', () => {
+  // A missing tax line is not "no tax". It is a checkout page we did not
+  // understand, and the ceiling is defined in terms of the number we could not
+  // find. Assuming zero here is how you pay 9% more than your mandate.
+  const v = verifyCart({
+    watch: watch({ ceiling: 33 }),
+    cart: cart({ tax: null }),
+    limits: limits(),
+  });
+  assert.equal(v.ok, false);
+  assert.equal(v.outcome, 'failed');
+  assert.match(v.note, /could not read the tax/);
+});
+
 test('an unreadable cart is a failure, never an assumption', () => {
-  const noPrice = verifyCart({
-    watch: watch(),
-    cartUnitPrice: null,
-    cartQuantity: 2,
-    budget,
-    spent: fresh,
-  });
-  assert.equal(noPrice.ok, false);
-  assert.equal(noPrice.outcome, 'failed');
-
-  const noQty = verifyCart({
-    watch: watch(),
-    cartUnitPrice: 29.99,
-    cartQuantity: null,
-    budget,
-    spent: fresh,
-  });
-  assert.equal(noQty.ok, false);
+  for (const broken of [
+    cart({ unitPrice: null }),
+    cart({ quantity: null }),
+    cart({ shipping: null }),
+  ]) {
+    const v = verifyCart({ watch: watch({ ceiling: 33 }), cart: broken, limits: limits() });
+    assert.equal(v.ok, false, JSON.stringify(broken));
+    assert.equal(v.outcome, broken.quantity === null ? 'failed' : 'failed');
+  }
 });
 
-test('a good cart passes', () => {
+test('a watch with no ceiling cannot pass the cart gate either', () => {
+  // The rule is enforced twice on purpose. One place to forget is one too many.
   const v = verifyCart({
-    watch: watch(),
-    cartUnitPrice: 29.99,
-    cartQuantity: 2,
-    budget,
-    spent: fresh,
+    watch: watch({ ceiling: null }),
+    cart: cart(),
+    limits: limits(),
   });
-  assert.equal(v.ok, true);
+  assert.equal(v.ok, false);
+  assert.match(v.note, /no price ceiling/);
 });
 
-test('the cart gate re-checks budget, not just price', () => {
+test('the cart gate re-checks budget on the whole order, shipping included', () => {
   const v = verifyCart({
-    watch: watch({ ceiling: 100, quantity: 2 }),
-    cartUnitPrice: 100,
-    cartQuantity: 2,
-    budget: { perRun: 150, perDay: 1000 },
-    spent: fresh,
+    watch: watch({ ceiling: 120, quantity: 2 }),
+    cart: cart({ unitPrice: 100, quantity: 2, tax: 19.5, shipping: 9.99 }),
+    limits: limits({ budget: { perRun: 150, perDay: 1000 }, shippingAllowance: 10 }),
   });
   assert.equal(v.ok, false);
   assert.equal(v.outcome, 'budget_exceeded');
+  assert.match(v.note, /per-run cap/);
+});
+
+test('the daily cap is named separately from the per-run one', () => {
+  const v = verifyCart({
+    watch: watch({ ceiling: 120, quantity: 1 }),
+    cart: cart({ unitPrice: 100, quantity: 1, tax: 9.75, shipping: 0 }),
+    limits: limits({ budget: { perRun: 200, perDay: 300 }, spent: { run: 0, day: 250 } }),
+  });
+  assert.equal(v.outcome, 'budget_exceeded');
+  assert.match(v.note, /daily cap/);
+});
+
+test('worst case counts the shipping allowance once per armed watch', () => {
+  // Each armed watch is a separate order, so each can pay postage. Leaving it
+  // out understates the night by exactly the amount nobody budgets for.
+  const ws: Watch[] = [
+    watch({ id: 'a', ceiling: 30, quantity: 2 }),
+    watch({ id: 'b', ceiling: 25, quantity: 1 }),
+  ];
+  assert.equal(worstCase(ws), 85, '30x2 + 25x1');
+  assert.equal(worstCase(ws, 10), 105, 'plus postage on each of the two orders');
 });
 
 test('worst case sums armed watches only', () => {

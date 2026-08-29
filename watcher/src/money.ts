@@ -157,58 +157,133 @@ export function decide(args: {
  * changes. Whatever the page said earlier is not evidence about what you are
  * about to be charged.
  */
-export function verifyCart(args: {
-  watch: Watch;
-  cartUnitPrice: number | null;
-  cartQuantity: number | null;
+/**
+ * What the cart actually says, once everything is added up.
+ *
+ * Read from the checkout page rather than inferred, because the whole point of
+ * this check is that the listed price was never the amount that leaves your
+ * account.
+ */
+export interface CartTotals {
+  /** Per unit, before tax — what the listing advertised. */
+  unitPrice: number | null;
+  quantity: number | null;
+  /** Sales tax on the whole order. */
+  tax: number | null;
+  /** Postage on the whole order. Zero is a real answer; null is not. */
+  shipping: number | null;
+}
+
+export interface CartLimits {
   budget: Budget;
   spent: SpendLedger;
-}): { ok: boolean; outcome: Outcome; note: string } {
-  const { watch, cartUnitPrice, cartQuantity, budget, spent } = args;
+  /** Account-wide, per order. Not part of the ceiling — see below. */
+  shippingAllowance: number;
+}
+
+/**
+ * The last gate before money moves.
+ *
+ * ── What the ceiling means ──────────────────────────────────────────────────
+ *
+ * The most to pay **per unit, including tax**. Not the listed price: a listed
+ * price is always pre-tax, and pre-tax is not what leaves your account.
+ *
+ * ── Why shipping is not in it ───────────────────────────────────────────────
+ *
+ * Shipping is charged per order and the ceiling is per unit, so the two cannot
+ * be added without lying about one of them. Guppy's answer is a "+$15 shipping
+ * buffer" bolted onto the max price, which turns a $30 ceiling into $45 while
+ * the mission log still says $30. Here they stay separate: the ceiling covers
+ * the goods and the tax on them, and postage is checked against its own
+ * account-wide allowance, so a refusal can say which one was too much.
+ */
+export function verifyCart(args: {
+  watch: Watch;
+  cart: CartTotals;
+  limits: CartLimits;
+}): { ok: boolean; outcome: Outcome; note: string; total: number | null } {
+  const { watch, cart, limits } = args;
   const wanted = Math.max(1, watch.quantity || 1);
+  const no = (outcome: Outcome, note: string): {
+    ok: boolean;
+    outcome: Outcome;
+    note: string;
+    total: number | null;
+  } => ({ ok: false, outcome, note, total: null });
 
-  if (cartUnitPrice === null) {
-    return { ok: false, outcome: 'failed', note: 'could not read the cart price' };
+  if (cart.unitPrice === null) return no('failed', 'could not read the cart price');
+  if (cart.quantity === null) return no('failed', 'could not read the cart quantity');
+  if (cart.quantity !== wanted) {
+    return no('qty_unavailable', `cart has ${cart.quantity}, you asked for ${wanted}`);
   }
-  if (watch.ceiling === null || cartUnitPrice > watch.ceiling) {
-    return {
-      ok: false,
-      outcome: 'price_exceeded',
-      note: `cart says ${money(cartUnitPrice)}, ceiling is ${money(watch.ceiling ?? 0)}`,
-    };
-  }
-  if (cartQuantity === null) {
-    return { ok: false, outcome: 'failed', note: 'could not read the cart quantity' };
-  }
-  if (cartQuantity !== wanted) {
-    return {
-      ok: false,
-      outcome: 'qty_unavailable',
-      note: `cart has ${cartQuantity}, you asked for ${wanted}`,
-    };
+  if (watch.ceiling === null) {
+    return no('price_exceeded', 'this watch has no price ceiling, so nothing authorises a purchase');
   }
 
-  const total = round2(cartUnitPrice * cartQuantity);
-  if (spent.run + total > budget.perRun || spent.day + total > budget.perDay) {
-    return {
-      ok: false,
-      outcome: 'budget_exceeded',
-      note: `cart total ${money(total)} breaks a spend cap`,
-    };
+  // Fail closed on an unreadable number. A missing tax line is not zero tax;
+  // it is a checkout page we did not understand, and the ceiling is defined in
+  // terms of it.
+  if (cart.tax === null) {
+    return no('failed', 'could not read the tax, and the ceiling is defined including it');
+  }
+  if (cart.shipping === null) return no('failed', 'could not read the shipping cost');
+
+  const goods = round2(cart.unitPrice * cart.quantity);
+  const withTax = round2(goods + cart.tax);
+  const perUnit = round2(withTax / cart.quantity);
+
+  if (perUnit > watch.ceiling) {
+    return no(
+      'price_exceeded',
+      `${money(perUnit)} per unit with tax (${money(cart.unitPrice)} + ` +
+        `${money(round2(cart.tax / cart.quantity))} tax) is over the ` +
+        `${money(watch.ceiling)} ceiling`,
+    );
   }
 
-  return { ok: true, outcome: 'bought', note: `cart verified at ${money(total)}` };
+  if (cart.shipping > limits.shippingAllowance) {
+    return no(
+      'shipping_exceeded',
+      `shipping is ${money(cart.shipping)} and the allowance is ` +
+        `${money(limits.shippingAllowance)}`,
+    );
+  }
+
+  // The caps are on money out of the door, so they see the whole order.
+  const total = round2(withTax + cart.shipping);
+  if (limits.spent.run + total > limits.budget.perRun) {
+    return no('budget_exceeded', `${money(total)} would break the ${money(limits.budget.perRun)} per-run cap`);
+  }
+  if (limits.spent.day + total > limits.budget.perDay) {
+    return no('budget_exceeded', `${money(total)} would break the ${money(limits.budget.perDay)} daily cap`);
+  }
+
+  return {
+    ok: true,
+    outcome: 'bought',
+    note:
+      `cart verified: ${cart.quantity} x ${money(cart.unitPrice)} + ` +
+      `${money(cart.tax)} tax + ${money(cart.shipping)} shipping = ${money(total)}`,
+    total,
+  };
 }
 
 export function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
-/** What every armed watch would cost if all of them fired. */
-export function worstCase(watches: readonly Watch[]): number {
+/**
+ * What every armed watch would cost if all of them fired.
+ *
+ * The shipping allowance counts once per armed watch, because each is a
+ * separate order. Leaving it out understates the night by exactly the amount
+ * nobody budgets for.
+ */
+export function worstCase(watches: readonly Watch[], shippingAllowance = 0): number {
+  const armed = watches.filter((w) => w.armed && w.ceiling !== null);
   return round2(
-    watches
-      .filter((w) => w.armed && w.ceiling !== null)
-      .reduce((sum, w) => sum + w.ceiling! * Math.max(1, w.quantity || 1), 0),
+    armed.reduce((sum, w) => sum + w.ceiling! * Math.max(1, w.quantity || 1), 0) +
+      armed.length * shippingAllowance,
   );
 }

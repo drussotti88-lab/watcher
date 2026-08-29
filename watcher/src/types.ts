@@ -46,6 +46,9 @@ export type Outcome =
   | 'blocked'
   | 'duplicate_prevented'
   | 'budget_exceeded'
+  /** Shipping alone broke the account-wide allowance. Its own outcome, because
+   *  "the item was too expensive" and "the postage was" have different fixes. */
+  | 'shipping_exceeded'
   | 'not_authorised'
   | 'dry_run'
   | 'failed';

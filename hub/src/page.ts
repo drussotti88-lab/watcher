@@ -8,6 +8,19 @@
  *
  * Data arrives as JSON from /api/dashboard and renders client-side, so the page
  * can refresh itself without a reload.
+ *
+ * ── One trap, which has now bitten three times ──────────────────────────────
+ *
+ * The whole script lives inside a TypeScript template literal, so it eats a
+ * layer of backslashes before a browser ever sees it. A regex written the
+ * obvious way arrives mangled and usually still *parses*:
+ *
+ *   in this file      what the browser gets    what it does
+ *   /^https?:\/\//     /^https?://              SyntaxError, page dead
+ *   /\.$/              /.$/                     matches any char, ate a digit
+ *
+ * Double every backslash, or avoid the regex. The jsdom tests catch these
+ * because they press the real buttons; nothing else does.
  */
 
 function esc(s: string): string {
@@ -275,6 +288,7 @@ ${FONTS}<style>${STYLE}</style></head>
     <button class="tab on" data-tab="missions">Missions<span class="count" id="c-missions"></span></button>
     <button class="tab" data-tab="products">Products<span class="count" id="c-products"></span></button>
     <button class="tab" data-tab="activity">Activity<span class="count" id="c-activity"></span></button>
+    <button class="tab" data-tab="settings">Settings</button>
   </div>
 
   <div class="bar">
@@ -331,6 +345,41 @@ ${FONTS}<style>${STYLE}</style></head>
 
     <h2>Stock and price changes</h2>
     <div class="card" id="changes-card"></div>
+  </section>
+
+  <section id="tab-settings" hidden>
+    <h2 style="margin-top:0">What is true of every mission</h2>
+    <p class="sub" style="margin:-6px 0 14px">
+      A price ceiling is per unit and covers the item and the tax on it.
+      Shipping is charged per order, not per unit, so it has its own allowance
+      here rather than being folded into the ceiling — adding it there would
+      turn a $30 limit into $45 while the log still said $30.
+    </p>
+    <div class="card">
+      <form class="stack" id="settings-form">
+        <div class="grid2">
+          <label class="f">Sales tax rate
+            <span class="hint">as a percentage — 9.75 for 9.75%</span>
+            <input type="number" name="taxRatePercent" step="0.001" min="0" max="25"
+                   placeholder="0">
+          </label>
+          <label class="f">Shipping allowance
+            <span class="hint">per order, on top of the ceiling</span>
+            <input type="number" name="shippingAllowance" step="0.01" min="0" placeholder="0.00">
+          </label>
+        </div>
+        <p class="sub" style="margin:0">
+          A tax rate of 0 means no estimate is made: a listed price is judged as
+          it stands and tax is only checked in the cart, where it is a real
+          number rather than a guess. A shipping allowance of 0 means postage
+          has to be free.
+        </p>
+        <div class="actions">
+          <button type="submit" class="primary">Save settings</button>
+          <span class="msg" id="settings-msg"></span>
+        </div>
+      </form>
+    </div>
   </section>
 </main>
 <script>
@@ -542,8 +591,9 @@ function missionPanel(m) {
   form.dataset.mission = String(m.id);
   form.innerHTML = \`
     <div class="grid2">
-      <label class="f">Price ceiling <span class="hint">per unit</span>
+      <label class="f">Price ceiling <span class="hint">per unit, including tax</span>
         <input type="number" name="ceiling" step="0.01" min="0.01" placeholder="none set">
+        <span class="hint" data-hint="ceiling"></span>
       </label>
       <label class="f">Quantity
         <input type="number" name="quantity" min="1" max="20">
@@ -574,7 +624,23 @@ function missionPanel(m) {
     </div>\`;
 
   const q = (n) => form.querySelector('[name=' + n + ']');
-  q('ceiling').value = m.ceiling ?? '';
+  // Suggest a ceiling from MSRP when there isn't one, and say that is what it
+  // is. A suggestion you can see and overwrite; never a limit that appeared on
+  // its own. Arming stays a separate, explicit tick.
+  const hint = form.querySelector('[data-hint=ceiling]');
+  if (m.ceiling !== null) {
+    q('ceiling').value = m.ceiling;
+  } else if (m.msrp !== null) {
+    const rate = (DATA.settings && DATA.settings.taxRate) || 0;
+    const suggested = Math.round(m.msrp * (1 + rate) * 100) / 100;
+    q('ceiling').value = suggested;
+    hint.textContent = rate > 0
+      ? 'suggested: MSRP ' + money(m.msrp) + ' + ' + (rate * 100).toFixed(2) + '% tax — change it'
+      : 'suggested from MSRP ' + money(m.msrp) + ' — no tax rate set, so tax is only checked in the cart';
+  } else {
+    q('ceiling').value = '';
+    hint.textContent = 'no MSRP on this product to suggest one from';
+  }
   q('quantity').value = m.quantity;
   q('checkEverySeconds').value = String(m.checkEverySeconds);
   q('sellerPolicy').value = m.sellerPolicy;
@@ -900,6 +966,23 @@ function render() {
   document.getElementById('summary').textContent =
     parts.length ? parts.join(' · ') : 'nothing in stock';
 
+  const st = DATA.settings || { taxRate: 0, shippingAllowance: 0 };
+  const sf = document.getElementById('settings-form');
+  // Percent in the box, fraction on the wire. 9.75 typed where 0.0975 was
+  // meant would decline every mission you own, so the form only ever speaks
+  // percent and the conversion happens in one place.
+  if (document.activeElement !== sf.querySelector('[name=taxRatePercent]')) {
+    // Number(...) rather than a regex to trim the zeros. Every backslash in
+    // this file has to survive the template literal, and /\\.$/ written the
+    // obvious way reaches the browser as /.$/ — which matches any character
+    // and silently turned 9.75 into 9.7.
+    sf.querySelector('[name=taxRatePercent]').value =
+      st.taxRate ? String(Number((st.taxRate * 100).toFixed(3))) : '';
+  }
+  if (document.activeElement !== sf.querySelector('[name=shippingAllowance]')) {
+    sf.querySelector('[name=shippingAllowance]').value = st.shippingAllowance || '';
+  }
+
   document.getElementById('c-missions').textContent = DATA.missions.length || '';
   document.getElementById('c-products').textContent = DATA.products.length || '';
   document.getElementById('c-activity').textContent = DATA.runs.length || '';
@@ -938,11 +1021,27 @@ document.getElementById('product-form').addEventListener('submit', async (e) => 
 for (const tab of document.querySelectorAll('.tab')) {
   tab.addEventListener('click', () => {
     for (const t of document.querySelectorAll('.tab')) t.classList.toggle('on', t === tab);
-    for (const name of ['missions', 'products', 'activity']) {
+    for (const name of ['missions', 'products', 'activity', 'settings']) {
       document.getElementById('tab-' + name).hidden = name !== tab.dataset.tab;
     }
   });
 }
+
+document.getElementById('settings-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const form = e.target;
+  const f = fields(form);
+  const msg = document.getElementById('settings-msg');
+  await withButton(form.querySelector('button[type=submit]'), 'Saving…', msg, async () => {
+    const percent = Number(f.taxRatePercent || 0);
+    await api('POST', '/api/settings', {
+      taxRate: Math.round(percent * 1000) / 100000,
+      shippingAllowance: Number(f.shippingAllowance || 0),
+    });
+    load();
+    return 'saved — applies to every mission';
+  });
+});
 
 document.getElementById('refresh').addEventListener('click', (e) =>
   withButton(e.target, 'Refreshing…', null, load));

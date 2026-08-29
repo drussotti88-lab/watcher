@@ -465,6 +465,92 @@ export interface MissionInput {
   notes?: string;
 }
 
+// ── Account settings ─────────────────────────────────────────────────────────
+
+/**
+ * What is true of every mission rather than of one.
+ *
+ * Both of these exist because a price ceiling on the item alone is not a limit
+ * on what leaves your account.
+ */
+export interface Settings {
+  /**
+   * Sales tax rate, as a fraction. 0.0975 is 9.75%.
+   *
+   * Used for two things: suggesting a ceiling from a product's MSRP, and
+   * judging a listed price before checkout — a listed price is always pre-tax,
+   * and the ceiling is not.
+   *
+   * Zero is a legitimate answer and means "do not estimate". Tax is then
+   * checked only in the cart, where it is a real number rather than a guess.
+   */
+  taxRate: number;
+  /**
+   * The most to pay for shipping on any one order, on top of the ceiling.
+   *
+   * Deliberately separate from the ceiling rather than folded into it. Shipping
+   * is per order and the ceiling is per unit, so adding one to the other — the
+   * way Guppy's "+$15 to your max price" does — quietly turns a $30 limit into
+   * $45 and leaves the log still saying $30.
+   */
+  shippingAllowance: number;
+}
+
+export const DEFAULT_SETTINGS: Settings = { taxRate: 0, shippingAllowance: 0 };
+
+export function validateSettings(s: Partial<Settings>): string | null {
+  if (s.taxRate !== undefined) {
+    if (!Number.isFinite(s.taxRate) || s.taxRate < 0) return 'a tax rate cannot be negative';
+    // A rate above 25% is almost certainly 9.75 typed where 0.0975 was meant,
+    // and silently accepting it would decline every mission you own.
+    if (s.taxRate > 0.25) {
+      return 'a tax rate above 25% looks like a percentage — enter 0.0975 for 9.75%';
+    }
+  }
+  if (s.shippingAllowance !== undefined) {
+    if (!Number.isFinite(s.shippingAllowance) || s.shippingAllowance < 0) {
+      return 'a shipping allowance cannot be negative';
+    }
+    if (s.shippingAllowance > 100) return 'that shipping allowance looks like a typo';
+  }
+  return null;
+}
+
+export async function getSettings(db: Sql): Promise<Settings> {
+  const rows = await db.query<{ key: string; value: string }>('SELECT key, value FROM settings');
+  const map = new Map(rows.map((r) => [r.key, r.value]));
+  const num = (k: string, fallback: number): number => {
+    const raw = map.get(k);
+    if (raw === undefined) return fallback;
+    const n = Number(raw);
+    // A corrupted row falls back rather than making every comparison NaN —
+    // NaN > ceiling is false, which would silently approve everything.
+    return Number.isFinite(n) && n >= 0 ? n : fallback;
+  };
+  return {
+    taxRate: num('taxRate', DEFAULT_SETTINGS.taxRate),
+    shippingAllowance: num('shippingAllowance', DEFAULT_SETTINGS.shippingAllowance),
+  };
+}
+
+export async function setSettings(db: Sql, patch: Partial<Settings>): Promise<Settings> {
+  const problem = validateSettings(patch);
+  if (problem) throw new Error(problem);
+
+  const statements: Statement[] = [];
+  for (const key of ['taxRate', 'shippingAllowance'] as const) {
+    const value = patch[key];
+    if (value === undefined) continue;
+    statements.push({
+      text: `INSERT INTO settings (key, value) VALUES ($1, $2)
+             ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+      params: [key, String(value)],
+    });
+  }
+  if (statements.length) await db.batch(statements);
+  return getSettings(db);
+}
+
 export interface MissionRow {
   id: number;
   listingId: number;

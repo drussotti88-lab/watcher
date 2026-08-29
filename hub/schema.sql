@@ -193,6 +193,21 @@ CREATE INDEX IF NOT EXISTS missions_active_idx ON missions (enabled, armed);
 ALTER TABLE missions ADD COLUMN IF NOT EXISTS check_now_at TIMESTAMPTZ;
 
 -- ---------------------------------------------------------------------------
+-- Account settings
+-- ---------------------------------------------------------------------------
+--
+-- Things that are true of every mission rather than of one. Kept as key/value
+-- rather than columns on a settings row, because Half B will want to add to
+-- this and a migration per preference is a bad trade.
+--
+-- Money lives here, so the values are validated in store.ts before they land.
+CREATE TABLE IF NOT EXISTS settings (
+  key        TEXT PRIMARY KEY,
+  value      TEXT NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- ---------------------------------------------------------------------------
 -- Mission runs — what happened, and why
 --
 -- NOT one row per poll. A mission checking a static product every minute for a

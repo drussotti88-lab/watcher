@@ -99,8 +99,14 @@ export function fromPostgres(client: PostgresLike): Sql {
 export const POOL_OPTIONS = {
   /** The pooler does not support prepared statements. */
   prepare: false,
-  /** Enough for the widest Promise.all on the busiest route, and no more. */
-  max: 5,
+  /**
+   * Enough for the widest Promise.all in app.ts, with headroom.
+   *
+   * A test counts that width from the source rather than trusting this comment
+   * — adding a sixth query to /api/dashboard while max was 5 would have
+   * re-created the deadlock within the hour, and did nearly do exactly that.
+   */
+  max: 8,
   idle_timeout: 20,
   connect_timeout: 10,
   /**

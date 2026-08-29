@@ -170,14 +170,15 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
 
     /** Everything the page renders, in one request. */
     if (request.method === 'GET' && path === '/api/dashboard') {
-      const [missions, runs, changes, products, listings] = await Promise.all([
+      const [missions, runs, changes, products, listings, settings] = await Promise.all([
         store.listMissions(db),
         store.recentRuns(db, 40),
         store.recentObservations(db, 40),
         store.listProducts(db),
         store.listListings(db),
+        store.getSettings(db),
       ]);
-      return json({ missions, runs, changes, products, listings, now });
+      return json({ missions, runs, changes, products, listings, settings, now });
     }
 
     /** A single mission's whole run history. */
@@ -344,9 +345,31 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       return json({ deleted: id });
     }
 
-    /** What the Watcher polls: enabled missions, with their mandate attached. */
+    if (request.method === 'GET' && path === '/api/settings') {
+      return json({ settings: await store.getSettings(db) });
+    }
+
+    if (request.method === 'POST' && path === '/api/settings') {
+      const b = await body<Partial<store.Settings>>();
+      if (!b) return json({ error: 'body must be JSON' }, 400);
+      try {
+        return json({ settings: await store.setSettings(db, b) });
+      } catch (err) {
+        return json({ error: (err as Error).message }, 400);
+      }
+    }
+
+    /**
+     * What the Watcher polls: enabled missions, with their mandate attached —
+     * and the account settings, because the mandate is not complete without
+     * them. A ceiling means item plus tax, and tax needs a rate.
+     */
     if (request.method === 'GET' && path === '/api/missions/active') {
-      return json({ missions: await store.activeMissions(db) });
+      const [missions, settings] = await Promise.all([
+        store.activeMissions(db),
+        store.getSettings(db),
+      ]);
+      return json({ missions, settings });
     }
 
     /** The Watcher reporting a run it has already finished. */

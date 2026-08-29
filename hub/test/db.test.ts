@@ -8,6 +8,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 
 import { connectionStringFrom, isConnectionFailure, POOL_OPTIONS } from '../src/db.ts';
 
@@ -99,16 +100,43 @@ test('A BAD QUERY IS NOT — it must not cost everybody a reconnect', async () =
 // ── The pool ─────────────────────────────────────────────────────────────────
 
 test('THE POOL IS BIG ENOUGH FOR THE WIDEST PROMISE.ALL', async () => {
-  // This cannot be reproduced in-process: PGlite is a single embedded engine
-  // and the failure lives in pgbouncer's transaction mode. So the test guards
-  // the number, and the number is the fix.
+  // Counted from the source, not asserted against a number someone remembered.
   //
-  // With max: 1, /api/dashboard's five parallel queries never returned — not
-  // slowly, at all — while each of the five ran alone in under 300ms.
+  // The deadlock this prevents cannot be reproduced in-process: PGlite is one
+  // embedded engine and the fault lives in pgbouncer's transaction mode. With
+  // max: 1, /api/dashboard's parallel queries never returned — not slowly, at
+  // all — while each of them ran alone in under 300ms.
+  //
+  // This test earns its place because the very next change after the fix added
+  // a sixth query to that Promise.all while max was 5.
+  const src = await readFile(new URL('../src/app.ts', import.meta.url), 'utf8');
+
+  let widest = 0;
+  let where = '';
+  for (const match of src.matchAll(/Promise\.all\(\[/g)) {
+    const start = match.index! + match[0].length;
+    let depth = 1;
+    let entries = 1;
+    let i = start;
+    for (; i < src.length && depth > 0; i += 1) {
+      const c = src[i] ?? '';
+      if (c && '([{'.includes(c)) depth += 1;
+      else if (c && ')]}'.includes(c)) depth -= 1;
+      else if (c === ',' && depth === 1) entries += 1;
+    }
+    // A trailing comma before the closing bracket counts one entry too many.
+    if (/,\s*$/.test(src.slice(start, i - 1))) entries -= 1;
+    if (entries > widest) {
+      widest = entries;
+      where = src.slice(start, start + 60).split('\n')[1]?.trim() ?? '';
+    }
+  }
+
+  assert.ok(widest > 0, 'expected to find at least one Promise.all in app.ts');
   assert.ok(
-    POOL_OPTIONS.max >= 5,
-    'max must cover the widest Promise.all in app.ts (/api/dashboard runs five); ' +
-      'at 1 those queries deadlock through the pooler',
+    POOL_OPTIONS.max >= widest,
+    `app.ts runs ${widest} queries in one Promise.all (near "${where}") but the pool ` +
+      `allows ${POOL_OPTIONS.max}. Below the width they deadlock through the pooler.`,
   );
 });
 

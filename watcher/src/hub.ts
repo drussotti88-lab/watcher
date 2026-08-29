@@ -34,6 +34,21 @@ export interface Mission {
   lastCheckedAt: string;
 }
 
+/**
+ * What is true of every mission rather than of one.
+ *
+ * Sent alongside the watchlist because the mandate is not complete without
+ * them: a ceiling means item plus tax, and tax needs a rate.
+ */
+export interface Settings {
+  /** Fraction, not percent. 0.0975 is 9.75%. Zero means "do not estimate". */
+  taxRate: number;
+  /** The most to pay for postage on any one order, on top of the ceiling. */
+  shippingAllowance: number;
+}
+
+export const DEFAULT_SETTINGS: Settings = { taxRate: 0, shippingAllowance: 0 };
+
 export interface ObservationOut {
   listingId: number;
   state: 'in' | 'out' | 'queue' | 'unknown';
@@ -92,6 +107,19 @@ export class Hub {
   /** The last watchlist the Hub gave us, and when. See missionsOrCached(). */
   private cached: Mission[] = [];
   private cachedAt = 0;
+
+  /**
+   * The last settings the Hub gave us.
+   *
+   * Defaults to zero on both, which is the safe direction: no tax estimate
+   * means a listed price is judged as-is and the real number is caught at the
+   * cart, and no shipping allowance means postage has to be free.
+   */
+  private settingsValue: Settings = { ...DEFAULT_SETTINGS };
+
+  get settings(): Settings {
+    return this.settingsValue;
+  }
 
   constructor(opts: HubOptions) {
     this.base = opts.url.replace(/\/+$/, '');
@@ -171,7 +199,10 @@ export class Hub {
 
   /** What to watch. Throws when the Hub is unreachable — the caller decides. */
   async missions(now: number = Date.now()): Promise<Mission[]> {
-    const data = await this.call<{ missions: Mission[] } | null>('GET', '/api/missions/active');
+    const data = await this.call<{ missions: Mission[]; settings?: Settings } | null>(
+      'GET',
+      '/api/missions/active',
+    );
     if (!data || !Array.isArray(data.missions)) {
       // An empty or shapeless body is not "you have no missions". Treating it
       // as that would empty the watchlist and go quiet, which looks exactly
@@ -180,6 +211,14 @@ export class Hub {
       throw new HubError('the Hub answered without a missions list', 200);
     }
     const missions = data.missions;
+    // Only replace what we have if the Hub actually sent something usable. A
+    // half-answer must not quietly reset the tax rate to zero.
+    if (data.settings && Number.isFinite(data.settings.taxRate)) {
+      this.settingsValue = {
+        taxRate: Math.max(0, data.settings.taxRate),
+        shippingAllowance: Math.max(0, data.settings.shippingAllowance ?? 0),
+      };
+    }
     this.cached = missions;
     this.cachedAt = now;
     return missions;

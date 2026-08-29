@@ -286,3 +286,64 @@ test('an ordinary mission is not flagged for a test run', async () => {
   const { body } = await call(db, 'GET', '/api/missions/active');
   assert.equal(body.missions[0].checkNow, false);
 });
+
+// ── Settings: the half of the mandate that is not on the mission ─────────────
+
+test('the Watcher is sent the settings its ceiling rule depends on', async () => {
+  // A ceiling means item + tax. Without a rate the Watcher cannot judge a
+  // listed price against it, so this travels with the watchlist.
+  const { db } = await withMission();
+  const { body } = await call(db, 'GET', '/api/missions/active');
+
+  assert.ok(body.settings, '/api/missions/active must carry settings');
+  assert.equal(typeof body.settings.taxRate, 'number');
+  assert.equal(typeof body.settings.shippingAllowance, 'number');
+});
+
+test('settings default to the safe direction, not to nothing', async () => {
+  // Zero tax means "do not estimate" — the real number is caught at the cart.
+  // Zero shipping allowance means postage must be free. Both refuse rather
+  // than assume.
+  const { db } = await withMission();
+  const { body } = await call(db, 'GET', '/api/settings');
+  assert.deepEqual(body.settings, { taxRate: 0, shippingAllowance: 0 });
+});
+
+test('settings round-trip through the API', async () => {
+  const { db } = await withMission();
+  const saved = await call(db, 'POST', '/api/settings', {
+    taxRate: 0.0975,
+    shippingAllowance: 9.99,
+  });
+  assert.equal(saved.status, 200);
+  assert.equal(saved.body.settings.taxRate, 0.0975);
+
+  const { body } = await call(db, 'GET', '/api/missions/active');
+  assert.equal(body.settings.taxRate, 0.0975);
+  assert.equal(body.settings.shippingAllowance, 9.99);
+});
+
+test('A PERCENTAGE IN THE RATE FIELD IS REFUSED', async () => {
+  // 9.75 where 0.0975 was meant would put every mission over its own ceiling
+  // forever, and it would look like the prices were wrong.
+  const { db } = await withMission();
+  const { status, body } = await call(db, 'POST', '/api/settings', { taxRate: 9.75 });
+  assert.equal(status, 400);
+  assert.match(body.error, /looks like a percentage/);
+});
+
+test('negative money is refused in both fields', async () => {
+  const { db } = await withMission();
+  assert.equal((await call(db, 'POST', '/api/settings', { taxRate: -0.01 })).status, 400);
+  assert.equal((await call(db, 'POST', '/api/settings', { shippingAllowance: -1 })).status, 400);
+});
+
+test('one setting can be changed without clearing the other', async () => {
+  const { db } = await withMission();
+  await call(db, 'POST', '/api/settings', { taxRate: 0.07, shippingAllowance: 5 });
+  await call(db, 'POST', '/api/settings', { shippingAllowance: 8 });
+
+  const { body } = await call(db, 'GET', '/api/settings');
+  assert.equal(body.settings.taxRate, 0.07, 'a partial save must not blank what it omits');
+  assert.equal(body.settings.shippingAllowance, 8);
+});
