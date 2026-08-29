@@ -1343,6 +1343,13 @@ header { display: flex; align-items: flex-start; justify-content: space-between;
 body { padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right); }
 main { padding-bottom: calc(24px + env(safe-area-inset-bottom)); }
 
+dialog {
+  border: none; background: transparent; padding: 0; color: var(--ink);
+  max-width: 560px; width: calc(100% - 28px);
+}
+dialog::backdrop { background: rgba(4, 3, 8, .72); }
+dialog .card { margin: 0; max-height: 86vh; overflow-y: auto; }
+
 .login { max-width: 350px; margin: 15vh auto; }
 .login .card { padding: 26px 24px; }
 .err { color: var(--alert); font-size: 13px; min-height: 20px; }
@@ -1413,6 +1420,7 @@ ${FONTS}<style>${STYLE}</style></head>
   </div>
 
   <div class="bar">
+    <button id="add-open" class="primary">Add product</button>
     <button id="refresh">Refresh</button>
     <label class="check sub"><input type="checkbox" id="auto" checked> auto every 30s</label>
     <span class="grow"></span>
@@ -1422,44 +1430,6 @@ ${FONTS}<style>${STYLE}</style></head>
   <section id="tab-missions"><div id="missions"></div></section>
 
   <section id="tab-products" hidden>
-    <div class="card">
-      <h3>Add a product</h3>
-      <p class="sub" style="margin:-4px 0 12px">
-        The thing itself. Only the name is needed \u2014 everything else can wait,
-        or be filled in from the page once the Watcher reads it.
-      </p>
-      <form class="stack" id="product-form" novalidate>
-        <label class="f">Name
-          <input type="text" name="name" placeholder="Pok\xE9mon TCG: Pitch Black Elite Trainer Box">
-        </label>
-        <label class="f">First listing URL
-          <span class="hint">optional \u2014 starts watching it straight away</span>
-          <input type="url" name="url" autocomplete="off" autocapitalize="off" spellcheck="false"
-                 placeholder="https://www.target.com/p/\u2026/A-1012644666">
-          <span class="hint">The product is not tied to this link. It is the first
-            place to watch, and you can add the same product at another retailer
-            afterwards.</span>
-        </label>
-        <div class="grid2">
-          <label class="f">Release date <span class="hint">optional</span>
-            <input type="date" name="releaseDate">
-          </label>
-          <label class="f">MSRP <span class="hint">optional \u2014 what it should cost</span>
-            <input type="number" name="msrp" step="0.01" min="0.01" placeholder="49.99">
-          </label>
-        </div>
-        <label class="f">Image URL <span class="hint">optional \u2014 filled in automatically otherwise</span>
-          <input type="url" name="imageUrl" placeholder="https://\u2026">
-        </label>
-        <label class="f">Notes <span class="hint">optional</span>
-          <textarea name="notes" placeholder="Anything you want to remember about this one."></textarea>
-        </label>
-        <div class="actions">
-          <button type="submit" class="primary">Add product</button>
-          <span class="msg" id="product-msg"></span>
-        </div>
-      </form>
-    </div>
     <div id="products"></div>
   </section>
 
@@ -1510,6 +1480,49 @@ ${FONTS}<style>${STYLE}</style></head>
       </form>
     </div>
   </section>
+  <dialog id="add-dialog">
+    <div class="card">
+      <h3>Add a product</h3>
+      <p class="sub" style="margin:-4px 0 12px">
+        The thing itself. Only the name is needed \u2014 everything else can wait,
+        or be filled in from the page once the Watcher reads it.
+      </p>
+      <form class="stack" id="product-form" novalidate>
+        <label class="f">Name
+          <input type="text" name="name" placeholder="Pok\xE9mon TCG: Pitch Black Elite Trainer Box">
+        </label>
+        <label class="f">First listing URL
+          <span class="hint">optional \u2014 starts watching it straight away</span>
+          <input type="url" name="url" autocomplete="off" autocapitalize="off" spellcheck="false"
+                 placeholder="https://www.target.com/p/\u2026/A-1012644666">
+          <span class="hint">The product is not tied to this link. It is the first
+            place to watch, and you can add the same product at another retailer
+            afterwards.</span>
+        </label>
+        <div class="grid2">
+          <label class="f">Release date <span class="hint">optional</span>
+            <input type="date" name="releaseDate">
+          </label>
+          <label class="f">MSRP <span class="hint">optional \u2014 what it should cost</span>
+            <input type="number" name="msrp" step="0.01" min="0.01" placeholder="49.99">
+          </label>
+        </div>
+        <label class="f">Image URL <span class="hint">optional \u2014 filled in automatically otherwise</span>
+          <input type="url" name="imageUrl" placeholder="https://\u2026">
+        </label>
+        <label class="f">Notes <span class="hint">optional</span>
+          <textarea name="notes" placeholder="Anything you want to remember about this one."></textarea>
+        </label>
+        <div class="actions">
+          <button type="submit" class="primary">Add product</button>
+          <span class="msg" id="product-msg"></span>
+        </div>
+      </form>
+      <div class="actions" style="margin-top:2px">
+        <button type="button" class="small" data-act="add-close">Cancel</button>
+      </div>
+    </div>
+  </dialog>
 </main>
 <script>
 const money = (n) => n === null || n === undefined ? '\u2014' : '$' + Number(n).toFixed(2);
@@ -1598,6 +1611,50 @@ async function withButton(button, busyText, msgNode, fn) {
   }
 }
 
+/**
+ * Has the last check failed to read the page?
+ *
+ * State and confidence both unknown, on a mission that has actually been
+ * checked, means the Watcher looked and came back with nothing. That is a
+ * different thing from "out of stock" and a different thing from "not looked
+ * at yet", and the card has to say so rather than shrugging twice.
+ */
+function notReading(m) {
+  return !!m.lastCheckedAt && m.state === 'unknown' && m.confidence === 'unknown';
+}
+
+/**
+ * The name, minus the part every product here shares.
+ *
+ * Everything in this system is Pok\xE9mon TCG, so leading with it on every row
+ * spends the first third of the line saying nothing. The stored name keeps the
+ * prefix \u2014 this is a display choice, and the Products tab shows the real one.
+ */
+function shortName(name) {
+  // No regex, deliberately. Every backslash in this file has to survive the
+  // template literal, and getting that wrong has already cost four bugs. Plain
+  // string work cannot be mangled on the way to the browser.
+  const full = String(name || '').trim();
+  const lower = full.toLowerCase();
+  const prefixes = [
+    'pok 233 mon trading card game',
+    'pok\xE9mon trading card game',
+    'pokemon trading card game',
+    'pok 233 mon tcg',
+    'pok\xE9mon tcg',
+    'pokemon tcg',
+    'pok 233 mon',
+    'pok\xE9mon',
+    'pokemon',
+  ];
+  let out = full;
+  for (const prefix of prefixes) {
+    if (lower.startsWith(prefix)) { out = full.slice(prefix.length); break; }
+  }
+  while (out && ':\u2014\u2013- '.indexOf(out[0]) >= 0) out = out.slice(1);
+  return out.trim() || full;
+}
+
 function thumb(url, alt, big) {
   const cls = 'thumb' + (big ? ' lg' : '');
   if (!url) {
@@ -1638,7 +1695,9 @@ function missionCard(m) {
   row.appendChild(thumb(m.imageUrl, m.productName));
 
   const left = el('div', 'grow');
-  left.appendChild(el('div', 'name', m.productName));
+  const nameEl = el('div', 'name', shortName(m.productName));
+  nameEl.title = m.productName;
+  left.appendChild(nameEl);
 
   const where = el('div', 'meta');
   where.append(m.retailer + ' \xB7 ');
@@ -1650,10 +1709,24 @@ function missionCard(m) {
   left.appendChild(where);
 
   const flags = el('div', 'tags');
-  const label = m.state === 'in' ? 'IN STOCK'
-    : m.state === 'out' ? 'out of stock'
-    : m.state === 'unchecked' ? 'never checked' : m.state;
-  flags.appendChild(el('span', 'pill s-' + m.state, label));
+
+  // \u2500\u2500 What the pills are for \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  //
+  // Three questions, in the order a person asks them: is it in stock, would it
+  // buy, and can I trust what I am looking at. A pill that answers none of
+  // those is noise.
+  //
+  // This used to render UNKNOWN and UNKNOWN READ side by side for a mission
+  // whose checks were failing \u2014 the same fact twice, in the colour that means
+  // "hmm", while the actual news was that nothing had been read for hours.
+  if (notReading(m)) {
+    flags.appendChild(el('span', 'pill flag', 'not reading'));
+  } else {
+    const label = m.state === 'in' ? 'IN STOCK'
+      : m.state === 'out' ? 'out of stock'
+      : m.state === 'unchecked' ? 'never checked' : m.state;
+    flags.appendChild(el('span', 'pill s-' + m.state, label));
+  }
 
   if (!m.enabled) flags.appendChild(el('span', 'pill s-out', 'paused'));
   if (m.armed) {
@@ -1666,8 +1739,10 @@ function missionCard(m) {
   if (m.sellerKind === 'marketplace') {
     flags.appendChild(el('span', 'pill flag', 'marketplace: ' + (m.sellerName || 'third party')));
   }
-  if (m.confidence !== 'exact' && m.state !== 'unchecked') {
-    flags.appendChild(el('span', 'pill s-unknown', m.confidence + ' read'));
+  // Only 'inferred' is worth a pill. 'exact' is the norm and needs no badge,
+  // and 'unknown' is already said by the state above.
+  if (m.confidence === 'inferred' && !notReading(m)) {
+    flags.appendChild(el('span', 'pill s-unknown', 'inferred read'));
   }
   if (m.isPreOrder) {
     flags.appendChild(el('span', 'pill s-queue',
@@ -1678,6 +1753,25 @@ function missionCard(m) {
     note.style.marginTop = '6px';
     left.appendChild(note);
   }
+
+  // "Check now" belongs on the card. Buried inside the settings panel it was
+  // three clicks away from the thing it acts on.
+  const actions = el('div', 'actions');
+  actions.style.marginTop = '10px';
+  if (m.enabled) {
+    const now = el('button', 'small', m.checkNow ? 'check queued' : 'Check now');
+    now.disabled = !!m.checkNow;
+    now.addEventListener('click', async (e) => {
+      const ok = await withButton(e.target, 'Queueing\u2026', null, async () => {
+        await api('POST', '/api/missions/' + m.id + '/check-now');
+        return 'queued \u2014 the Watcher will check this on its next pass';
+      });
+      if (ok) { e.target.textContent = 'check queued'; e.target.disabled = true; }
+    });
+    actions.appendChild(now);
+  }
+
+  if (actions.childNodes.length) left.appendChild(actions);
 
   const right = el('div', 'right');
   // Against MSRP, a price is either a restock or a scalper. Say which.
@@ -2088,7 +2182,11 @@ function render() {
   const inStock = DATA.missions.filter((m) => m.state === 'in').length;
   const armed = DATA.missions.filter((m) => m.armed).length;
   const never = DATA.missions.filter((m) => m.state === 'unchecked').length;
+  const blind = DATA.missions.filter(notReading).length;
   const parts = [];
+  // First, because a watcher that cannot read pages is not watching, and that
+  // outranks anything else the line could say.
+  if (blind) parts.push(blind + ' NOT READING');
   if (inStock) parts.push(inStock + ' in stock');
   if (armed) parts.push(armed + ' armed');
   if (never) parts.push(never + ' never checked');
@@ -2148,6 +2246,7 @@ document.getElementById('product-form').addEventListener('submit', async (e) => 
     if (url) {
       const r = await api('POST', '/api/quick-add', { ...details, url });
       form.reset();
+      closeAdd();
       OPEN.add('p' + (r.product ? r.product.key : r.listing.productKey));
       load();
       return r.alreadyTracked
@@ -2157,6 +2256,7 @@ document.getElementById('product-form').addEventListener('submit', async (e) => 
 
     const { product } = await api('POST', '/api/products', details);
     form.reset();
+    closeAdd();
     OPEN.add('p' + product.key);   // open it, so the next step is in front of you
     load();
     return 'added \u2014 now give it a listing URL below';
@@ -2171,6 +2271,26 @@ for (const tab of document.querySelectorAll('.tab')) {
     }
   });
 }
+
+const addDialog = document.getElementById('add-dialog');
+
+function openAdd() {
+  // showModal gives the backdrop and Escape for free. Older engines fall back
+  // to a plain open dialog rather than a button that does nothing.
+  if (addDialog.showModal) addDialog.showModal();
+  else addDialog.open = true;
+  const first = addDialog.querySelector('[name=name]');
+  if (first) first.focus();
+}
+function closeAdd() {
+  if (addDialog.close) addDialog.close();
+  else addDialog.open = false;
+}
+
+document.getElementById('add-open').addEventListener('click', openAdd);
+addDialog.querySelector('[data-act=add-close]').addEventListener('click', closeAdd);
+// Clicking the backdrop is the other way people expect to dismiss this.
+addDialog.addEventListener('click', (e) => { if (e.target === addDialog) closeAdd(); });
 
 document.getElementById('settings-form').addEventListener('submit', async (e) => {
   e.preventDefault();

@@ -662,3 +662,150 @@ test('the form says the product is not tied to the link', async () => {
   assert.match(text, /not tied to this link/i);
   assert.match(text, /another retailer/i);
 });
+
+// ── Saying the useful thing ──────────────────────────────────────────────────
+
+const failingRead = () => {
+  const d = JSON.parse(JSON.stringify(DASHBOARD));
+  d.missions[0].state = 'unknown';
+  d.missions[0].confidence = 'unknown';
+  d.missions[0].note = 'the check could not be completed: browser has been closed';
+  d.missions[0].lastCheckedAt = new Date().toISOString();
+  return d;
+};
+
+test('A FAILING CHECK SAYS "NOT READING", NOT "UNKNOWN" TWICE', async () => {
+  // The card used to show UNKNOWN and UNKNOWN READ side by side — the same
+  // fact twice, in the colour that means "hmm" — while the actual news was
+  // that nothing had been read for hours.
+  const h = await boot(failingRead());
+  const pills = [...h.doc.querySelectorAll('#missions .pill')].map((p: any) => p.textContent);
+
+  assert.ok(pills.some((t) => /not reading/i.test(t)), 'it has to name the problem');
+  assert.equal(pills.filter((t) => /unknown/i.test(t)).length, 0, 'and stop shrugging twice');
+});
+
+test('the summary leads with what is broken', async () => {
+  const h = await boot(failingRead());
+  assert.match($(h, '#summary').textContent, /1 NOT READING/);
+});
+
+test('an ordinary out-of-stock card is unchanged', async () => {
+  const d = JSON.parse(JSON.stringify(DASHBOARD));
+  d.missions[0].state = 'out';
+  d.missions[0].confidence = 'exact';
+  const h = await boot(d);
+  const pills = [...h.doc.querySelectorAll('#missions .pill')].map((p: any) => p.textContent);
+
+  assert.ok(pills.some((t) => /out of stock/i.test(t)));
+  assert.ok(!pills.some((t) => /not reading/i.test(t)));
+});
+
+test('an inferred read is still flagged, because it is a real caveat', async () => {
+  const d = JSON.parse(JSON.stringify(DASHBOARD));
+  d.missions[0].state = 'in';
+  d.missions[0].confidence = 'inferred';
+  const h = await boot(d);
+  const pills = [...h.doc.querySelectorAll('#missions .pill')].map((p: any) => p.textContent);
+  assert.ok(pills.some((t) => /inferred read/i.test(t)));
+});
+
+test('an exact read gets no badge — it is the normal case', async () => {
+  const h = await boot();
+  const pills = [...h.doc.querySelectorAll('#missions .pill')].map((p: any) => p.textContent);
+  assert.ok(!pills.some((t) => /exact/i.test(t)));
+});
+
+test('a never-checked mission is not called "not reading"', async () => {
+  // Nothing has gone wrong; nothing has happened yet. Different words.
+  const d = JSON.parse(JSON.stringify(DASHBOARD));
+  d.missions[0].state = 'unchecked';
+  d.missions[0].confidence = 'unknown';
+  d.missions[0].lastCheckedAt = '';
+  const h = await boot(d);
+  const pills = [...h.doc.querySelectorAll('#missions .pill')].map((p: any) => p.textContent);
+
+  assert.ok(pills.some((t) => /never checked/i.test(t)));
+  assert.ok(!pills.some((t) => /not reading/i.test(t)));
+});
+
+test('the shared Pokémon TCG prefix is trimmed from the row', async () => {
+  const d = JSON.parse(JSON.stringify(DASHBOARD));
+  d.missions[0].productName = 'Pokémon Trading Card Game: 30th Celebration Elite Trainer Box';
+  const h = await boot(d);
+  const name = $(h, '#missions .name');
+
+  assert.equal(name.textContent, '30th Celebration Elite Trainer Box');
+  assert.equal(name.title, d.missions[0].productName, 'the full name stays, on hover');
+});
+
+test('a name with no shared prefix is left alone', async () => {
+  const d = JSON.parse(JSON.stringify(DASHBOARD));
+  d.missions[0].productName = 'Prismatic Evolutions Booster Bundle';
+  const h = await boot(d);
+  assert.equal($(h, '#missions .name').textContent, 'Prismatic Evolutions Booster Bundle');
+});
+
+// ── Check now, on the card ───────────────────────────────────────────────────
+
+test('EVERY WATCHED CARD HAS A CHECK NOW BUTTON', async () => {
+  const h = await boot();
+  const btn = [...h.doc.querySelectorAll('#missions button')].find(
+    (b: any) => /check now/i.test(b.textContent),
+  ) as any;
+  assert.ok(btn, 'it belongs on the card, not three clicks inside a panel');
+
+  h.reply('POST /api/missions/1/check-now', { queued: 1 });
+  btn.click();
+  await h.settle();
+
+  assert.ok(h.calls.find((c) => c.path === '/api/missions/1/check-now'));
+  assert.match(btn.textContent, /queued/i);
+});
+
+test('a mission already waiting shows the button as queued', async () => {
+  const d = JSON.parse(JSON.stringify(DASHBOARD));
+  d.missions[0].checkNow = true;
+  const h = await boot(d);
+  const btn = [...h.doc.querySelectorAll('#missions button')].find(
+    (b: any) => /queued/i.test(b.textContent),
+  ) as any;
+  assert.ok(btn);
+  assert.equal(btn.disabled, true);
+});
+
+// ── The add form is a dialog now ─────────────────────────────────────────────
+
+test('THE ADD FORM IS CLOSED UNTIL YOU ASK FOR IT', async () => {
+  const h = await boot();
+  assert.equal($(h, '#add-dialog').open, false, 'it should not sit open down the page');
+  assert.ok($(h, '#add-open'), 'and there is a button to open it');
+});
+
+test('the Add product button opens the dialog', async () => {
+  const h = await boot();
+  $(h, '#add-open').click();
+  assert.equal($(h, '#add-dialog').open, true);
+});
+
+test('Cancel closes it without adding anything', async () => {
+  const h = await boot();
+  $(h, '#add-open').click();
+  $(h, '#add-dialog').querySelector('[data-act=add-close]').click();
+
+  assert.equal($(h, '#add-dialog').open, false);
+  assert.equal(h.calls.filter((c) => c.path === '/api/products').length, 0);
+});
+
+test('a successful add closes the dialog', async () => {
+  const h = await boot();
+  $(h, '#add-open').click();
+  const form = $(h, '#product-form');
+  form.querySelector('[name=name]').value = 'Chaos Rising ETB';
+  h.reply('POST /api/products', { product: { key: 'prd_cr' } });
+
+  submit(form, h.dom.window);
+  await h.settle();
+
+  assert.equal($(h, '#add-dialog').open, false);
+});
