@@ -263,7 +263,14 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
      *     Arming is a decision, and a decision does not belong in a shortcut.
      */
     if (request.method === 'POST' && path === '/api/quick-add') {
-      const b = await body<{ url?: string; name?: string }>();
+      const b = await body<{
+        url?: string;
+        name?: string;
+        msrp?: number | null;
+        releaseDate?: string | null;
+        notes?: string;
+        imageUrl?: string;
+      }>();
       const raw = (b?.url ?? '').trim();
       if (!raw) return json({ error: 'need a URL' }, 400);
 
@@ -280,18 +287,39 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
         );
       }
 
+      const typedName = (b?.name ?? '').trim();
+      const details = {
+        msrp: b?.msrp ?? null,
+        releaseDate: b?.releaseDate ?? null,
+        notes: b?.notes ?? '',
+        imageUrl: b?.imageUrl ?? '',
+      };
+
       const existing = await store.findListing(db, parsed.retailer, parsed.externalId);
       if (existing) {
+        // Only touch the product when a person actually typed something. The
+        // slug-derived name is a guess, and letting a guess overwrite a name
+        // someone chose is how "Ascended Heroes Elite Trainer Box" becomes
+        // "pokemon-tcg-mega-evolution-tin".
+        let product = null;
+        if (typedName || details.msrp !== null || details.releaseDate || details.notes) {
+          product = await store.upsertProduct(db, {
+            key: existing.productKey,
+            name: typedName || existing.productName,
+            ...details,
+          });
+        }
         const mission =
           (await store.missionForListing(db, existing.id)) ??
           (await store.upsertMission(db, { listingId: existing.id, label: existing.productName }));
-        return json({ listing: existing, mission, alreadyTracked: true });
+        return json({ product, listing: existing, mission, alreadyTracked: true });
       }
 
       // A name from the URL slug is a guess, and it is labelled as one on the
       // page rather than presented as the product's real name.
       const product = await store.upsertProduct(db, {
-        name: (b?.name ?? '').trim() || parsed.name || `${parsed.retailer} ${parsed.externalId}`,
+        name: typedName || parsed.name || `${parsed.retailer} ${parsed.externalId}`,
+        ...details,
       });
       const listing = await store.addListing(db, {
         productKey: product.key,

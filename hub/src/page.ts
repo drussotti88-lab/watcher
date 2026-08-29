@@ -311,6 +311,14 @@ ${FONTS}<style>${STYLE}</style></head>
         <label class="f">Name
           <input type="text" name="name" placeholder="Pokémon TCG: Pitch Black Elite Trainer Box">
         </label>
+        <label class="f">First listing URL
+          <span class="hint">optional — starts watching it straight away</span>
+          <input type="url" name="url" autocomplete="off" autocapitalize="off" spellcheck="false"
+                 placeholder="https://www.target.com/p/…/A-1012644666">
+          <span class="hint">The product is not tied to this link. It is the first
+            place to watch, and you can add the same product at another retailer
+            afterwards.</span>
+        </label>
         <div class="grid2">
           <label class="f">Release date <span class="hint">optional</span>
             <input type="date" name="releaseDate">
@@ -1004,13 +1012,29 @@ document.getElementById('product-form').addEventListener('submit', async (e) => 
   const f = fields(form);
   const msg = document.getElementById('product-msg');
   await withButton(form.querySelector('button[type=submit]'), 'Adding…', msg, async () => {
-    const { product } = await api('POST', '/api/products', {
+    const details = {
       name: f.name,
       releaseDate: f.releaseDate || null,
       msrp: num(f.msrp),
       imageUrl: f.imageUrl,
       notes: f.notes,
-    });
+    };
+
+    // With a URL this is one call: the product, its first listing and the
+    // mission to watch it. Without one it is just the product, and the listing
+    // comes later — the product is never tied to a single link either way.
+    const url = (f.url || '').trim();
+    if (url) {
+      const r = await api('POST', '/api/quick-add', { ...details, url });
+      form.reset();
+      OPEN.add('p' + (r.product ? r.product.key : r.listing.productKey));
+      load();
+      return r.alreadyTracked
+        ? 'already watching that listing — the product details were saved'
+        : 'added, and watching ' + r.listing.retailer + ' ' + r.listing.externalId;
+    }
+
+    const { product } = await api('POST', '/api/products', details);
     form.reset();
     OPEN.add('p' + product.key);   // open it, so the next step is in front of you
     load();

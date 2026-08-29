@@ -608,3 +608,57 @@ test('the ceiling field says what it covers', async () => {
   const label = $(h, 'form[data-mission="1"]').textContent;
   assert.match(label, /per unit, including tax/);
 });
+
+// ── Adding a product, with or without a link ─────────────────────────────────
+
+test('ADD PRODUCT WITH A URL DOES IT IN ONE STEP', async () => {
+  const h = await boot();
+  (h.doc.querySelector('[data-tab=products]') as any).click();
+
+  const form = $(h, '#product-form');
+  form.querySelector('[name=name]').value = 'Ascended Heroes Elite Trainer Box';
+  form.querySelector('[name=msrp]').value = '60';
+  form.querySelector('[name=url]').value = 'https://www.target.com/p/x/-/A-1012944745';
+  h.reply('POST /api/quick-add', {
+    product: { key: 'prd_ascended' },
+    listing: { retailer: 'Target', externalId: '1012944745', productKey: 'prd_ascended' },
+    mission: {},
+    alreadyTracked: false,
+  });
+
+  submit(form, h.dom.window);
+  await h.settle();
+
+  const call = h.calls.find((c) => c.path === '/api/quick-add');
+  assert.ok(call, 'a URL should go through quick-add, not three round trips');
+  assert.equal(call.body.name, 'Ascended Heroes Elite Trainer Box');
+  assert.equal(call.body.msrp, 60);
+  assert.equal(call.body.url, 'https://www.target.com/p/x/-/A-1012944745');
+  assert.equal(h.calls.filter((c) => c.path === '/api/products').length, 0);
+});
+
+test('add product without a URL is still just a product', async () => {
+  // The point he asked about: the URL is optional, and a product is not tied
+  // to one. Adding without it must keep working exactly as before.
+  const h = await boot();
+  (h.doc.querySelector('[data-tab=products]') as any).click();
+
+  const form = $(h, '#product-form');
+  form.querySelector('[name=name]').value = 'Journey Together ETB';
+  h.reply('POST /api/products', { product: { key: 'prd_jt' } });
+
+  submit(form, h.dom.window);
+  await h.settle();
+
+  assert.ok(h.calls.find((c) => c.path === '/api/products'));
+  assert.equal(h.calls.filter((c) => c.path === '/api/quick-add').length, 0);
+});
+
+test('the form says the product is not tied to the link', async () => {
+  // He asked for this feature having previously said he did not want a product
+  // locked to one URL. Both are true, and the form has to say so.
+  const h = await boot();
+  const text = $(h, '#product-form').textContent;
+  assert.match(text, /not tied to this link/i);
+  assert.match(text, /another retailer/i);
+});

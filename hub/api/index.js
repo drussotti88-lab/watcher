@@ -1414,6 +1414,14 @@ ${FONTS}<style>${STYLE}</style></head>
         <label class="f">Name
           <input type="text" name="name" placeholder="Pok\xE9mon TCG: Pitch Black Elite Trainer Box">
         </label>
+        <label class="f">First listing URL
+          <span class="hint">optional \u2014 starts watching it straight away</span>
+          <input type="url" name="url" autocomplete="off" autocapitalize="off" spellcheck="false"
+                 placeholder="https://www.target.com/p/\u2026/A-1012644666">
+          <span class="hint">The product is not tied to this link. It is the first
+            place to watch, and you can add the same product at another retailer
+            afterwards.</span>
+        </label>
         <div class="grid2">
           <label class="f">Release date <span class="hint">optional</span>
             <input type="date" name="releaseDate">
@@ -2107,13 +2115,29 @@ document.getElementById('product-form').addEventListener('submit', async (e) => 
   const f = fields(form);
   const msg = document.getElementById('product-msg');
   await withButton(form.querySelector('button[type=submit]'), 'Adding\u2026', msg, async () => {
-    const { product } = await api('POST', '/api/products', {
+    const details = {
       name: f.name,
       releaseDate: f.releaseDate || null,
       msrp: num(f.msrp),
       imageUrl: f.imageUrl,
       notes: f.notes,
-    });
+    };
+
+    // With a URL this is one call: the product, its first listing and the
+    // mission to watch it. Without one it is just the product, and the listing
+    // comes later \u2014 the product is never tied to a single link either way.
+    const url = (f.url || '').trim();
+    if (url) {
+      const r = await api('POST', '/api/quick-add', { ...details, url });
+      form.reset();
+      OPEN.add('p' + (r.product ? r.product.key : r.listing.productKey));
+      load();
+      return r.alreadyTracked
+        ? 'already watching that listing \u2014 the product details were saved'
+        : 'added, and watching ' + r.listing.retailer + ' ' + r.listing.externalId;
+    }
+
+    const { product } = await api('POST', '/api/products', details);
     form.reset();
     OPEN.add('p' + product.key);   // open it, so the next step is in front of you
     load();
@@ -2487,13 +2511,29 @@ function createHandler(db2, env2) {
           400
         );
       }
+      const typedName = (b?.name ?? "").trim();
+      const details = {
+        msrp: b?.msrp ?? null,
+        releaseDate: b?.releaseDate ?? null,
+        notes: b?.notes ?? "",
+        imageUrl: b?.imageUrl ?? ""
+      };
       const existing = await findListing(db2, parsed.retailer, parsed.externalId);
       if (existing) {
+        let product2 = null;
+        if (typedName || details.msrp !== null || details.releaseDate || details.notes) {
+          product2 = await upsertProduct(db2, {
+            key: existing.productKey,
+            name: typedName || existing.productName,
+            ...details
+          });
+        }
         const mission2 = await missionForListing(db2, existing.id) ?? await upsertMission(db2, { listingId: existing.id, label: existing.productName });
-        return json({ listing: existing, mission: mission2, alreadyTracked: true });
+        return json({ product: product2, listing: existing, mission: mission2, alreadyTracked: true });
       }
       const product = await upsertProduct(db2, {
-        name: (b?.name ?? "").trim() || parsed.name || `${parsed.retailer} ${parsed.externalId}`
+        name: typedName || parsed.name || `${parsed.retailer} ${parsed.externalId}`,
+        ...details
       });
       const listing = await addListing(db2, {
         productKey: product.key,

@@ -411,3 +411,70 @@ test('quick add on a listing that already exists adopts it rather than duplicati
   assert.equal(body.listing.id, listing.body.listing.id);
   assert.equal((await store.listListings(db)).length, 1);
 });
+
+test('quick add carries the product details you typed, not just the link', async () => {
+  const db = await TestDb.create();
+  const { body } = await call(db, 'POST', '/api/quick-add', {
+    url: TARGET_URL,
+    name: 'Ascended Heroes Elite Trainer Box',
+    msrp: 59.99,
+    releaseDate: '2026-09-26',
+  });
+
+  assert.equal(body.product.name, 'Ascended Heroes Elite Trainer Box');
+  assert.equal(body.product.msrp, 59.99);
+  assert.equal(body.product.releaseDate, '2026-09-26');
+});
+
+test('A SLUG GUESS NEVER OVERWRITES A NAME SOMEONE CHOSE', async () => {
+  // Quick-adding a URL that is already tracked must not rename the product to
+  // whatever the link happens to say.
+  const db = await TestDb.create();
+  await call(db, 'POST', '/api/quick-add', { url: TARGET_URL, name: 'Pitch Black ETB', msrp: 49.99 });
+
+  await call(db, 'POST', '/api/quick-add', { url: TARGET_URL });
+
+  const [p] = await store.listProducts(db);
+  assert.equal(p!.name, 'Pitch Black ETB');
+  assert.equal(p!.msrp, 49.99);
+});
+
+test('but details typed against an already-tracked link are saved', async () => {
+  const db = await TestDb.create();
+  await call(db, 'POST', '/api/quick-add', { url: TARGET_URL });
+  await call(db, 'POST', '/api/quick-add', {
+    url: TARGET_URL,
+    name: 'Pitch Black Elite Trainer Box',
+    msrp: 49.99,
+  });
+
+  const [p] = await store.listProducts(db);
+  assert.equal(p!.name, 'Pitch Black Elite Trainer Box');
+  assert.equal(p!.msrp, 49.99);
+  assert.equal((await store.listMissions(db)).length, 1, 'and still one mission');
+});
+
+test('A PRODUCT IS NOT TIED TO THE URL IT ARRIVED WITH', async () => {
+  // The whole reason the URL is optional. One product, the same product, at a
+  // second retailer.
+  const db = await TestDb.create();
+  const first = await call(db, 'POST', '/api/quick-add', {
+    url: TARGET_URL,
+    name: 'Chaos Rising ETB',
+  });
+  const key = first.body.product.key;
+
+  await call(db, 'POST', '/api/listings', {
+    productKey: key,
+    url: 'https://www.walmart.com/ip/Pokemon-TCG-ETB/19988614228',
+  });
+
+  const listings = await store.listListings(db, key);
+  assert.equal(listings.length, 2);
+  assert.deepEqual(
+    listings.map((l) => l.retailer).sort(),
+    ['Target', 'Walmart'],
+    'one product, two places to watch it',
+  );
+  assert.equal((await store.listProducts(db)).length, 1, 'and still one product');
+});
