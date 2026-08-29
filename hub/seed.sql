@@ -14,6 +14,10 @@
 -- The machine on the desk does the looking.
 --
 -- Safe to run twice: every statement is ON CONFLICT DO NOTHING.
+--
+-- Everything here belongs to user 1. The columns take their DEFAULT, so the
+-- inserts do not name user_id — but the conflict targets must, because the
+-- identities became per-owner when ownership landed.
 
 -- ---------------------------------------------------------------------------
 -- Where to hunt for products we don't know about yet
@@ -50,7 +54,7 @@ VALUES
     '{"filters":["pokemon","pokémon"]}'::jsonb,
     true
   )
-ON CONFLICT (id) DO NOTHING;
+ON CONFLICT (user_id, id) DO NOTHING;
 
 -- ---------------------------------------------------------------------------
 -- Three products we have actually read, so the watchlist is not empty on day
@@ -66,13 +70,13 @@ INSERT INTO products (key, name) VALUES
    'Pokémon TCG: Scarlet & Violet — Journey Together Sleeved Booster Pack'),
   ('prd_mega_evolution_chaos_rising_etb',
    'Pokémon TCG: Mega Evolution — Chaos Rising Elite Trainer Box')
-ON CONFLICT (key) DO NOTHING;
+ON CONFLICT (user_id, key) DO NOTHING;
 
 INSERT INTO aliases (product_key, kind, retailer, value) VALUES
   ('prd_mega_evolution_ascended_heroes_tin', 'retailer_sku', 'Target', '1012644666'),
   ('prd_journey_together_sleeved_booster', 'retailer_sku', 'Pokemon Center', '100-10326'),
   ('prd_mega_evolution_chaos_rising_etb', 'retailer_sku', 'Walmart', '19988614228')
-ON CONFLICT (kind, retailer, value) DO NOTHING;
+ON CONFLICT (user_id, kind, retailer, value) DO NOTHING;
 
 -- One listing per product per retailer, which is where the watchlist and the
 -- missions hang off. `is_primary` is true for all of them: today each product
@@ -84,7 +88,7 @@ INSERT INTO listings (product_key, retailer, external_id, url, seller_kind) VALU
    'https://www.pokemoncenter.com/product/100-10326/pokemon-tcg-scarlet-and-violet-journey-together-sleeved-booster-pack-10-cards', 'retailer'),
   ('prd_mega_evolution_chaos_rising_etb', 'Walmart', '19988614228',
    'https://www.walmart.com/ip/Pokemon-TCG-Mega-Evolution-Chaos-Rising-Elite-Trainer-Box/19988614228', 'unknown')
-ON CONFLICT (retailer, external_id) DO NOTHING;
+ON CONFLICT (user_id, retailer, external_id) DO NOTHING;
 
 -- A mission each — but only Target is switched on.
 --
@@ -135,4 +139,4 @@ INSERT INTO discoveries (source_id, external_id, url, name, product_key, announc
     'Pokémon TCG: Mega Evolution — Chaos Rising Elite Trainer Box',
     'prd_mega_evolution_chaos_rising_etb', true
   )
-ON CONFLICT (source_id, external_id) DO NOTHING;
+ON CONFLICT (user_id, source_id, external_id) DO NOTHING;

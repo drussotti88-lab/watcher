@@ -9,6 +9,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
+/** Everything that existed before ownership did belongs to the first user. */
+const USER = 1;
+
 import { TestDb } from './pg.ts';
 import { sweepSource } from '../src/discover.ts';
 import * as store from '../src/store.ts';
@@ -62,7 +65,7 @@ async function setup(): Promise<TestDb> {
 }
 
 const reload = async (db: TestDb): Promise<SourceRow> => {
-  const row = await store.getSource(db, 'shop');
+  const row = await store.getSource(db, USER, 'shop');
   assert.ok(row, 'source vanished');
   return row;
 };
@@ -76,7 +79,7 @@ test('seeding stays silent until a full lap of the index is complete', async () 
   let source = await reload(db);
 
   while (!source.seeded && sweeps < 25) {
-    const result = await sweepSource(db, source, fetcher);
+    const result = await sweepSource(db, USER, source, fetcher);
     assert.equal(result.ok, true, result.error);
     announcedDuringSeeding += result.fresh.length;
     sweeps += 1;
@@ -103,7 +106,7 @@ test('after seeding, a genuinely new SKU announces exactly once', async () => {
   let source = await reload(db);
   let guard = 0;
   while (!source.seeded && guard++ < 25) {
-    await sweepSource(db, source, fetcher);
+    await sweepSource(db, USER, source, fetcher);
     source = await reload(db);
   }
 
@@ -114,7 +117,7 @@ test('after seeding, a genuinely new SKU announces exactly once', async () => {
   const announced: string[] = [];
   for (let i = 0; i < CHILDREN + 2; i++) {
     source = await reload(db);
-    const result = await sweepSource(db, source, fetcher);
+    const result = await sweepSource(db, USER, source, fetcher);
     announced.push(...result.fresh.map((f) => f.externalId));
   }
 
@@ -138,14 +141,14 @@ test('a steady catalogue announces nothing, repeatedly', async () => {
   let source = await reload(db);
   let guard = 0;
   while (!source.seeded && guard++ < 25) {
-    await sweepSource(db, source, fetcher);
+    await sweepSource(db, USER, source, fetcher);
     source = await reload(db);
   }
 
   let noise = 0;
   for (let i = 0; i < CHILDREN * 2; i++) {
     source = await reload(db);
-    const result = await sweepSource(db, source, fetcher);
+    const result = await sweepSource(db, USER, source, fetcher);
     noise += result.fresh.length;
   }
   assert.equal(noise, 0, 'nothing changed, so nothing should be announced');
@@ -158,7 +161,7 @@ test('a fetch failure is recorded, not thrown, and leaves the cursor alone', asy
     throw new Error('403 — looks like a block');
   };
 
-  const result = await sweepSource(db, before, failing);
+  const result = await sweepSource(db, USER, before, failing);
   assert.equal(result.ok, false);
   assert.match(result.error ?? '', /403/);
 
@@ -182,13 +185,13 @@ test('the watcher ingest path shares the same dedupe ledger', async () => {
     { externalId: '100-1', name: 'Mega Charizard Figure', url: 'https://pc.test/product/100-1' },
   ];
 
-  const known = await store.knownIds(db, 'pc');
+  const known = await store.knownIds(db, USER, 'pc');
   const fresh = items.filter((i) => !known.has(i.externalId));
-  const first = await store.recordDiscoveries(db, 'pc', fresh, true);
+  const first = await store.recordDiscoveries(db, USER, 'pc', fresh, true);
   assert.equal(first.length, 1, 'first submission is new');
 
-  const known2 = await store.knownIds(db, 'pc');
+  const known2 = await store.knownIds(db, USER, 'pc');
   const fresh2 = items.filter((i) => !known2.has(i.externalId));
-  const second = await store.recordDiscoveries(db, 'pc', fresh2, true);
+  const second = await store.recordDiscoveries(db, USER, 'pc', fresh2, true);
   assert.equal(second.length, 0, 'resubmitting the same item announces nothing');
 });

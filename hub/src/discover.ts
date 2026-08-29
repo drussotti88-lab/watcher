@@ -119,6 +119,7 @@ async function collect(
  */
 export async function sweepSource(
   db: Sql,
+  userId: number,
   source: SourceRow,
   fetchText: Fetcher = realFetchText,
 ): Promise<SweepResult> {
@@ -137,23 +138,23 @@ export async function sweepSource(
     collected = await collect(source, fetchText);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    await store.finishSweep(db, source.id, `error: ${message}`, 0, source.seeded, source.cursor ?? 0);
-    await store.logEvent(db, 'sweep_error', `${source.label}: ${message}`);
+    await store.finishSweep(db, userId, source.id, `error: ${message}`, 0, source.seeded, source.cursor ?? 0);
+    await store.logEvent(db, userId, 'sweep_error', `${source.label}: ${message}`);
     return { ...base, ok: false, error: message };
   }
 
   const items = dedupe(applyFilters(collected.items, config.filters)).slice(0, MAX_ITEMS_PER_SWEEP);
-  const known = await store.knownIds(db, source.id);
+  const known = await store.knownIds(db, userId, source.id);
   const fresh = items.filter((i) => !known.has(i.externalId));
 
   // Announce only once this source is FULLY seeded. With a rotating cursor a
   // single window covers part of the index, so declaring "seeded" after one
   // pass would make the next window look entirely new and fire a storm.
   const alreadySeeded = source.seeded;
-  const announced = await store.recordDiscoveries(db, source.id, fresh, alreadySeeded);
+  const announced = await store.recordDiscoveries(db, userId, source.id, fresh, alreadySeeded);
 
   for (const item of announced) {
-    await store.attachIdentity(db, source.id, source.retailer, item);
+    await store.attachIdentity(db, userId, source.id, source.retailer, item);
   }
 
   const limit = config.childLimit ?? DEFAULT_CHILD_LIMIT;
@@ -169,11 +170,12 @@ export async function sweepSource(
       ? `seeded ${fresh.length} on final pass`
       : `seeding, pass ends at child ${advanced} of ${collected.childTotal}`;
 
-  await store.finishSweep(db, source.id, status, items.length, nowSeeded, advanced);
+  await store.finishSweep(db, userId, source.id, status, items.length, nowSeeded, advanced);
 
   if (!alreadySeeded) {
     await store.logEvent(
       db,
+      userId,
       'seed',
       `${source.label}: recorded ${fresh.length} silently (${status})`,
     );
@@ -185,12 +187,13 @@ export async function sweepSource(
 /** Sweep everything the Hub can reach itself. */
 export async function sweepAll(
   db: Sql,
+  userId: number,
   fetchText: Fetcher = realFetchText,
 ): Promise<SweepResult[]> {
-  const sources = await store.listSources(db, 'hub');
+  const sources = await store.listSources(db, userId, 'hub');
   const results: SweepResult[] = [];
   for (const source of sources) {
-    results.push(await sweepSource(db, source, fetchText));
+    results.push(await sweepSource(db, userId, source, fetchText));
   }
   return results;
 }

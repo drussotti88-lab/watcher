@@ -8,6 +8,9 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+
+/** Everything that existed before ownership did belongs to the first user. */
+const USER = 1;
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -24,27 +27,27 @@ async function seeded(): Promise<TestDb> {
 
 test('the seed applies to a fresh Postgres database', async () => {
   const db = await seeded();
-  const sources = await store.listAllSources(db);
+  const sources = await store.listAllSources(db, USER);
   assert.equal(sources.length, 3);
 });
 
 test('the seed is safe to run twice', async () => {
   const db = await seeded();
   await db.exec(seedSql);
-  const sources = await store.listAllSources(db);
+  const sources = await store.listAllSources(db, USER);
   assert.equal(sources.length, 3, 'ON CONFLICT DO NOTHING throughout');
 });
 
 test('every source is via the Watcher — no datacentre fetches all three 403', async () => {
   const db = await seeded();
-  for (const source of await store.listAllSources(db)) {
+  for (const source of await store.listAllSources(db, USER)) {
     assert.equal(source.via, 'watcher', `${source.id} should not be fetched from a datacentre`);
   }
 });
 
 test('the watchlist is not empty on day one', async () => {
   const db = await seeded();
-  const watches = await store.watchlist(db);
+  const watches = await store.watchlist(db, USER);
   assert.equal(watches.length, 3, 'one known-good listing per retailer');
 
   for (const w of watches) {
@@ -63,20 +66,20 @@ test('TARGET ONLY on the first run — one retailer is one failure mode', async 
   // other two readers are written and tested; their missions are one toggle
   // away in the app.
   const db = await seeded();
-  const missions = await store.listMissions(db);
+  const missions = await store.listMissions(db, USER);
   assert.equal(missions.length, 3, 'all three exist');
 
   const on = missions.filter((m) => m.enabled);
   assert.equal(on.length, 1);
   assert.equal(on[0]!.retailer, 'Target');
 
-  const active = await store.activeMissions(db);
+  const active = await store.activeMissions(db, USER);
   assert.equal(active.length, 1, 'and only Target is polled');
 });
 
 test('the seed arms nothing — spending is never a side effect of setup', async () => {
   const db = await seeded();
-  for (const m of await store.listMissions(db)) {
+  for (const m of await store.listMissions(db, USER)) {
     assert.equal(m.armed, false, `${m.retailer} was armed by a seed file`);
     assert.equal(m.ceiling, null);
   }
@@ -84,9 +87,9 @@ test('the seed arms nothing — spending is never a side effect of setup', async
 
 test('seeding announces nothing — three alerts on first run would be noise', async () => {
   const db = await seeded();
-  for (const source of await store.listAllSources(db)) {
+  for (const source of await store.listAllSources(db, USER)) {
     assert.deepEqual(
-      await store.pendingDiscoveries(db, source.id),
+      await store.pendingDiscoveries(db, USER, source.id),
       [],
       `${source.id} would announce its seed rows`,
     );

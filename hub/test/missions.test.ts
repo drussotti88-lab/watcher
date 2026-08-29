@@ -9,6 +9,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
+/** Everything that existed before ownership did belongs to the first user. */
+const USER = 1;
+
 import { TestDb } from './pg.ts';
 import { createHandler } from '../src/app.ts';
 import * as store from '../src/store.ts';
@@ -123,7 +126,7 @@ async function withMission(): Promise<{ db: TestDb; listingId: number; missionId
 
 test('a new mission watches and does not buy', async () => {
   const { db, missionId } = await withMission();
-  const m = await store.getMission(db, missionId);
+  const m = await store.getMission(db, USER, missionId);
   assert.equal(m?.enabled, true);
   assert.equal(m?.armed, false, 'arming is never the default');
   assert.equal(m?.sellerPolicy, 'retailer_only', 'nor is buying from anyone who turns up');
@@ -136,7 +139,7 @@ test('ARMING WITHOUT A CEILING IS REFUSED — an open cheque is not a mandate', 
   assert.match(body.error, /ceiling before arming/);
   assert.match(body.error, /open cheque/);
 
-  const still = await store.getMission(db, (await store.listMissions(db))[0]!.id);
+  const still = await store.getMission(db, USER, (await store.listMissions(db, USER))[0]!.id);
   assert.equal(still?.armed, false, 'and the refusal must not half-apply');
 });
 
@@ -175,7 +178,7 @@ test('ONE MISSION PER LISTING — two armed missions is two purchases', async ()
   await call(db, 'POST', '/api/missions', { listingId, armed: true, ceiling: 40 });
   await call(db, 'POST', '/api/missions', { listingId, armed: true, ceiling: 60 });
 
-  const all = await store.listMissions(db);
+  const all = await store.listMissions(db, USER);
   assert.equal(all.length, 1, 'the second is an edit of the first, never a second buyer');
   assert.equal(all[0]!.ceiling, 60, 'and the edit took effect');
 });
@@ -183,11 +186,11 @@ test('ONE MISSION PER LISTING — two armed missions is two purchases', async ()
 test('a mission can be paused without losing its settings', async () => {
   const { db, listingId } = await withMission();
   await call(db, 'POST', '/api/missions', { listingId, ceiling: 45, quantity: 3, enabled: false });
-  const [m] = await store.listMissions(db);
+  const [m] = await store.listMissions(db, USER);
   assert.equal(m!.enabled, false);
   assert.equal(m!.ceiling, 45, 'pausing is not forgetting');
 
-  const active = await store.activeMissions(db);
+  const active = await store.activeMissions(db, USER);
   assert.equal(active.length, 0, 'and a paused mission is not polled');
 });
 
@@ -195,7 +198,7 @@ test('deleting a product takes its listings, missions and runs with it', async (
   const { db, key } = await withProduct();
   const listing = await call(db, 'POST', '/api/listings', { productKey: key, url: TARGET_URL });
   const mission = await call(db, 'POST', '/api/missions', { listingId: listing.body.listing.id });
-  await store.recordRun(db, mission.body.mission.id, { outcome: 'failed', reason: 'test' });
+  await store.recordRun(db, USER, mission.body.mission.id, { outcome: 'failed', reason: 'test' });
 
   await call(db, 'DELETE', `/api/products/${encodeURIComponent(key)}`);
 
@@ -211,21 +214,21 @@ test('EVERY FAILURE CARRIES A REASON, even when nobody supplied one', async () =
   // A run marked 'failed' with an empty reason is the log line you find at 3am
   // and learn nothing from.
   const { db, missionId } = await withMission();
-  await store.recordRun(db, missionId, { outcome: 'failed' });
-  const [run] = await store.missionRuns(db, missionId);
+  await store.recordRun(db, USER, missionId, { outcome: 'failed' });
+  const [run] = await store.missionRuns(db, USER, missionId);
   assert.ok(run!.reason.length > 0);
   assert.match(run!.reason, /no reason recorded/);
 });
 
 test('a supplied reason is kept verbatim', async () => {
   const { db, missionId } = await withMission();
-  await store.recordRun(db, missionId, {
+  await store.recordRun(db, USER, missionId, {
     outcome: 'declined',
     reason: 'price 73.76 is over the 49.99 ceiling',
     price: 73.76,
     state: 'in',
   });
-  const [run] = await store.missionRuns(db, missionId);
+  const [run] = await store.missionRuns(db, USER, missionId);
   assert.equal(run!.outcome, 'declined');
   assert.match(run!.reason, /over the 49.99 ceiling/);
   assert.equal(run!.price, 73.76);
@@ -233,11 +236,11 @@ test('a supplied reason is kept verbatim', async () => {
 
 test('a run records how long it took, which is how we learn our real speed', async () => {
   const { db, missionId } = await withMission();
-  const id = await store.startRun(db, missionId);
+  const id = await store.startRun(db, USER, missionId);
   await new Promise((r) => setTimeout(r, 25));
-  await store.finishRun(db, id, { outcome: 'bought', quantity: 1, total: 49.99 });
+  await store.finishRun(db, USER, id, { outcome: 'bought', quantity: 1, total: 49.99 });
 
-  const [run] = await store.missionRuns(db, missionId);
+  const [run] = await store.missionRuns(db, USER, missionId);
   assert.equal(run!.outcome, 'bought');
   assert.ok(run!.ms !== null && run!.ms >= 20, `expected a measured duration, got ${run!.ms}`);
   assert.equal(run!.total, 49.99);
@@ -246,8 +249,8 @@ test('a run records how long it took, which is how we learn our real speed', asy
 test('a run that never finishes stays visibly running', async () => {
   // Exactly the signal you want: something started and nothing closed it.
   const { db, missionId } = await withMission();
-  await store.startRun(db, missionId);
-  const [run] = await store.missionRuns(db, missionId);
+  await store.startRun(db, USER, missionId);
+  const [run] = await store.missionRuns(db, USER, missionId);
   assert.equal(run!.outcome, 'running');
   assert.equal(run!.finishedAt, '');
 });
@@ -261,7 +264,7 @@ test('the Watcher can post a finished run over HTTP', async () => {
     state: 'unknown',
   });
   assert.equal(status, 200);
-  const [run] = await store.missionRuns(db, missionId);
+  const [run] = await store.missionRuns(db, USER, missionId);
   assert.equal(run!.outcome, 'blocked');
   assert.match(run!.reason, /backing off/);
 });
@@ -279,10 +282,10 @@ test('a run with no settled outcome is refused', async () => {
 test('mission run history is per mission, not one global pile', async () => {
   const { db, missionId } = await withMission();
   const other = await withMission();
-  await store.recordRun(db, missionId, { outcome: 'failed', reason: 'mine' });
-  await store.recordRun(other.db, other.missionId, { outcome: 'failed', reason: 'theirs' });
+  await store.recordRun(db, USER, missionId, { outcome: 'failed', reason: 'mine' });
+  await store.recordRun(other.db, USER, other.missionId, { outcome: 'failed', reason: 'theirs' });
 
-  const runs = await store.missionRuns(db, missionId);
+  const runs = await store.missionRuns(db, USER, missionId);
   assert.equal(runs.length, 1);
   assert.equal(runs[0]!.reason, 'mine');
 });
@@ -291,39 +294,39 @@ test('mission run history is per mission, not one global pile', async () => {
 
 test('the first image the Watcher sees is kept, and never overwritten', async () => {
   const { db, listingId } = await withMission();
-  await store.recordObservation(db, {
+  await store.recordObservation(db, USER, {
     listingId,
     state: 'out',
     imageUrl: 'https://target.scene7.com/first.jpg',
   });
-  assert.equal((await store.listProducts(db))[0]!.imageUrl, 'https://target.scene7.com/first.jpg');
+  assert.equal((await store.listProducts(db, USER))[0]!.imageUrl, 'https://target.scene7.com/first.jpg');
 
   // Retailer CDN URLs churn. A working image beats a newer one.
-  await store.recordObservation(db, {
+  await store.recordObservation(db, USER, {
     listingId,
     state: 'in',
     imageUrl: 'https://target.scene7.com/second.jpg',
   });
-  assert.equal((await store.listProducts(db))[0]!.imageUrl, 'https://target.scene7.com/first.jpg');
+  assert.equal((await store.listProducts(db, USER))[0]!.imageUrl, 'https://target.scene7.com/first.jpg');
 });
 
 test('a reading with no image leaves the product alone', async () => {
   const { db, listingId } = await withMission();
-  await store.recordObservation(db, { listingId, state: 'out', imageUrl: 'https://x/a.jpg' });
-  await store.recordObservation(db, { listingId, state: 'in' });
-  assert.equal((await store.listProducts(db))[0]!.imageUrl, 'https://x/a.jpg');
+  await store.recordObservation(db, USER, { listingId, state: 'out', imageUrl: 'https://x/a.jpg' });
+  await store.recordObservation(db, USER, { listingId, state: 'in' });
+  assert.equal((await store.listProducts(db, USER))[0]!.imageUrl, 'https://x/a.jpg');
 });
 
 test('the seller the Watcher saw is remembered on the listing', async () => {
   // So a mission's seller policy has something to read before the next check.
   const { db, listingId } = await withMission();
-  await store.recordObservation(db, {
+  await store.recordObservation(db, USER, {
     listingId,
     state: 'in',
     sellerKind: 'marketplace',
     sellerName: 'Rares Market L.L.C.',
   });
-  const [l] = await store.listListings(db);
+  const [l] = await store.listListings(db, USER);
   assert.equal(l!.sellerKind, 'marketplace');
   assert.match(l!.sellerName, /Rares Market/);
 });
@@ -387,7 +390,7 @@ test('quick-adding the same URL twice does not make a second buyer', async () =>
 
   assert.equal(again.body.alreadyTracked, true);
   assert.equal(again.body.mission.id, first.body.mission.id);
-  assert.equal((await store.listMissions(db)).length, 1);
+  assert.equal((await store.listMissions(db, USER)).length, 1);
 });
 
 test('quick add refuses a URL it cannot identify, in words', async () => {
@@ -409,7 +412,7 @@ test('quick add on a listing that already exists adopts it rather than duplicati
 
   const { body } = await call(db, 'POST', '/api/quick-add', { url: TARGET_URL });
   assert.equal(body.listing.id, listing.body.listing.id);
-  assert.equal((await store.listListings(db)).length, 1);
+  assert.equal((await store.listListings(db, USER)).length, 1);
 });
 
 test('quick add carries the product details you typed, not just the link', async () => {
@@ -434,7 +437,7 @@ test('A SLUG GUESS NEVER OVERWRITES A NAME SOMEONE CHOSE', async () => {
 
   await call(db, 'POST', '/api/quick-add', { url: TARGET_URL });
 
-  const [p] = await store.listProducts(db);
+  const [p] = await store.listProducts(db, USER);
   assert.equal(p!.name, 'Pitch Black ETB');
   assert.equal(p!.msrp, 49.99);
 });
@@ -448,10 +451,10 @@ test('but details typed against an already-tracked link are saved', async () => 
     msrp: 49.99,
   });
 
-  const [p] = await store.listProducts(db);
+  const [p] = await store.listProducts(db, USER);
   assert.equal(p!.name, 'Pitch Black Elite Trainer Box');
   assert.equal(p!.msrp, 49.99);
-  assert.equal((await store.listMissions(db)).length, 1, 'and still one mission');
+  assert.equal((await store.listMissions(db, USER)).length, 1, 'and still one mission');
 });
 
 test('A PRODUCT IS NOT TIED TO THE URL IT ARRIVED WITH', async () => {
@@ -469,14 +472,14 @@ test('A PRODUCT IS NOT TIED TO THE URL IT ARRIVED WITH', async () => {
     url: 'https://www.walmart.com/ip/Pokemon-TCG-ETB/19988614228',
   });
 
-  const listings = await store.listListings(db, key);
+  const listings = await store.listListings(db, USER, key);
   assert.equal(listings.length, 2);
   assert.deepEqual(
     listings.map((l) => l.retailer).sort(),
     ['Target', 'Walmart'],
     'one product, two places to watch it',
   );
-  assert.equal((await store.listProducts(db)).length, 1, 'and still one product');
+  assert.equal((await store.listProducts(db, USER)).length, 1, 'and still one product');
 });
 
 // ── The name a slug guessed at ───────────────────────────────────────────────
@@ -500,7 +503,7 @@ test('THE PAGE REPLACES A NAME THE URL GUESSED AT', async () => {
     ],
   });
 
-  const [p] = await store.listProducts(db);
+  const [p] = await store.listProducts(db, USER);
   assert.equal(p!.name, 'Pokémon TCG: 30th Celebration Elite Trainer Box');
 });
 
@@ -522,7 +525,7 @@ test('A NAME YOU TYPED IS NEVER OVERWRITTEN BY THE PAGE', async () => {
     ],
   });
 
-  const [p] = await store.listProducts(db);
+  const [p] = await store.listProducts(db, USER);
   assert.equal(p!.name, '30th Celebration ETB', 'yours, not theirs');
 });
 
@@ -539,7 +542,7 @@ test('the page only gets to name it once', async () => {
   await obs('30th Celebration Elite Trainer Box');
   await obs('SOMETHING ELSE ENTIRELY');
 
-  const [p] = await store.listProducts(db);
+  const [p] = await store.listProducts(db, USER);
   assert.equal(p!.name, '30th Celebration Elite Trainer Box');
 });
 
@@ -548,11 +551,11 @@ test('an empty name from a failed read changes nothing', async () => {
   // the one we have.
   const db = await TestDb.create();
   const added = await call(db, 'POST', '/api/quick-add', { url: TARGET_URL });
-  const before = (await store.listProducts(db))[0]!.name;
+  const before = (await store.listProducts(db, USER))[0]!.name;
 
   await call(db, 'POST', '/observations', {
     observations: [{ listingId: added.body.listing.id, state: 'unknown', confidence: 'unknown', productName: '' }],
   });
 
-  assert.equal((await store.listProducts(db))[0]!.name, before);
+  assert.equal((await store.listProducts(db, USER))[0]!.name, before);
 });

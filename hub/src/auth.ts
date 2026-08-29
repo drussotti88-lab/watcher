@@ -109,7 +109,37 @@ export interface AuthEnv {
   APP_PASSWORD?: string;
 }
 
-export type Caller = 'watcher' | 'browser' | 'none';
+export type CallerKind = 'watcher' | 'browser' | 'none';
+
+/**
+ * Who is asking, and whose data they may touch.
+ *
+ * The user id is the whole point. Every store function takes one and every
+ * query filters on it, so this is where a request stops being anonymous and
+ * becomes scoped — and it is the only place that decides.
+ *
+ * `none` carries userId 0, which no row can belong to. A bug that forgets to
+ * check `kind` therefore filters everything out rather than letting everything
+ * through, which is the direction to fail in.
+ */
+export interface Caller {
+  kind: CallerKind;
+  userId: number;
+}
+
+const NOBODY: Caller = { kind: 'none', userId: 0 };
+
+/**
+ * SHA-256, hex. What the users table stores instead of a token.
+ *
+ * A leaked database must not hand anyone the ability to impersonate a
+ * Watcher — the same standard a password gets, for the same reason.
+ */
+export async function hashToken(token: string): Promise<string> {
+  const bytes = new TextEncoder().encode(token);
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
 
 /**
  * Identify the caller.
@@ -119,14 +149,40 @@ export type Caller = 'watcher' | 'browser' | 'none';
  * Getting this backwards is how a dashboard ends up world-readable because
  * someone forgot an environment variable.
  */
-export async function identify(request: Request, env: AuthEnv): Promise<Caller> {
+export async function identify(
+  request: Request,
+  env: AuthEnv,
+  lookup?: TokenLookup,
+): Promise<Caller> {
   const header = request.headers.get('Authorization') ?? '';
-  if (env.INGEST_TOKEN && header.startsWith('Bearer ')) {
-    if (safeEqual(header.slice(7), env.INGEST_TOKEN)) return 'watcher';
+
+  if (header.startsWith('Bearer ')) {
+    const token = header.slice(7);
+
+    // A per-user Watcher token, matched by its hash. This is the path every
+    // Watcher will use once there is more than one person.
+    if (lookup) {
+      const userId = await lookup(await hashToken(token));
+      if (userId) return { kind: 'watcher', userId };
+    }
+
+    // The single shared INGEST_TOKEN from the environment. Kept so the Watcher
+    // already running on a desk does not stop working the moment ownership
+    // ships; it answers as the first user.
+    if (env.INGEST_TOKEN && safeEqual(token, env.INGEST_TOKEN)) {
+      return { kind: 'watcher', userId: 1 };
+    }
   }
+
   if (env.APP_PASSWORD) {
     const cookie = readCookie(request, SESSION_COOKIE);
-    if (await sessionValid(env.APP_PASSWORD, cookie)) return 'browser';
+    // One shared password still means one user. Real accounts are Phase 2;
+    // this is the seam they will arrive through.
+    if (await sessionValid(env.APP_PASSWORD, cookie)) return { kind: 'browser', userId: 1 };
   }
-  return 'none';
+
+  return NOBODY;
 }
+
+/** Given a token hash, whose Watcher is it? Returns 0 for nobody. */
+export type TokenLookup = (tokenHash: string) => Promise<number>;

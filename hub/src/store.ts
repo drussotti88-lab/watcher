@@ -11,6 +11,14 @@
  *   · NUMERIC comes back as a string, to preserve precision. Prices are
  *     coerced here so nothing above ever compares a string to a number.
  *   · flags are real booleans now, not 0/1. `seeded === 1` is gone.
+ *
+ * ── Ownership ───────────────────────────────────────────────────────────────
+ *
+ * Every function here takes a `userId` as its second argument and every query
+ * filters on it. That is not tidiness: once checkout exists, a query that
+ * forgets it spends the wrong person's money. The compiler catches a call site
+ * that omits the argument; only a test catches SQL that ignores it, which is
+ * why there is one isolation test per table in ownership.test.ts.
  */
 import type { Sql, Statement } from './db.ts';
 import type { Discovered, SourceRow, SourceConfig } from './types.ts';
@@ -75,29 +83,37 @@ function toSource(row: Record<string, unknown>): SourceRow {
   };
 }
 
-export async function listSources(db: Sql, via?: string): Promise<SourceRow[]> {
+export async function listSources(db: Sql, userId: number, via?: string): Promise<SourceRow[]> {
   const rows = via
-    ? await db.query('SELECT * FROM sources WHERE enabled = true AND via = $1 ORDER BY id', [via])
-    : await db.query('SELECT * FROM sources WHERE enabled = true ORDER BY id');
+    ? await db.query(
+        'SELECT * FROM sources WHERE user_id = $1 AND enabled = true AND via = $2 ORDER BY id',
+        [userId, via],
+      )
+    : await db.query('SELECT * FROM sources WHERE user_id = $1 AND enabled = true ORDER BY id', [
+        userId,
+      ]);
   return rows.map(toSource);
 }
 
 /** Every source, enabled or not. For diagnostics, which must hide nothing. */
-export async function listAllSources(db: Sql): Promise<SourceRow[]> {
-  const rows = await db.query('SELECT * FROM sources ORDER BY retailer, id');
+export async function listAllSources(db: Sql, userId: number): Promise<SourceRow[]> {
+  const rows = await db.query(
+    'SELECT * FROM sources WHERE user_id = $1 ORDER BY retailer, id',
+    [userId],
+  );
   return rows.map(toSource);
 }
 
-export async function getSource(db: Sql, id: string): Promise<SourceRow | null> {
-  const rows = await db.query('SELECT * FROM sources WHERE id = $1', [id]);
+export async function getSource(db: Sql, userId: number, id: string): Promise<SourceRow | null> {
+  const rows = await db.query('SELECT * FROM sources WHERE user_id = $1 AND id = $2', [userId, id]);
   return rows[0] ? toSource(rows[0]) : null;
 }
 
 /** Which of these external ids do we already know about for this source? */
-export async function knownIds(db: Sql, sourceId: string): Promise<Set<string>> {
+export async function knownIds(db: Sql, userId: number, sourceId: string): Promise<Set<string>> {
   const rows = await db.query<{ external_id: string }>(
-    'SELECT external_id FROM discoveries WHERE source_id = $1',
-    [sourceId],
+    'SELECT external_id FROM discoveries WHERE user_id = $1 AND source_id = $2',
+    [userId, sourceId],
   );
   return new Set(rows.map((r) => r.external_id));
 }
@@ -115,6 +131,7 @@ export async function knownIds(db: Sql, sourceId: string): Promise<Set<string>> 
  */
 export async function recordDiscoveries(
   db: Sql,
+  userId: number,
   sourceId: string,
   items: Discovered[],
   announce: boolean,
@@ -122,10 +139,18 @@ export async function recordDiscoveries(
   if (items.length === 0) return [];
 
   const statements: Statement[] = items.map((item) => ({
-    text: `INSERT INTO discoveries (source_id, external_id, url, name, price, announced)
-           VALUES ($1, $2, $3, $4, $5, $6)
-           ON CONFLICT (source_id, external_id) DO NOTHING`,
-    params: [sourceId, item.externalId, item.url, item.name, item.price ?? null, !announce],
+    text: `INSERT INTO discoveries (user_id, source_id, external_id, url, name, price, announced)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)
+           ON CONFLICT (user_id, source_id, external_id) DO NOTHING`,
+    params: [
+      userId,
+      sourceId,
+      item.externalId,
+      item.url,
+      item.name,
+      item.price ?? null,
+      !announce,
+    ],
   }));
   await db.batch(statements);
   return announce ? items : [];
@@ -133,22 +158,28 @@ export async function recordDiscoveries(
 
 export async function markAnnounced(
   db: Sql,
+  userId: number,
   sourceId: string,
   externalIds: string[],
 ): Promise<void> {
   if (externalIds.length === 0) return;
   await db.query(
-    'UPDATE discoveries SET announced = true WHERE source_id = $1 AND external_id = ANY($2)',
-    [sourceId, externalIds],
+    `UPDATE discoveries SET announced = true
+      WHERE user_id = $1 AND source_id = $2 AND external_id = ANY($3)`,
+    [userId, sourceId, externalIds],
   );
 }
 
 /** Discoveries a source has seen but not yet announced. */
-export async function pendingDiscoveries(db: Sql, sourceId: string): Promise<Discovered[]> {
+export async function pendingDiscoveries(
+  db: Sql,
+  userId: number,
+  sourceId: string,
+): Promise<Discovered[]> {
   const rows = await db.query(
     `SELECT external_id, name, url, price FROM discoveries
-      WHERE source_id = $1 AND announced = false ORDER BY id`,
-    [sourceId],
+      WHERE user_id = $1 AND source_id = $2 AND announced = false ORDER BY id`,
+    [userId, sourceId],
   );
   return rows.map((r) => ({
     externalId: String(r.external_id),
@@ -166,30 +197,35 @@ export async function pendingDiscoveries(db: Sql, sourceId: string): Promise<Dis
  */
 export async function attachIdentity(
   db: Sql,
+  userId: number,
   sourceId: string,
   retailer: string,
   item: Discovered,
 ): Promise<string> {
   const existing = await db.query<{ product_key: string }>(
-    'SELECT product_key FROM aliases WHERE kind = $1 AND retailer = $2 AND value = $3',
-    ['retailer_sku', retailer, item.externalId],
+    `SELECT product_key FROM aliases
+      WHERE user_id = $1 AND kind = $2 AND retailer = $3 AND value = $4`,
+    [userId, 'retailer_sku', retailer, item.externalId],
   );
   if (existing[0]?.product_key) return existing[0].product_key;
 
   const key = productKey(item.name, item.externalId);
   await db.batch([
     {
-      text: 'INSERT INTO products (key, name) VALUES ($1, $2) ON CONFLICT (key) DO NOTHING',
-      params: [key, item.name],
+      text: `INSERT INTO products (user_id, key, name) VALUES ($1, $2, $3)
+             ON CONFLICT (user_id, key) DO NOTHING`,
+      params: [userId, key, item.name],
     },
     {
-      text: `INSERT INTO aliases (product_key, kind, retailer, value) VALUES ($1, $2, $3, $4)
-             ON CONFLICT (kind, retailer, value) DO NOTHING`,
-      params: [key, 'retailer_sku', retailer, item.externalId],
+      text: `INSERT INTO aliases (user_id, product_key, kind, retailer, value)
+             VALUES ($1, $2, $3, $4, $5)
+             ON CONFLICT (user_id, kind, retailer, value) DO NOTHING`,
+      params: [userId, key, 'retailer_sku', retailer, item.externalId],
     },
     {
-      text: 'UPDATE discoveries SET product_key = $1 WHERE source_id = $2 AND external_id = $3',
-      params: [key, sourceId, item.externalId],
+      text: `UPDATE discoveries SET product_key = $1
+              WHERE user_id = $2 AND source_id = $3 AND external_id = $4`,
+      params: [key, userId, sourceId, item.externalId],
     },
   ]);
   return key;
@@ -197,6 +233,7 @@ export async function attachIdentity(
 
 export async function finishSweep(
   db: Sql,
+  userId: number,
   sourceId: string,
   status: string,
   count: number,
@@ -207,18 +244,20 @@ export async function finishSweep(
     `UPDATE sources
         SET last_swept_at = now(), last_status = $1, last_count = $2,
             seeded = $3, cursor = $4
-      WHERE id = $5`,
-    [status.slice(0, 300), count, seeded, cursor, sourceId],
+      WHERE user_id = $5 AND id = $6`,
+    [status.slice(0, 300), count, seeded, cursor, userId, sourceId],
   );
 }
 
 export async function logEvent(
   db: Sql,
+  userId: number,
   kind: string,
   message: string,
   data: unknown = null,
 ): Promise<void> {
-  await db.query('INSERT INTO events (kind, message, data) VALUES ($1, $2, $3)', [
+  await db.query('INSERT INTO events (user_id, kind, message, data) VALUES ($1, $2, $3, $4)', [
+    userId,
     kind,
     message.slice(0, 1000),
     data === null || data === undefined ? null : JSON.stringify(data).slice(0, 4000),
@@ -242,12 +281,14 @@ export interface WatchRow {
   releaseDate: string | null;
 }
 
-export async function watchlist(db: Sql): Promise<WatchRow[]> {
+export async function watchlist(db: Sql, userId: number): Promise<WatchRow[]> {
   const rows = await db.query(
     `SELECT l.id, l.product_key, p.name, p.release_date, l.retailer, l.external_id, l.url
        FROM listings l
-       JOIN products p ON p.key = l.product_key
+       JOIN products p ON p.user_id = l.user_id AND p.key = l.product_key
+      WHERE l.user_id = $1
       ORDER BY p.name, l.retailer`,
+    [userId],
   );
   return rows.map((r) => ({
     listingId: Number(r.id),
@@ -299,8 +340,8 @@ export function keyForName(name: string): string {
   return `prd_${slug || 'unnamed'}`;
 }
 
-export async function listProducts(db: Sql): Promise<ProductRow[]> {
-  const rows = await db.query('SELECT * FROM products ORDER BY name');
+export async function listProducts(db: Sql, userId: number): Promise<ProductRow[]> {
+  const rows = await db.query('SELECT * FROM products WHERE user_id = $1 ORDER BY name', [userId]);
   return rows.map(toProduct);
 }
 
@@ -339,15 +380,22 @@ export function validateProduct(p: ProductInput): string | null {
   return null;
 }
 
-export async function upsertProduct(db: Sql, p: ProductInput): Promise<ProductRow> {
+export async function upsertProduct(
+  db: Sql,
+  userId: number,
+  p: ProductInput,
+): Promise<ProductRow> {
   const problem = validateProduct(p);
   if (problem) throw new Error(problem);
 
   const key = p.key?.trim() || keyForName(p.name);
   const rows = await db.query(
-    `INSERT INTO products (key, name, release_date, msrp, image_url, notes, name_is_guess)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
-     ON CONFLICT (key) DO UPDATE SET
+    `INSERT INTO products (user_id, key, name, release_date, msrp, image_url, notes, name_is_guess)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+     -- (user_id, key), not (key): two people minting the same key from the same
+     -- product name would otherwise have the second silently overwrite the
+     -- first's product. Cross-user corruption, on an ordinary add.
+     ON CONFLICT (user_id, key) DO UPDATE SET
        name = EXCLUDED.name,
        name_is_guess = EXCLUDED.name_is_guess,
        -- COALESCE, not EXCLUDED: an edit that omits a field must not blank a
@@ -358,6 +406,7 @@ export async function upsertProduct(db: Sql, p: ProductInput): Promise<ProductRo
        notes = CASE WHEN EXCLUDED.notes = '' THEN products.notes ELSE EXCLUDED.notes END
      RETURNING *`,
     [
+      userId,
       key,
       p.name.trim(),
       p.releaseDate || null,
@@ -371,17 +420,23 @@ export async function upsertProduct(db: Sql, p: ProductInput): Promise<ProductRo
 }
 
 /** Only ever set an image we actually read off a page; never blank an existing one. */
-export async function setProductImage(db: Sql, key: string, imageUrl: string): Promise<void> {
+export async function setProductImage(
+  db: Sql,
+  userId: number,
+  key: string,
+  imageUrl: string,
+): Promise<void> {
   if (!imageUrl) return;
-  await db.query("UPDATE products SET image_url = $1 WHERE key = $2 AND image_url = ''", [
-    imageUrl,
-    key,
-  ]);
+  await db.query(
+    `UPDATE products SET image_url = $1
+      WHERE user_id = $2 AND key = $3 AND image_url = ''`,
+    [imageUrl, userId, key],
+  );
 }
 
-export async function deleteProduct(db: Sql, key: string): Promise<void> {
+export async function deleteProduct(db: Sql, userId: number, key: string): Promise<void> {
   // Listings, missions, runs and observations all cascade from here.
-  await db.query('DELETE FROM products WHERE key = $1', [key]);
+  await db.query('DELETE FROM products WHERE user_id = $1 AND key = $2', [userId, key]);
 }
 
 // ─── Listings ────────────────────────────────────────────────────────────────
@@ -415,49 +470,60 @@ function toListing(r: Record<string, unknown>): ListingRow {
 /** The listing for this retailer + id, if we already track it. */
 export async function findListing(
   db: Sql,
+  userId: number,
   retailer: string,
   externalId: string,
 ): Promise<ListingRow | null> {
   const rows = await db.query(
     `SELECT l.*, p.name AS product_name FROM listings l
-       JOIN products p ON p.key = l.product_key
-      WHERE l.retailer = $1 AND l.external_id = $2`,
-    [retailer.trim(), externalId.trim()],
+       JOIN products p ON p.user_id = l.user_id AND p.key = l.product_key
+      WHERE l.user_id = $1 AND l.retailer = $2 AND l.external_id = $3`,
+    [userId, retailer.trim(), externalId.trim()],
   );
   return rows[0] ? toListing(rows[0]) : null;
 }
 
-export async function listListings(db: Sql, productKey?: string): Promise<ListingRow[]> {
+export async function listListings(
+  db: Sql,
+  userId: number,
+  productKey?: string,
+): Promise<ListingRow[]> {
   const sql = `SELECT l.*, p.name AS product_name FROM listings l
-                 JOIN products p ON p.key = l.product_key
-                ${productKey ? 'WHERE l.product_key = $1' : ''}
+                 JOIN products p ON p.user_id = l.user_id AND p.key = l.product_key
+                WHERE l.user_id = $1${productKey ? ' AND l.product_key = $2' : ''}
                 ORDER BY p.name, l.retailer`;
-  const rows = productKey ? await db.query(sql, [productKey]) : await db.query(sql);
+  const rows = productKey
+    ? await db.query(sql, [userId, productKey])
+    : await db.query(sql, [userId]);
   return rows.map(toListing);
 }
 
 export async function addListing(
   db: Sql,
+  userId: number,
   l: { productKey: string; retailer: string; externalId: string; url: string },
 ): Promise<ListingRow> {
   const rows = await db.query(
-    `INSERT INTO listings (product_key, retailer, external_id, url)
-     VALUES ($1, $2, $3, $4)
-     ON CONFLICT (retailer, external_id) DO UPDATE SET
+    `INSERT INTO listings (user_id, product_key, retailer, external_id, url)
+     VALUES ($1, $2, $3, $4, $5)
+     -- Per owner: two people must both be able to watch the same tcin.
+     ON CONFLICT (user_id, retailer, external_id) DO UPDATE SET
        url = EXCLUDED.url,
        product_key = EXCLUDED.product_key
      RETURNING *`,
-    [l.productKey, l.retailer.trim(), l.externalId.trim(), l.url.trim()],
+    [userId, l.productKey, l.retailer.trim(), l.externalId.trim(), l.url.trim()],
   );
   const [full] = await db.query(
-    'SELECT l.*, p.name AS product_name FROM listings l JOIN products p ON p.key = l.product_key WHERE l.id = $1',
-    [rows[0]!.id],
+    `SELECT l.*, p.name AS product_name FROM listings l
+       JOIN products p ON p.user_id = l.user_id AND p.key = l.product_key
+      WHERE l.user_id = $1 AND l.id = $2`,
+    [userId, rows[0]!.id],
   );
   return toListing(full!);
 }
 
-export async function deleteListing(db: Sql, id: number): Promise<void> {
-  await db.query('DELETE FROM listings WHERE id = $1', [id]);
+export async function deleteListing(db: Sql, userId: number, id: number): Promise<void> {
+  await db.query('DELETE FROM listings WHERE user_id = $1 AND id = $2', [userId, id]);
 }
 
 // ─── Missions ────────────────────────────────────────────────────────────────
@@ -474,6 +540,30 @@ export interface MissionInput {
   sellerPolicy?: SellerPolicy;
   checkEverySeconds?: number;
   notes?: string;
+}
+
+// ── Who is asking ────────────────────────────────────────────────────────────
+
+/** How many users exist. Used by /health to prove the database answers. */
+export async function countUsers(db: Sql): Promise<number> {
+  const rows = await db.query<{ n: number }>('SELECT count(*)::int AS n FROM users');
+  return Number(rows[0]?.n ?? 0);
+}
+
+/**
+ * Whose Watcher presents this token?
+ *
+ * Takes the hash, never the token: the column holds a hash and the comparison
+ * happens in the database on hashes alone, so a leaked table is not a set of
+ * working credentials.
+ */
+export async function userByTokenHash(db: Sql, tokenHash: string): Promise<number> {
+  if (!tokenHash) return 0;
+  const rows = await db.query<{ id: number }>(
+    "SELECT id FROM users WHERE enabled = true AND token_hash <> '' AND token_hash = $1",
+    [tokenHash],
+  );
+  return Number(rows[0]?.id ?? 0);
 }
 
 // ── Account settings ─────────────────────────────────────────────────────────
@@ -527,8 +617,11 @@ export function validateSettings(s: Partial<Settings>): string | null {
   return null;
 }
 
-export async function getSettings(db: Sql): Promise<Settings> {
-  const rows = await db.query<{ key: string; value: string }>('SELECT key, value FROM settings');
+export async function getSettings(db: Sql, userId: number): Promise<Settings> {
+  const rows = await db.query<{ key: string; value: string }>(
+    'SELECT key, value FROM settings WHERE user_id = $1',
+    [userId],
+  );
   const map = new Map(rows.map((r) => [r.key, r.value]));
   const num = (k: string, fallback: number): number => {
     const raw = map.get(k);
@@ -544,7 +637,11 @@ export async function getSettings(db: Sql): Promise<Settings> {
   };
 }
 
-export async function setSettings(db: Sql, patch: Partial<Settings>): Promise<Settings> {
+export async function setSettings(
+  db: Sql,
+  userId: number,
+  patch: Partial<Settings>,
+): Promise<Settings> {
   const problem = validateSettings(patch);
   if (problem) throw new Error(problem);
 
@@ -553,13 +650,13 @@ export async function setSettings(db: Sql, patch: Partial<Settings>): Promise<Se
     const value = patch[key];
     if (value === undefined) continue;
     statements.push({
-      text: `INSERT INTO settings (key, value) VALUES ($1, $2)
-             ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
-      params: [key, String(value)],
+      text: `INSERT INTO settings (user_id, key, value) VALUES ($1, $2, $3)
+             ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+      params: [userId, key, String(value)],
     });
   }
   if (statements.length) await db.batch(statements);
-  return getSettings(db);
+  return getSettings(db, userId);
 }
 
 export interface MissionRow {
@@ -649,9 +746,10 @@ const MISSION_SELECT = `
          COALESCE(w.note, '') AS note,
          w.last_checked_at, w.last_changed_at
     FROM missions m
-    JOIN listings l ON l.id = m.listing_id
-    JOIN products p ON p.key = l.product_key
-    LEFT JOIN watch_state w ON w.listing_id = l.id`;
+    JOIN listings l ON l.user_id = m.user_id AND l.id = m.listing_id
+    JOIN products p ON p.user_id = l.user_id AND p.key = l.product_key
+    LEFT JOIN watch_state w ON w.user_id = l.user_id AND w.listing_id = l.id
+   WHERE m.user_id = $1`;
 
 /**
  * Every mission, in the order you care about them.
@@ -660,24 +758,32 @@ const MISSION_SELECT = `
  * LEFT JOIN on watch_state, so a mission the Watcher has never reached still
  * appears — marked unchecked rather than quietly missing.
  */
-export async function listMissions(db: Sql): Promise<MissionRow[]> {
+export async function listMissions(db: Sql, userId: number): Promise<MissionRow[]> {
   const rows = await db.query(`${MISSION_SELECT}
     ORDER BY
       CASE COALESCE(w.state, 'unchecked')
         WHEN 'in' THEN 0 WHEN 'queue' THEN 1 WHEN 'unknown' THEN 2
         WHEN 'unchecked' THEN 3 ELSE 4 END,
-      m.armed DESC, p.name, l.retailer`);
+      m.armed DESC, p.name, l.retailer`, [userId]);
   return rows.map(toMission);
 }
 
 /** The mission watching this listing, if there is one. At most one, by schema. */
-export async function missionForListing(db: Sql, listingId: number): Promise<MissionRow | null> {
-  const rows = await db.query(`${MISSION_SELECT} WHERE m.listing_id = $1`, [listingId]);
+export async function missionForListing(
+  db: Sql,
+  userId: number,
+  listingId: number,
+): Promise<MissionRow | null> {
+  const rows = await db.query(`${MISSION_SELECT} AND m.listing_id = $2`, [userId, listingId]);
   return rows[0] ? toMission(rows[0]) : null;
 }
 
-export async function getMission(db: Sql, id: number): Promise<MissionRow | null> {
-  const rows = await db.query(`${MISSION_SELECT} WHERE m.id = $1`, [id]);
+export async function getMission(
+  db: Sql,
+  userId: number,
+  id: number,
+): Promise<MissionRow | null> {
+  const rows = await db.query(`${MISSION_SELECT} AND m.id = $2`, [userId, id]);
   return rows[0] ? toMission(rows[0]) : null;
 }
 
@@ -690,16 +796,16 @@ export async function getMission(db: Sql, id: number): Promise<MissionRow | null
  * and lets the next pass honour it. Saying "checking now" and meaning "queued"
  * would be the same species of lie as a $30 ceiling that accepts $45.
  */
-export async function requestCheckNow(db: Sql, id: number): Promise<boolean> {
+export async function requestCheckNow(db: Sql, userId: number, id: number): Promise<boolean> {
   const rows = await db.query<{ id: number }>(
-    'UPDATE missions SET check_now_at = now() WHERE id = $1 RETURNING id',
-    [id],
+    'UPDATE missions SET check_now_at = now() WHERE user_id = $1 AND id = $2 RETURNING id',
+    [userId, id],
   );
   return rows.length > 0;
 }
 
-export async function activeMissions(db: Sql): Promise<MissionRow[]> {
-  const rows = await db.query(`${MISSION_SELECT} WHERE m.enabled = true ORDER BY m.id`);
+export async function activeMissions(db: Sql, userId: number): Promise<MissionRow[]> {
+  const rows = await db.query(`${MISSION_SELECT} AND m.enabled = true ORDER BY m.id`, [userId]);
   return rows.map(toMission);
 }
 
@@ -733,14 +839,27 @@ export function validateMission(m: MissionInput): string | null {
   return null;
 }
 
-export async function upsertMission(db: Sql, m: MissionInput): Promise<MissionRow> {
+export async function upsertMission(
+  db: Sql,
+  userId: number,
+  m: MissionInput,
+): Promise<MissionRow> {
   const problem = validateMission(m);
   if (problem) throw new Error(problem);
 
+  // The listing has to be this user's. Without this check a crafted listingId
+  // would attach a mission to somebody else's listing — and a mission is the
+  // thing that spends money.
+  const owns = await db.query<{ id: number }>(
+    'SELECT id FROM listings WHERE user_id = $1 AND id = $2',
+    [userId, m.listingId],
+  );
+  if (!owns.length) throw new Error('that listing does not belong to you');
+
   const rows = await db.query(
-    `INSERT INTO missions (listing_id, label, enabled, armed, ceiling, quantity,
+    `INSERT INTO missions (user_id, listing_id, label, enabled, armed, ceiling, quantity,
                            seller_policy, check_every_s, notes)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
      ON CONFLICT (listing_id) DO UPDATE SET
        label = EXCLUDED.label,
        enabled = EXCLUDED.enabled,
@@ -752,6 +871,7 @@ export async function upsertMission(db: Sql, m: MissionInput): Promise<MissionRo
        notes = EXCLUDED.notes
      RETURNING id`,
     [
+      userId,
       m.listingId,
       m.label ?? '',
       m.enabled ?? true,
@@ -763,13 +883,13 @@ export async function upsertMission(db: Sql, m: MissionInput): Promise<MissionRo
       m.notes ?? '',
     ],
   );
-  const mission = await getMission(db, Number(rows[0]!.id));
+  const mission = await getMission(db, userId, Number(rows[0]!.id));
   if (!mission) throw new Error('mission vanished immediately after being written');
   return mission;
 }
 
-export async function deleteMission(db: Sql, id: number): Promise<void> {
-  await db.query('DELETE FROM missions WHERE id = $1', [id]);
+export async function deleteMission(db: Sql, userId: number, id: number): Promise<void> {
+  await db.query('DELETE FROM missions WHERE user_id = $1 AND id = $2', [userId, id]);
 }
 
 // ─── Mission runs ────────────────────────────────────────────────────────────
@@ -801,15 +921,25 @@ export interface RunRow {
  * started and never finished shows as 'running' forever, which is exactly the
  * signal you want: something began and nothing closed it.
  */
-export async function startRun(db: Sql, missionId: number): Promise<number> {
-  const rows = await db.query('INSERT INTO mission_runs (mission_id) VALUES ($1) RETURNING id', [
-    missionId,
-  ]);
+export async function startRun(db: Sql, userId: number, missionId: number): Promise<number> {
+  // The mission has to be this user's, or a crafted missionId writes history
+  // onto somebody else's mission.
+  const owns = await db.query<{ id: number }>(
+    'SELECT id FROM missions WHERE user_id = $1 AND id = $2',
+    [userId, missionId],
+  );
+  if (!owns.length) throw new Error('that mission does not belong to you');
+
+  const rows = await db.query(
+    'INSERT INTO mission_runs (user_id, mission_id) VALUES ($1, $2) RETURNING id',
+    [userId, missionId],
+  );
   return Number(rows[0]!.id);
 }
 
 export async function finishRun(
   db: Sql,
+  userId: number,
   runId: number,
   r: {
     outcome: Exclude<RunOutcome, 'running'>;
@@ -834,7 +964,7 @@ export async function finishRun(
             outcome = $1, reason = $2, state = $3, price = $4,
             seller_kind = $5, seller_name = $6, quantity = $7, total = $8,
             ms = GREATEST(0, EXTRACT(EPOCH FROM (now() - started_at)) * 1000)::int
-      WHERE id = $9`,
+      WHERE user_id = $9 AND id = $10`,
     [
       r.outcome,
       reason.slice(0, 500),
@@ -844,6 +974,7 @@ export async function finishRun(
       r.sellerName ?? '',
       r.quantity ?? null,
       r.total ?? null,
+      userId,
       runId,
     ],
   );
@@ -852,11 +983,12 @@ export async function finishRun(
 /** Record a run that is already over. The common case. */
 export async function recordRun(
   db: Sql,
+  userId: number,
   missionId: number,
-  r: Parameters<typeof finishRun>[2],
+  r: Parameters<typeof finishRun>[3],
 ): Promise<number> {
-  const id = await startRun(db, missionId);
-  await finishRun(db, id, r);
+  const id = await startRun(db, userId, missionId);
+  await finishRun(db, userId, id, r);
   return id;
 }
 
@@ -884,22 +1016,28 @@ function toRun(r: Record<string, unknown>): RunRow {
 const RUN_SELECT = `
   SELECT r.*, p.name AS product_name, l.retailer
     FROM mission_runs r
-    JOIN missions m ON m.id = r.mission_id
-    JOIN listings l ON l.id = m.listing_id
-    JOIN products p ON p.key = l.product_key`;
+    JOIN missions m ON m.user_id = r.user_id AND m.id = r.mission_id
+    JOIN listings l ON l.user_id = m.user_id AND l.id = m.listing_id
+    JOIN products p ON p.user_id = l.user_id AND p.key = l.product_key
+   WHERE r.user_id = $1`;
 
-export async function missionRuns(db: Sql, missionId: number, limit = 100): Promise<RunRow[]> {
+export async function missionRuns(
+  db: Sql,
+  userId: number,
+  missionId: number,
+  limit = 100,
+): Promise<RunRow[]> {
   const rows = await db.query(
-    `${RUN_SELECT} WHERE r.mission_id = $1 ORDER BY r.started_at DESC, r.id DESC LIMIT $2`,
-    [missionId, Math.min(Math.max(limit, 1), 500)],
+    `${RUN_SELECT} AND r.mission_id = $2 ORDER BY r.started_at DESC, r.id DESC LIMIT $3`,
+    [userId, missionId, Math.min(Math.max(limit, 1), 500)],
   );
   return rows.map(toRun);
 }
 
-export async function recentRuns(db: Sql, limit = 50): Promise<RunRow[]> {
+export async function recentRuns(db: Sql, userId: number, limit = 50): Promise<RunRow[]> {
   const rows = await db.query(
-    `${RUN_SELECT} ORDER BY r.started_at DESC, r.id DESC LIMIT $1`,
-    [Math.min(Math.max(limit, 1), 200)],
+    `${RUN_SELECT} ORDER BY r.started_at DESC, r.id DESC LIMIT $2`,
+    [userId, Math.min(Math.max(limit, 1), 200)],
   );
   return rows.map(toRun);
 }
@@ -947,11 +1085,22 @@ export interface RecordedObservation {
  */
 export async function recordObservation(
   db: Sql,
+  userId: number,
   obs: ObservationIn,
 ): Promise<RecordedObservation> {
+  // A reading names a listing by id, and that id arrives over the wire from a
+  // Watcher. If it is not this user's listing, nothing here may touch it —
+  // otherwise one person's Watcher could rewrite another person's stock and
+  // price, which is the reading an armed mission acts on.
+  const owns = await db.query<{ id: number }>(
+    'SELECT id FROM listings WHERE user_id = $1 AND id = $2',
+    [userId, obs.listingId],
+  );
+  if (!owns.length) throw new Error('that listing does not belong to you');
+
   const prior = await db.query<{ state: string; price: unknown; seller_kind: string }>(
-    'SELECT state, price, seller_kind FROM watch_state WHERE listing_id = $1',
-    [obs.listingId],
+    'SELECT state, price, seller_kind FROM watch_state WHERE user_id = $1 AND listing_id = $2',
+    [userId, obs.listingId],
   );
 
   const before = prior[0] ?? null;
@@ -968,10 +1117,10 @@ export async function recordObservation(
 
   await db.query(
     `INSERT INTO watch_state (
-       listing_id, state, confidence, price, seller_kind, seller_name,
+       user_id, listing_id, state, confidence, price, seller_kind, seller_name,
        available_quantity, order_limit, is_preorder, release_date, note,
        last_checked_at, last_changed_at
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, now(), now())
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12, now(), now())
      ON CONFLICT (listing_id) DO UPDATE SET
        state = EXCLUDED.state,
        confidence = EXCLUDED.confidence,
@@ -986,8 +1135,9 @@ export async function recordObservation(
        last_checked_at = now(),
        -- Only move this when something actually moved, so "in stock since"
        -- means what it says instead of resetting on every poll.
-       last_changed_at = CASE WHEN $12 THEN now() ELSE watch_state.last_changed_at END`,
+       last_changed_at = CASE WHEN $13 THEN now() ELSE watch_state.last_changed_at END`,
     [
+      userId,
       obs.listingId,
       obs.state,
       obs.confidence ?? 'unknown',
@@ -1008,18 +1158,18 @@ export async function recordObservation(
   // that never happened; clearing it here means the button stays lit until the
   // Watcher actually looked.
   await db.query(
-    'UPDATE missions SET check_now_at = NULL WHERE listing_id = $1 AND check_now_at IS NOT NULL',
-    [obs.listingId],
+    `UPDATE missions SET check_now_at = NULL
+      WHERE user_id = $1 AND listing_id = $2 AND check_now_at IS NOT NULL`,
+    [userId, obs.listingId],
   );
 
   // The listing remembers who was selling it, so a mission's seller policy has
   // something to read even before the next check.
   if (sellerKind !== 'unknown') {
-    await db.query('UPDATE listings SET seller_kind = $1, seller_name = $2 WHERE id = $3', [
-      sellerKind,
-      obs.sellerName ?? '',
-      obs.listingId,
-    ]);
+    await db.query(
+      'UPDATE listings SET seller_kind = $1, seller_name = $2 WHERE user_id = $3 AND id = $4',
+      [sellerKind, obs.sellerName ?? '', userId, obs.listingId],
+    );
   }
 
   // The page knows the product's name better than its own URL does. Replace a
@@ -1028,9 +1178,10 @@ export async function recordObservation(
   if (realName && realName.length <= 200) {
     await db.query(
       `UPDATE products SET name = $1, name_is_guess = false
-        WHERE key = (SELECT product_key FROM listings WHERE id = $2)
+        WHERE user_id = $2
+          AND key = (SELECT product_key FROM listings WHERE user_id = $2 AND id = $3)
           AND name_is_guess = true`,
-      [realName, obs.listingId],
+      [realName, userId, obs.listingId],
     );
   }
 
@@ -1039,19 +1190,20 @@ export async function recordObservation(
   if (obs.imageUrl) {
     await db.query(
       `UPDATE products SET image_url = $1
-        WHERE image_url = ''
-          AND key = (SELECT product_key FROM listings WHERE id = $2)`,
-      [obs.imageUrl, obs.listingId],
+        WHERE user_id = $2 AND image_url = ''
+          AND key = (SELECT product_key FROM listings WHERE user_id = $2 AND id = $3)`,
+      [obs.imageUrl, userId, obs.listingId],
     );
   }
 
   if (changed || isFirst) {
     await db.query(
       `INSERT INTO observations
-         (listing_id, state, confidence, price, seller_kind, seller_name,
+         (user_id, listing_id, state, confidence, price, seller_kind, seller_name,
           available_quantity, note)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
       [
+        userId,
         obs.listingId,
         obs.state,
         obs.confidence ?? 'unknown',
@@ -1068,7 +1220,7 @@ export async function recordObservation(
 }
 
 /** Recent readings that actually changed. The "what happened" feed. */
-export async function recentObservations(db: Sql, limit = 50): Promise<
+export async function recentObservations(db: Sql, userId: number, limit = 50): Promise<
   {
     listingId: number;
     productName: string;
@@ -1085,11 +1237,12 @@ export async function recentObservations(db: Sql, limit = 50): Promise<
     `SELECT o.listing_id, p.name AS product_name, l.retailer, o.state, o.price,
             o.seller_kind, o.seller_name, o.note, o.at
        FROM observations o
-       JOIN listings l ON l.id = o.listing_id
-       JOIN products p ON p.key = l.product_key
+       JOIN listings l ON l.user_id = o.user_id AND l.id = o.listing_id
+       JOIN products p ON p.user_id = l.user_id AND p.key = l.product_key
+      WHERE o.user_id = $1
       ORDER BY o.at DESC, o.id DESC
-      LIMIT $1`,
-    [Math.min(Math.max(limit, 1), 200)],
+      LIMIT $2`,
+    [userId, Math.min(Math.max(limit, 1), 200)],
   );
   return rows.map((r) => ({
     listingId: Number(r.listing_id),

@@ -15,6 +15,36 @@
 --   the way out. A SQLite-backed test would never have shown that.
 
 -- ---------------------------------------------------------------------------
+-- Who this belongs to
+-- ---------------------------------------------------------------------------
+--
+-- Added while the system had four missions and one user, deliberately. Once
+-- checkout exists, adding an ownership boundary means touching every path that
+-- can spend money on a system that is already spending it -- and a bug in the
+-- filter would spend the wrong person's money rather than merely showing them
+-- the wrong page. This is the cheapest hour this work will ever cost.
+--
+-- What is NOT here is as important as what is. No password, no address, no
+-- card. Sign-in comes later and will use Supabase's own auth rather than this
+-- table storing anyone's secrets; residency.test.ts fails the build if a
+-- column ever appears that could hold one.
+CREATE TABLE IF NOT EXISTS users (
+  id          BIGSERIAL PRIMARY KEY,
+  -- A label for a person, not a credential. "danru", "the spare laptop".
+  handle      TEXT NOT NULL UNIQUE,
+  -- SHA-256 of the ingest token this user's Watcher presents. Hashed, never
+  -- stored plainly: a leaked database must not hand anyone the ability to
+  -- impersonate a Watcher, which is the same standard a password gets.
+  token_hash  TEXT NOT NULL DEFAULT '',
+  enabled     BOOLEAN NOT NULL DEFAULT true,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Everything that existed before ownership did belongs to the first user.
+INSERT INTO users (id, handle) VALUES (1, 'owner') ON CONFLICT (id) DO NOTHING;
+SELECT setval(pg_get_serial_sequence('users', 'id'), GREATEST((SELECT MAX(id) FROM users), 1));
+
+-- ---------------------------------------------------------------------------
 -- Where to look
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS sources (
@@ -310,3 +340,99 @@ CREATE TABLE IF NOT EXISTS observations (
 );
 
 CREATE INDEX IF NOT EXISTS observations_listing_idx ON observations (listing_id, at DESC);
+
+-- ---------------------------------------------------------------------------
+-- Ownership
+-- ---------------------------------------------------------------------------
+--
+-- On every table, including the ones that could reach a user through a join.
+-- The filter is a money-safety boundary now, not a privacy nicety, and a join
+-- somebody forgets is worse than a column they cannot.
+--
+-- DEFAULT 1 so existing rows land with the original owner and the column can
+-- be NOT NULL from the start.
+ALTER TABLE sources ADD COLUMN IF NOT EXISTS user_id BIGINT NOT NULL DEFAULT 1 REFERENCES users(id) ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS sources_user_idx ON sources (user_id);
+ALTER TABLE products ADD COLUMN IF NOT EXISTS user_id BIGINT NOT NULL DEFAULT 1 REFERENCES users(id) ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS products_user_idx ON products (user_id);
+ALTER TABLE aliases ADD COLUMN IF NOT EXISTS user_id BIGINT NOT NULL DEFAULT 1 REFERENCES users(id) ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS aliases_user_idx ON aliases (user_id);
+ALTER TABLE discoveries ADD COLUMN IF NOT EXISTS user_id BIGINT NOT NULL DEFAULT 1 REFERENCES users(id) ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS discoveries_user_idx ON discoveries (user_id);
+ALTER TABLE events ADD COLUMN IF NOT EXISTS user_id BIGINT NOT NULL DEFAULT 1 REFERENCES users(id) ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS events_user_idx ON events (user_id);
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS user_id BIGINT NOT NULL DEFAULT 1 REFERENCES users(id) ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS listings_user_idx ON listings (user_id);
+ALTER TABLE missions ADD COLUMN IF NOT EXISTS user_id BIGINT NOT NULL DEFAULT 1 REFERENCES users(id) ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS missions_user_idx ON missions (user_id);
+ALTER TABLE settings ADD COLUMN IF NOT EXISTS user_id BIGINT NOT NULL DEFAULT 1 REFERENCES users(id) ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS settings_user_idx ON settings (user_id);
+ALTER TABLE mission_runs ADD COLUMN IF NOT EXISTS user_id BIGINT NOT NULL DEFAULT 1 REFERENCES users(id) ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS mission_runs_user_idx ON mission_runs (user_id);
+ALTER TABLE watch_state ADD COLUMN IF NOT EXISTS user_id BIGINT NOT NULL DEFAULT 1 REFERENCES users(id) ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS watch_state_user_idx ON watch_state (user_id);
+ALTER TABLE observations ADD COLUMN IF NOT EXISTS user_id BIGINT NOT NULL DEFAULT 1 REFERENCES users(id) ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS observations_user_idx ON observations (user_id);
+
+-- ---------------------------------------------------------------------------
+-- Uniqueness, per owner
+-- ---------------------------------------------------------------------------
+--
+-- Every constraint below was written when there was one user, and every one of
+-- them would now stop a second person watching a product the first already
+-- watches. Worse than stopping: `products` is upserted ON CONFLICT (key), so a
+-- second user minting the same key would silently *overwrite the first user's
+-- product*. Cross-user corruption, quietly, on an ordinary add.
+--
+-- So these become per-owner. The text primary keys — products.key,
+-- settings.key, sources.id — are minted per user and collide across users, so
+-- the identity is the pair.
+--
+-- The order matters: a key cannot be dropped while a foreign key points at it.
+
+-- 1. Release the foreign keys.
+ALTER TABLE aliases     DROP CONSTRAINT IF EXISTS aliases_product_key_fkey;
+ALTER TABLE listings    DROP CONSTRAINT IF EXISTS listings_product_key_fkey;
+ALTER TABLE discoveries DROP CONSTRAINT IF EXISTS discoveries_source_id_fkey;
+
+-- 2. Replace the single-column identities with per-owner ones.
+ALTER TABLE products DROP CONSTRAINT IF EXISTS products_pkey;
+CREATE UNIQUE INDEX IF NOT EXISTS products_owner_key_idx ON products (user_id, key);
+
+ALTER TABLE settings DROP CONSTRAINT IF EXISTS settings_pkey;
+CREATE UNIQUE INDEX IF NOT EXISTS settings_owner_key_idx ON settings (user_id, key);
+
+ALTER TABLE sources DROP CONSTRAINT IF EXISTS sources_pkey;
+CREATE UNIQUE INDEX IF NOT EXISTS sources_owner_id_idx ON sources (user_id, id);
+
+ALTER TABLE listings DROP CONSTRAINT IF EXISTS listings_retailer_external_id_key;
+CREATE UNIQUE INDEX IF NOT EXISTS listings_owner_retailer_external_idx
+  ON listings (user_id, retailer, external_id);
+
+ALTER TABLE aliases DROP CONSTRAINT IF EXISTS aliases_kind_retailer_value_key;
+CREATE UNIQUE INDEX IF NOT EXISTS aliases_owner_kind_retailer_value_idx
+  ON aliases (user_id, kind, retailer, value);
+
+ALTER TABLE discoveries DROP CONSTRAINT IF EXISTS discoveries_source_id_external_id_key;
+CREATE UNIQUE INDEX IF NOT EXISTS discoveries_owner_source_external_idx
+  ON discoveries (user_id, source_id, external_id);
+
+-- 3. Point the foreign keys at the new identities.
+--
+-- ADD CONSTRAINT has no IF NOT EXISTS, and this file is run against a live
+-- database every deploy, so each one is guarded by its own existence check.
+-- Cascade is kept: deleting a product still takes its listings with it.
+DO $do$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'aliases_owner_product_fkey') THEN
+    ALTER TABLE aliases ADD CONSTRAINT aliases_owner_product_fkey
+      FOREIGN KEY (user_id, product_key) REFERENCES products (user_id, key) ON DELETE CASCADE;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'listings_owner_product_fkey') THEN
+    ALTER TABLE listings ADD CONSTRAINT listings_owner_product_fkey
+      FOREIGN KEY (user_id, product_key) REFERENCES products (user_id, key) ON DELETE CASCADE;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'discoveries_owner_source_fkey') THEN
+    ALTER TABLE discoveries ADD CONSTRAINT discoveries_owner_source_fkey
+      FOREIGN KEY (user_id, source_id) REFERENCES sources (user_id, id) ON DELETE CASCADE;
+  END IF;
+END $do$;

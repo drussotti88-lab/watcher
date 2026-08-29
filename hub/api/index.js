@@ -332,89 +332,113 @@ function toSource(row) {
     lastCount: Number(row.last_count ?? 0)
   };
 }
-async function listSources(db2, via) {
-  const rows = via ? await db2.query("SELECT * FROM sources WHERE enabled = true AND via = $1 ORDER BY id", [via]) : await db2.query("SELECT * FROM sources WHERE enabled = true ORDER BY id");
+async function listSources(db2, userId, via) {
+  const rows = via ? await db2.query(
+    "SELECT * FROM sources WHERE user_id = $1 AND enabled = true AND via = $2 ORDER BY id",
+    [userId, via]
+  ) : await db2.query("SELECT * FROM sources WHERE user_id = $1 AND enabled = true ORDER BY id", [
+    userId
+  ]);
   return rows.map(toSource);
 }
-async function listAllSources(db2) {
-  const rows = await db2.query("SELECT * FROM sources ORDER BY retailer, id");
+async function listAllSources(db2, userId) {
+  const rows = await db2.query(
+    "SELECT * FROM sources WHERE user_id = $1 ORDER BY retailer, id",
+    [userId]
+  );
   return rows.map(toSource);
 }
-async function getSource(db2, id) {
-  const rows = await db2.query("SELECT * FROM sources WHERE id = $1", [id]);
+async function getSource(db2, userId, id) {
+  const rows = await db2.query("SELECT * FROM sources WHERE user_id = $1 AND id = $2", [userId, id]);
   return rows[0] ? toSource(rows[0]) : null;
 }
-async function knownIds(db2, sourceId) {
+async function knownIds(db2, userId, sourceId) {
   const rows = await db2.query(
-    "SELECT external_id FROM discoveries WHERE source_id = $1",
-    [sourceId]
+    "SELECT external_id FROM discoveries WHERE user_id = $1 AND source_id = $2",
+    [userId, sourceId]
   );
   return new Set(rows.map((r) => r.external_id));
 }
-async function recordDiscoveries(db2, sourceId, items, announce2) {
+async function recordDiscoveries(db2, userId, sourceId, items, announce2) {
   if (items.length === 0) return [];
   const statements = items.map((item) => ({
-    text: `INSERT INTO discoveries (source_id, external_id, url, name, price, announced)
-           VALUES ($1, $2, $3, $4, $5, $6)
-           ON CONFLICT (source_id, external_id) DO NOTHING`,
-    params: [sourceId, item.externalId, item.url, item.name, item.price ?? null, !announce2]
+    text: `INSERT INTO discoveries (user_id, source_id, external_id, url, name, price, announced)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)
+           ON CONFLICT (user_id, source_id, external_id) DO NOTHING`,
+    params: [
+      userId,
+      sourceId,
+      item.externalId,
+      item.url,
+      item.name,
+      item.price ?? null,
+      !announce2
+    ]
   }));
   await db2.batch(statements);
   return announce2 ? items : [];
 }
-async function markAnnounced(db2, sourceId, externalIds) {
+async function markAnnounced(db2, userId, sourceId, externalIds) {
   if (externalIds.length === 0) return;
   await db2.query(
-    "UPDATE discoveries SET announced = true WHERE source_id = $1 AND external_id = ANY($2)",
-    [sourceId, externalIds]
+    `UPDATE discoveries SET announced = true
+      WHERE user_id = $1 AND source_id = $2 AND external_id = ANY($3)`,
+    [userId, sourceId, externalIds]
   );
 }
-async function attachIdentity(db2, sourceId, retailer, item) {
+async function attachIdentity(db2, userId, sourceId, retailer, item) {
   const existing = await db2.query(
-    "SELECT product_key FROM aliases WHERE kind = $1 AND retailer = $2 AND value = $3",
-    ["retailer_sku", retailer, item.externalId]
+    `SELECT product_key FROM aliases
+      WHERE user_id = $1 AND kind = $2 AND retailer = $3 AND value = $4`,
+    [userId, "retailer_sku", retailer, item.externalId]
   );
   if (existing[0]?.product_key) return existing[0].product_key;
   const key = productKey(item.name, item.externalId);
   await db2.batch([
     {
-      text: "INSERT INTO products (key, name) VALUES ($1, $2) ON CONFLICT (key) DO NOTHING",
-      params: [key, item.name]
+      text: `INSERT INTO products (user_id, key, name) VALUES ($1, $2, $3)
+             ON CONFLICT (user_id, key) DO NOTHING`,
+      params: [userId, key, item.name]
     },
     {
-      text: `INSERT INTO aliases (product_key, kind, retailer, value) VALUES ($1, $2, $3, $4)
-             ON CONFLICT (kind, retailer, value) DO NOTHING`,
-      params: [key, "retailer_sku", retailer, item.externalId]
+      text: `INSERT INTO aliases (user_id, product_key, kind, retailer, value)
+             VALUES ($1, $2, $3, $4, $5)
+             ON CONFLICT (user_id, kind, retailer, value) DO NOTHING`,
+      params: [userId, key, "retailer_sku", retailer, item.externalId]
     },
     {
-      text: "UPDATE discoveries SET product_key = $1 WHERE source_id = $2 AND external_id = $3",
-      params: [key, sourceId, item.externalId]
+      text: `UPDATE discoveries SET product_key = $1
+              WHERE user_id = $2 AND source_id = $3 AND external_id = $4`,
+      params: [key, userId, sourceId, item.externalId]
     }
   ]);
   return key;
 }
-async function finishSweep(db2, sourceId, status, count, seeded, cursor = 0) {
+async function finishSweep(db2, userId, sourceId, status, count, seeded, cursor = 0) {
   await db2.query(
     `UPDATE sources
         SET last_swept_at = now(), last_status = $1, last_count = $2,
             seeded = $3, cursor = $4
-      WHERE id = $5`,
-    [status.slice(0, 300), count, seeded, cursor, sourceId]
+      WHERE user_id = $5 AND id = $6`,
+    [status.slice(0, 300), count, seeded, cursor, userId, sourceId]
   );
 }
-async function logEvent(db2, kind, message, data = null) {
-  await db2.query("INSERT INTO events (kind, message, data) VALUES ($1, $2, $3)", [
+async function logEvent(db2, userId, kind, message, data = null) {
+  await db2.query("INSERT INTO events (user_id, kind, message, data) VALUES ($1, $2, $3, $4)", [
+    userId,
     kind,
     message.slice(0, 1e3),
     data === null || data === void 0 ? null : JSON.stringify(data).slice(0, 4e3)
   ]);
 }
-async function watchlist(db2) {
+async function watchlist(db2, userId) {
   const rows = await db2.query(
     `SELECT l.id, l.product_key, p.name, p.release_date, l.retailer, l.external_id, l.url
        FROM listings l
-       JOIN products p ON p.key = l.product_key
-      ORDER BY p.name, l.retailer`
+       JOIN products p ON p.user_id = l.user_id AND p.key = l.product_key
+      WHERE l.user_id = $1
+      ORDER BY p.name, l.retailer`,
+    [userId]
   );
   return rows.map((r) => ({
     listingId: Number(r.id),
@@ -440,8 +464,8 @@ function keyForName(name) {
   const slug = name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 60);
   return `prd_${slug || "unnamed"}`;
 }
-async function listProducts(db2) {
-  const rows = await db2.query("SELECT * FROM products ORDER BY name");
+async function listProducts(db2, userId) {
+  const rows = await db2.query("SELECT * FROM products WHERE user_id = $1 ORDER BY name", [userId]);
   return rows.map(toProduct);
 }
 function validateProduct(p) {
@@ -458,14 +482,17 @@ function validateProduct(p) {
   }
   return null;
 }
-async function upsertProduct(db2, p) {
+async function upsertProduct(db2, userId, p) {
   const problem = validateProduct(p);
   if (problem) throw new Error(problem);
   const key = p.key?.trim() || keyForName(p.name);
   const rows = await db2.query(
-    `INSERT INTO products (key, name, release_date, msrp, image_url, notes, name_is_guess)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
-     ON CONFLICT (key) DO UPDATE SET
+    `INSERT INTO products (user_id, key, name, release_date, msrp, image_url, notes, name_is_guess)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+     -- (user_id, key), not (key): two people minting the same key from the same
+     -- product name would otherwise have the second silently overwrite the
+     -- first's product. Cross-user corruption, on an ordinary add.
+     ON CONFLICT (user_id, key) DO UPDATE SET
        name = EXCLUDED.name,
        name_is_guess = EXCLUDED.name_is_guess,
        -- COALESCE, not EXCLUDED: an edit that omits a field must not blank a
@@ -476,6 +503,7 @@ async function upsertProduct(db2, p) {
        notes = CASE WHEN EXCLUDED.notes = '' THEN products.notes ELSE EXCLUDED.notes END
      RETURNING *`,
     [
+      userId,
       key,
       p.name.trim(),
       p.releaseDate || null,
@@ -487,8 +515,8 @@ async function upsertProduct(db2, p) {
   );
   return toProduct(rows[0]);
 }
-async function deleteProduct(db2, key) {
-  await db2.query("DELETE FROM products WHERE key = $1", [key]);
+async function deleteProduct(db2, userId, key) {
+  await db2.query("DELETE FROM products WHERE user_id = $1 AND key = $2", [userId, key]);
 }
 function toListing(r) {
   return {
@@ -503,41 +531,56 @@ function toListing(r) {
     isPrimary: r.is_primary === true
   };
 }
-async function findListing(db2, retailer, externalId) {
+async function findListing(db2, userId, retailer, externalId) {
   const rows = await db2.query(
     `SELECT l.*, p.name AS product_name FROM listings l
-       JOIN products p ON p.key = l.product_key
-      WHERE l.retailer = $1 AND l.external_id = $2`,
-    [retailer.trim(), externalId.trim()]
+       JOIN products p ON p.user_id = l.user_id AND p.key = l.product_key
+      WHERE l.user_id = $1 AND l.retailer = $2 AND l.external_id = $3`,
+    [userId, retailer.trim(), externalId.trim()]
   );
   return rows[0] ? toListing(rows[0]) : null;
 }
-async function listListings(db2, productKey2) {
+async function listListings(db2, userId, productKey2) {
   const sql = `SELECT l.*, p.name AS product_name FROM listings l
-                 JOIN products p ON p.key = l.product_key
-                ${productKey2 ? "WHERE l.product_key = $1" : ""}
+                 JOIN products p ON p.user_id = l.user_id AND p.key = l.product_key
+                WHERE l.user_id = $1${productKey2 ? " AND l.product_key = $2" : ""}
                 ORDER BY p.name, l.retailer`;
-  const rows = productKey2 ? await db2.query(sql, [productKey2]) : await db2.query(sql);
+  const rows = productKey2 ? await db2.query(sql, [userId, productKey2]) : await db2.query(sql, [userId]);
   return rows.map(toListing);
 }
-async function addListing(db2, l) {
+async function addListing(db2, userId, l) {
   const rows = await db2.query(
-    `INSERT INTO listings (product_key, retailer, external_id, url)
-     VALUES ($1, $2, $3, $4)
-     ON CONFLICT (retailer, external_id) DO UPDATE SET
+    `INSERT INTO listings (user_id, product_key, retailer, external_id, url)
+     VALUES ($1, $2, $3, $4, $5)
+     -- Per owner: two people must both be able to watch the same tcin.
+     ON CONFLICT (user_id, retailer, external_id) DO UPDATE SET
        url = EXCLUDED.url,
        product_key = EXCLUDED.product_key
      RETURNING *`,
-    [l.productKey, l.retailer.trim(), l.externalId.trim(), l.url.trim()]
+    [userId, l.productKey, l.retailer.trim(), l.externalId.trim(), l.url.trim()]
   );
   const [full] = await db2.query(
-    "SELECT l.*, p.name AS product_name FROM listings l JOIN products p ON p.key = l.product_key WHERE l.id = $1",
-    [rows[0].id]
+    `SELECT l.*, p.name AS product_name FROM listings l
+       JOIN products p ON p.user_id = l.user_id AND p.key = l.product_key
+      WHERE l.user_id = $1 AND l.id = $2`,
+    [userId, rows[0].id]
   );
   return toListing(full);
 }
-async function deleteListing(db2, id) {
-  await db2.query("DELETE FROM listings WHERE id = $1", [id]);
+async function deleteListing(db2, userId, id) {
+  await db2.query("DELETE FROM listings WHERE user_id = $1 AND id = $2", [userId, id]);
+}
+async function countUsers(db2) {
+  const rows = await db2.query("SELECT count(*)::int AS n FROM users");
+  return Number(rows[0]?.n ?? 0);
+}
+async function userByTokenHash(db2, tokenHash) {
+  if (!tokenHash) return 0;
+  const rows = await db2.query(
+    "SELECT id FROM users WHERE enabled = true AND token_hash <> '' AND token_hash = $1",
+    [tokenHash]
+  );
+  return Number(rows[0]?.id ?? 0);
 }
 var DEFAULT_SETTINGS = { taxRate: 0, shippingAllowance: 0 };
 function validateSettings(s) {
@@ -555,8 +598,11 @@ function validateSettings(s) {
   }
   return null;
 }
-async function getSettings(db2) {
-  const rows = await db2.query("SELECT key, value FROM settings");
+async function getSettings(db2, userId) {
+  const rows = await db2.query(
+    "SELECT key, value FROM settings WHERE user_id = $1",
+    [userId]
+  );
   const map = new Map(rows.map((r) => [r.key, r.value]));
   const num2 = (k, fallback) => {
     const raw = map.get(k);
@@ -569,7 +615,7 @@ async function getSettings(db2) {
     shippingAllowance: num2("shippingAllowance", DEFAULT_SETTINGS.shippingAllowance)
   };
 }
-async function setSettings(db2, patch) {
+async function setSettings(db2, userId, patch) {
   const problem = validateSettings(patch);
   if (problem) throw new Error(problem);
   const statements = [];
@@ -577,13 +623,13 @@ async function setSettings(db2, patch) {
     const value = patch[key];
     if (value === void 0) continue;
     statements.push({
-      text: `INSERT INTO settings (key, value) VALUES ($1, $2)
-             ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
-      params: [key, String(value)]
+      text: `INSERT INTO settings (user_id, key, value) VALUES ($1, $2, $3)
+             ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+      params: [userId, key, String(value)]
     });
   }
   if (statements.length) await db2.batch(statements);
-  return getSettings(db2);
+  return getSettings(db2, userId);
 }
 function toMission(r) {
   const iso = (v) => v ? new Date(String(v)).toISOString() : "";
@@ -634,35 +680,36 @@ var MISSION_SELECT = `
          COALESCE(w.note, '') AS note,
          w.last_checked_at, w.last_changed_at
     FROM missions m
-    JOIN listings l ON l.id = m.listing_id
-    JOIN products p ON p.key = l.product_key
-    LEFT JOIN watch_state w ON w.listing_id = l.id`;
-async function listMissions(db2) {
+    JOIN listings l ON l.user_id = m.user_id AND l.id = m.listing_id
+    JOIN products p ON p.user_id = l.user_id AND p.key = l.product_key
+    LEFT JOIN watch_state w ON w.user_id = l.user_id AND w.listing_id = l.id
+   WHERE m.user_id = $1`;
+async function listMissions(db2, userId) {
   const rows = await db2.query(`${MISSION_SELECT}
     ORDER BY
       CASE COALESCE(w.state, 'unchecked')
         WHEN 'in' THEN 0 WHEN 'queue' THEN 1 WHEN 'unknown' THEN 2
         WHEN 'unchecked' THEN 3 ELSE 4 END,
-      m.armed DESC, p.name, l.retailer`);
+      m.armed DESC, p.name, l.retailer`, [userId]);
   return rows.map(toMission);
 }
-async function missionForListing(db2, listingId) {
-  const rows = await db2.query(`${MISSION_SELECT} WHERE m.listing_id = $1`, [listingId]);
+async function missionForListing(db2, userId, listingId) {
+  const rows = await db2.query(`${MISSION_SELECT} AND m.listing_id = $2`, [userId, listingId]);
   return rows[0] ? toMission(rows[0]) : null;
 }
-async function getMission(db2, id) {
-  const rows = await db2.query(`${MISSION_SELECT} WHERE m.id = $1`, [id]);
+async function getMission(db2, userId, id) {
+  const rows = await db2.query(`${MISSION_SELECT} AND m.id = $2`, [userId, id]);
   return rows[0] ? toMission(rows[0]) : null;
 }
-async function requestCheckNow(db2, id) {
+async function requestCheckNow(db2, userId, id) {
   const rows = await db2.query(
-    "UPDATE missions SET check_now_at = now() WHERE id = $1 RETURNING id",
-    [id]
+    "UPDATE missions SET check_now_at = now() WHERE user_id = $1 AND id = $2 RETURNING id",
+    [userId, id]
   );
   return rows.length > 0;
 }
-async function activeMissions(db2) {
-  const rows = await db2.query(`${MISSION_SELECT} WHERE m.enabled = true ORDER BY m.id`);
+async function activeMissions(db2, userId) {
+  const rows = await db2.query(`${MISSION_SELECT} AND m.enabled = true ORDER BY m.id`, [userId]);
   return rows.map(toMission);
 }
 function validateMission(m) {
@@ -686,13 +733,18 @@ function validateMission(m) {
   }
   return null;
 }
-async function upsertMission(db2, m) {
+async function upsertMission(db2, userId, m) {
   const problem = validateMission(m);
   if (problem) throw new Error(problem);
+  const owns = await db2.query(
+    "SELECT id FROM listings WHERE user_id = $1 AND id = $2",
+    [userId, m.listingId]
+  );
+  if (!owns.length) throw new Error("that listing does not belong to you");
   const rows = await db2.query(
-    `INSERT INTO missions (listing_id, label, enabled, armed, ceiling, quantity,
+    `INSERT INTO missions (user_id, listing_id, label, enabled, armed, ceiling, quantity,
                            seller_policy, check_every_s, notes)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
      ON CONFLICT (listing_id) DO UPDATE SET
        label = EXCLUDED.label,
        enabled = EXCLUDED.enabled,
@@ -704,6 +756,7 @@ async function upsertMission(db2, m) {
        notes = EXCLUDED.notes
      RETURNING id`,
     [
+      userId,
       m.listingId,
       m.label ?? "",
       m.enabled ?? true,
@@ -715,20 +768,26 @@ async function upsertMission(db2, m) {
       m.notes ?? ""
     ]
   );
-  const mission = await getMission(db2, Number(rows[0].id));
+  const mission = await getMission(db2, userId, Number(rows[0].id));
   if (!mission) throw new Error("mission vanished immediately after being written");
   return mission;
 }
-async function deleteMission(db2, id) {
-  await db2.query("DELETE FROM missions WHERE id = $1", [id]);
+async function deleteMission(db2, userId, id) {
+  await db2.query("DELETE FROM missions WHERE user_id = $1 AND id = $2", [userId, id]);
 }
-async function startRun(db2, missionId) {
-  const rows = await db2.query("INSERT INTO mission_runs (mission_id) VALUES ($1) RETURNING id", [
-    missionId
-  ]);
+async function startRun(db2, userId, missionId) {
+  const owns = await db2.query(
+    "SELECT id FROM missions WHERE user_id = $1 AND id = $2",
+    [userId, missionId]
+  );
+  if (!owns.length) throw new Error("that mission does not belong to you");
+  const rows = await db2.query(
+    "INSERT INTO mission_runs (user_id, mission_id) VALUES ($1, $2) RETURNING id",
+    [userId, missionId]
+  );
   return Number(rows[0].id);
 }
-async function finishRun(db2, runId, r) {
+async function finishRun(db2, userId, runId, r) {
   const needsReason = r.outcome !== "bought" && r.outcome !== "in_stock";
   const reason = (r.reason ?? "").trim() || (needsReason ? `${r.outcome}, no reason recorded` : "");
   await db2.query(
@@ -737,7 +796,7 @@ async function finishRun(db2, runId, r) {
             outcome = $1, reason = $2, state = $3, price = $4,
             seller_kind = $5, seller_name = $6, quantity = $7, total = $8,
             ms = GREATEST(0, EXTRACT(EPOCH FROM (now() - started_at)) * 1000)::int
-      WHERE id = $9`,
+      WHERE user_id = $9 AND id = $10`,
     [
       r.outcome,
       reason.slice(0, 500),
@@ -747,13 +806,14 @@ async function finishRun(db2, runId, r) {
       r.sellerName ?? "",
       r.quantity ?? null,
       r.total ?? null,
+      userId,
       runId
     ]
   );
 }
-async function recordRun(db2, missionId, r) {
-  const id = await startRun(db2, missionId);
-  await finishRun(db2, id, r);
+async function recordRun(db2, userId, missionId, r) {
+  const id = await startRun(db2, userId, missionId);
+  await finishRun(db2, userId, id, r);
   return id;
 }
 function toRun(r) {
@@ -779,27 +839,33 @@ function toRun(r) {
 var RUN_SELECT = `
   SELECT r.*, p.name AS product_name, l.retailer
     FROM mission_runs r
-    JOIN missions m ON m.id = r.mission_id
-    JOIN listings l ON l.id = m.listing_id
-    JOIN products p ON p.key = l.product_key`;
-async function missionRuns(db2, missionId, limit = 100) {
+    JOIN missions m ON m.user_id = r.user_id AND m.id = r.mission_id
+    JOIN listings l ON l.user_id = m.user_id AND l.id = m.listing_id
+    JOIN products p ON p.user_id = l.user_id AND p.key = l.product_key
+   WHERE r.user_id = $1`;
+async function missionRuns(db2, userId, missionId, limit = 100) {
   const rows = await db2.query(
-    `${RUN_SELECT} WHERE r.mission_id = $1 ORDER BY r.started_at DESC, r.id DESC LIMIT $2`,
-    [missionId, Math.min(Math.max(limit, 1), 500)]
+    `${RUN_SELECT} AND r.mission_id = $2 ORDER BY r.started_at DESC, r.id DESC LIMIT $3`,
+    [userId, missionId, Math.min(Math.max(limit, 1), 500)]
   );
   return rows.map(toRun);
 }
-async function recentRuns(db2, limit = 50) {
+async function recentRuns(db2, userId, limit = 50) {
   const rows = await db2.query(
-    `${RUN_SELECT} ORDER BY r.started_at DESC, r.id DESC LIMIT $1`,
-    [Math.min(Math.max(limit, 1), 200)]
+    `${RUN_SELECT} ORDER BY r.started_at DESC, r.id DESC LIMIT $2`,
+    [userId, Math.min(Math.max(limit, 1), 200)]
   );
   return rows.map(toRun);
 }
-async function recordObservation(db2, obs) {
+async function recordObservation(db2, userId, obs) {
+  const owns = await db2.query(
+    "SELECT id FROM listings WHERE user_id = $1 AND id = $2",
+    [userId, obs.listingId]
+  );
+  if (!owns.length) throw new Error("that listing does not belong to you");
   const prior = await db2.query(
-    "SELECT state, price, seller_kind FROM watch_state WHERE listing_id = $1",
-    [obs.listingId]
+    "SELECT state, price, seller_kind FROM watch_state WHERE user_id = $1 AND listing_id = $2",
+    [userId, obs.listingId]
   );
   const before = prior[0] ?? null;
   const isFirst = before === null;
@@ -809,10 +875,10 @@ async function recordObservation(db2, obs) {
   const changed = !isFirst && (before.state !== obs.state || previousPrice !== price || before.seller_kind !== sellerKind);
   await db2.query(
     `INSERT INTO watch_state (
-       listing_id, state, confidence, price, seller_kind, seller_name,
+       user_id, listing_id, state, confidence, price, seller_kind, seller_name,
        available_quantity, order_limit, is_preorder, release_date, note,
        last_checked_at, last_changed_at
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, now(), now())
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12, now(), now())
      ON CONFLICT (listing_id) DO UPDATE SET
        state = EXCLUDED.state,
        confidence = EXCLUDED.confidence,
@@ -827,8 +893,9 @@ async function recordObservation(db2, obs) {
        last_checked_at = now(),
        -- Only move this when something actually moved, so "in stock since"
        -- means what it says instead of resetting on every poll.
-       last_changed_at = CASE WHEN $12 THEN now() ELSE watch_state.last_changed_at END`,
+       last_changed_at = CASE WHEN $13 THEN now() ELSE watch_state.last_changed_at END`,
     [
+      userId,
       obs.listingId,
       obs.state,
       obs.confidence ?? "unknown",
@@ -844,40 +911,42 @@ async function recordObservation(db2, obs) {
     ]
   );
   await db2.query(
-    "UPDATE missions SET check_now_at = NULL WHERE listing_id = $1 AND check_now_at IS NOT NULL",
-    [obs.listingId]
+    `UPDATE missions SET check_now_at = NULL
+      WHERE user_id = $1 AND listing_id = $2 AND check_now_at IS NOT NULL`,
+    [userId, obs.listingId]
   );
   if (sellerKind !== "unknown") {
-    await db2.query("UPDATE listings SET seller_kind = $1, seller_name = $2 WHERE id = $3", [
-      sellerKind,
-      obs.sellerName ?? "",
-      obs.listingId
-    ]);
+    await db2.query(
+      "UPDATE listings SET seller_kind = $1, seller_name = $2 WHERE user_id = $3 AND id = $4",
+      [sellerKind, obs.sellerName ?? "", userId, obs.listingId]
+    );
   }
   const realName = (obs.productName ?? "").trim();
   if (realName && realName.length <= 200) {
     await db2.query(
       `UPDATE products SET name = $1, name_is_guess = false
-        WHERE key = (SELECT product_key FROM listings WHERE id = $2)
+        WHERE user_id = $2
+          AND key = (SELECT product_key FROM listings WHERE user_id = $2 AND id = $3)
           AND name_is_guess = true`,
-      [realName, obs.listingId]
+      [realName, userId, obs.listingId]
     );
   }
   if (obs.imageUrl) {
     await db2.query(
       `UPDATE products SET image_url = $1
-        WHERE image_url = ''
-          AND key = (SELECT product_key FROM listings WHERE id = $2)`,
-      [obs.imageUrl, obs.listingId]
+        WHERE user_id = $2 AND image_url = ''
+          AND key = (SELECT product_key FROM listings WHERE user_id = $2 AND id = $3)`,
+      [obs.imageUrl, userId, obs.listingId]
     );
   }
   if (changed || isFirst) {
     await db2.query(
       `INSERT INTO observations
-         (listing_id, state, confidence, price, seller_kind, seller_name,
+         (user_id, listing_id, state, confidence, price, seller_kind, seller_name,
           available_quantity, note)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
       [
+        userId,
         obs.listingId,
         obs.state,
         obs.confidence ?? "unknown",
@@ -891,16 +960,17 @@ async function recordObservation(db2, obs) {
   }
   return { changed, isFirst, previousState: before?.state ?? null, previousPrice };
 }
-async function recentObservations(db2, limit = 50) {
+async function recentObservations(db2, userId, limit = 50) {
   const rows = await db2.query(
     `SELECT o.listing_id, p.name AS product_name, l.retailer, o.state, o.price,
             o.seller_kind, o.seller_name, o.note, o.at
        FROM observations o
-       JOIN listings l ON l.id = o.listing_id
-       JOIN products p ON p.key = l.product_key
+       JOIN listings l ON l.user_id = o.user_id AND l.id = o.listing_id
+       JOIN products p ON p.user_id = l.user_id AND p.key = l.product_key
+      WHERE o.user_id = $1
       ORDER BY o.at DESC, o.id DESC
-      LIMIT $1`,
-    [Math.min(Math.max(limit, 1), 200)]
+      LIMIT $2`,
+    [userId, Math.min(Math.max(limit, 1), 200)]
   );
   return rows.map((r) => ({
     listingId: Number(r.listing_id),
@@ -975,7 +1045,7 @@ async function collect(source, fetchText2) {
   }
   return { items: [], childTotal: 0 };
 }
-async function sweepSource(db2, source, fetchText2 = fetchText) {
+async function sweepSource(db2, userId, source, fetchText2 = fetchText) {
   const config = source.config;
   const base = {
     sourceId: source.id,
@@ -990,38 +1060,39 @@ async function sweepSource(db2, source, fetchText2 = fetchText) {
     collected = await collect(source, fetchText2);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    await finishSweep(db2, source.id, `error: ${message}`, 0, source.seeded, source.cursor ?? 0);
-    await logEvent(db2, "sweep_error", `${source.label}: ${message}`);
+    await finishSweep(db2, userId, source.id, `error: ${message}`, 0, source.seeded, source.cursor ?? 0);
+    await logEvent(db2, userId, "sweep_error", `${source.label}: ${message}`);
     return { ...base, ok: false, error: message };
   }
   const items = dedupe(applyFilters(collected.items, config.filters)).slice(0, MAX_ITEMS_PER_SWEEP);
-  const known = await knownIds(db2, source.id);
+  const known = await knownIds(db2, userId, source.id);
   const fresh = items.filter((i) => !known.has(i.externalId));
   const alreadySeeded = source.seeded;
-  const announced = await recordDiscoveries(db2, source.id, fresh, alreadySeeded);
+  const announced = await recordDiscoveries(db2, userId, source.id, fresh, alreadySeeded);
   for (const item of announced) {
-    await attachIdentity(db2, source.id, source.retailer, item);
+    await attachIdentity(db2, userId, source.id, source.retailer, item);
   }
   const limit = config.childLimit ?? DEFAULT_CHILD_LIMIT;
   const advanced = nextCursor(source.cursor ?? 0, limit, collected.childTotal);
   const lapComplete = collected.childTotal === 0 || advanced === 0;
   const nowSeeded = alreadySeeded || lapComplete;
   const status = alreadySeeded ? `ok, ${fresh.length} new of ${items.length}` : lapComplete ? `seeded ${fresh.length} on final pass` : `seeding, pass ends at child ${advanced} of ${collected.childTotal}`;
-  await finishSweep(db2, source.id, status, items.length, nowSeeded, advanced);
+  await finishSweep(db2, userId, source.id, status, items.length, nowSeeded, advanced);
   if (!alreadySeeded) {
     await logEvent(
       db2,
+      userId,
       "seed",
       `${source.label}: recorded ${fresh.length} silently (${status})`
     );
   }
   return { ...base, seen: items.length, fresh: announced, seeded: nowSeeded };
 }
-async function sweepAll(db2, fetchText2 = fetchText) {
-  const sources = await listSources(db2, "hub");
+async function sweepAll(db2, userId, fetchText2 = fetchText) {
+  const sources = await listSources(db2, userId, "hub");
   const results = [];
   for (const source of sources) {
-    results.push(await sweepSource(db2, source, fetchText2));
+    results.push(await sweepSource(db2, userId, source, fetchText2));
   }
   return results;
 }
@@ -1155,16 +1226,29 @@ function clearCookie(secure) {
   if (secure) bits.push("Secure");
   return bits.join("; ");
 }
-async function identify(request, env2) {
+var NOBODY = { kind: "none", userId: 0 };
+async function hashToken(token) {
+  const bytes = new TextEncoder().encode(token);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+async function identify(request, env2, lookup) {
   const header = request.headers.get("Authorization") ?? "";
-  if (env2.INGEST_TOKEN && header.startsWith("Bearer ")) {
-    if (safeEqual(header.slice(7), env2.INGEST_TOKEN)) return "watcher";
+  if (header.startsWith("Bearer ")) {
+    const token = header.slice(7);
+    if (lookup) {
+      const userId = await lookup(await hashToken(token));
+      if (userId) return { kind: "watcher", userId };
+    }
+    if (env2.INGEST_TOKEN && safeEqual(token, env2.INGEST_TOKEN)) {
+      return { kind: "watcher", userId: 1 };
+    }
   }
   if (env2.APP_PASSWORD) {
     const cookie = readCookie(request, SESSION_COOKIE);
-    if (await sessionValid(env2.APP_PASSWORD, cookie)) return "browser";
+    if (await sessionValid(env2.APP_PASSWORD, cookie)) return { kind: "browser", userId: 1 };
   }
-  return "none";
+  return NOBODY;
 }
 
 // src/page.ts
@@ -2564,10 +2648,10 @@ function json(body, status = 200) {
     headers: { "Content-Type": "application/json; charset=utf-8" }
   });
 }
-async function publish(db2, env2, results, now) {
+async function publish(db2, userId, env2, results, now) {
   for (const result of results) {
     if (!result.ok || result.fresh.length === 0) continue;
-    const source = await getSource(db2, result.sourceId);
+    const source = await getSource(db2, userId, result.sourceId);
     await announce(
       env2.DISCORD_WEBHOOK_URL,
       result.label,
@@ -2577,6 +2661,7 @@ async function publish(db2, env2, results, now) {
     );
     await markAnnounced(
       db2,
+      userId,
       result.sourceId,
       result.fresh.map((f) => f.externalId)
     );
@@ -2599,19 +2684,12 @@ function createHandler(db2, env2) {
     const path = url.pathname.replace(/\/+$/, "") || "/";
     const now = (/* @__PURE__ */ new Date()).toISOString();
     if (request.method === "GET" && path === "/health") {
-      const sources = await listSources(db2);
-      return json({
-        ok: true,
-        sources: sources.map((s) => ({
-          id: s.id,
-          label: s.label,
-          via: s.via,
-          seeded: s.seeded,
-          lastSweptAt: s.lastSweptAt,
-          lastStatus: s.lastStatus,
-          lastCount: s.lastCount
-        }))
-      });
+      try {
+        await countUsers(db2);
+        return json({ ok: true });
+      } catch (err) {
+        return json({ ok: false, error: err.message }, 503);
+      }
     }
     if (request.method === "GET" && path === "/manifest.webmanifest") {
       return new Response(JSON.stringify(MANIFEST, null, 2), {
@@ -2650,8 +2728,9 @@ function createHandler(db2, env2) {
     if (path === "/logout") {
       return redirect("/login", { "Set-Cookie": clearCookie(secure) });
     }
-    const caller = await identify(request, env2);
-    if (caller === "none") {
+    const caller = await identify(request, env2, (hash) => userByTokenHash(db2, hash));
+    const userId = caller.userId;
+    if (caller.kind === "none") {
       const wantsHtml = (request.headers.get("accept") ?? "").includes("text/html");
       if (wantsHtml) return redirect("/login");
       return json({ error: "unauthorised" }, 401);
@@ -2661,28 +2740,28 @@ function createHandler(db2, env2) {
     }
     if (request.method === "GET" && path === "/api/dashboard") {
       const [missions, runs, changes, products, listings, settings] = await Promise.all([
-        listMissions(db2),
-        recentRuns(db2, 40),
-        recentObservations(db2, 40),
-        listProducts(db2),
-        listListings(db2),
-        getSettings(db2)
+        listMissions(db2, userId),
+        recentRuns(db2, userId, 40),
+        recentObservations(db2, userId, 40),
+        listProducts(db2, userId),
+        listListings(db2, userId),
+        getSettings(db2, userId)
       ]);
       return json({ missions, runs, changes, products, listings, settings, now });
     }
     if (request.method === "GET" && path.startsWith("/api/missions/") && path.endsWith("/runs")) {
       const id = Number(path.split("/")[3]);
       if (!Number.isInteger(id)) return json({ error: "bad mission id" }, 400);
-      const mission = await getMission(db2, id);
+      const mission = await getMission(db2, userId, id);
       if (!mission) return json({ error: "no such mission" }, 404);
-      return json({ mission, runs: await missionRuns(db2, id, 200) });
+      return json({ mission, runs: await missionRuns(db2, userId, id, 200) });
     }
     const body = async () => await request.json().catch(() => null);
     if (request.method === "POST" && path === "/api/products") {
       const b = await body();
       if (!b) return json({ error: "body must be JSON" }, 400);
       try {
-        return json({ product: await upsertProduct(db2, b) });
+        return json({ product: await upsertProduct(db2, userId, b) });
       } catch (err) {
         return json({ error: err.message }, 400);
       }
@@ -2690,7 +2769,7 @@ function createHandler(db2, env2) {
     if (request.method === "DELETE" && path.startsWith("/api/products/")) {
       const key = decodeURIComponent(path.slice("/api/products/".length));
       if (!key) return json({ error: "no product key" }, 400);
-      await deleteProduct(db2, key);
+      await deleteProduct(db2, userId, key);
       return json({ deleted: key });
     }
     if (request.method === "POST" && path === "/api/listings") {
@@ -2705,7 +2784,7 @@ function createHandler(db2, env2) {
           400
         );
       }
-      const listing = await addListing(db2, {
+      const listing = await addListing(db2, userId, {
         productKey: b.productKey,
         retailer: parsed.retailer,
         externalId: parsed.externalId,
@@ -2733,33 +2812,33 @@ function createHandler(db2, env2) {
         notes: b?.notes ?? "",
         imageUrl: b?.imageUrl ?? ""
       };
-      const existing = await findListing(db2, parsed.retailer, parsed.externalId);
+      const existing = await findListing(db2, userId, parsed.retailer, parsed.externalId);
       if (existing) {
         let product2 = null;
         if (typedName || details.msrp !== null || details.releaseDate || details.notes) {
-          product2 = await upsertProduct(db2, {
+          product2 = await upsertProduct(db2, userId, {
             key: existing.productKey,
             name: typedName || existing.productName,
             ...details
           });
         }
-        const mission2 = await missionForListing(db2, existing.id) ?? await upsertMission(db2, { listingId: existing.id, label: existing.productName });
+        const mission2 = await missionForListing(db2, userId, existing.id) ?? await upsertMission(db2, userId, { listingId: existing.id, label: existing.productName });
         return json({ product: product2, listing: existing, mission: mission2, alreadyTracked: true });
       }
-      const product = await upsertProduct(db2, {
+      const product = await upsertProduct(db2, userId, {
         name: typedName || parsed.name || `${parsed.retailer} ${parsed.externalId}`,
         // Only a slug-derived name is a guess. Once the Watcher reads the page
         // it replaces it; a name typed here is final.
         nameIsGuess: !typedName,
         ...details
       });
-      const listing = await addListing(db2, {
+      const listing = await addListing(db2, userId, {
         productKey: product.key,
         retailer: parsed.retailer,
         externalId: parsed.externalId,
         url: parsed.url || raw
       });
-      const mission = await upsertMission(db2, {
+      const mission = await upsertMission(db2, userId, {
         listingId: listing.id,
         label: product.name
       });
@@ -2768,14 +2847,14 @@ function createHandler(db2, env2) {
     if (request.method === "DELETE" && path.startsWith("/api/listings/")) {
       const id = Number(path.slice("/api/listings/".length));
       if (!Number.isInteger(id)) return json({ error: "bad listing id" }, 400);
-      await deleteListing(db2, id);
+      await deleteListing(db2, userId, id);
       return json({ deleted: id });
     }
     if (request.method === "POST" && path === "/api/missions") {
       const b = await body();
       if (!b) return json({ error: "body must be JSON" }, 400);
       try {
-        return json({ mission: await upsertMission(db2, b) });
+        return json({ mission: await upsertMission(db2, userId, b) });
       } catch (err) {
         return json({ error: err.message }, 400);
       }
@@ -2783,31 +2862,31 @@ function createHandler(db2, env2) {
     if (request.method === "POST" && path.endsWith("/check-now") && path.startsWith("/api/missions/")) {
       const id = Number(path.split("/")[3]);
       if (!Number.isInteger(id)) return json({ error: "bad mission id" }, 400);
-      if (!await requestCheckNow(db2, id)) return json({ error: "no such mission" }, 404);
+      if (!await requestCheckNow(db2, userId, id)) return json({ error: "no such mission" }, 404);
       return json({ queued: id, note: "the Watcher will check this on its next pass" }, 202);
     }
     if (request.method === "DELETE" && path.startsWith("/api/missions/")) {
       const id = Number(path.slice("/api/missions/".length));
       if (!Number.isInteger(id)) return json({ error: "bad mission id" }, 400);
-      await deleteMission(db2, id);
+      await deleteMission(db2, userId, id);
       return json({ deleted: id });
     }
     if (request.method === "GET" && path === "/api/settings") {
-      return json({ settings: await getSettings(db2) });
+      return json({ settings: await getSettings(db2, userId) });
     }
     if (request.method === "POST" && path === "/api/settings") {
       const b = await body();
       if (!b) return json({ error: "body must be JSON" }, 400);
       try {
-        return json({ settings: await setSettings(db2, b) });
+        return json({ settings: await setSettings(db2, userId, b) });
       } catch (err) {
         return json({ error: err.message }, 400);
       }
     }
     if (request.method === "GET" && path === "/api/missions/active") {
       const [missions, settings] = await Promise.all([
-        activeMissions(db2),
-        getSettings(db2)
+        activeMissions(db2, userId),
+        getSettings(db2, userId)
       ]);
       return json({ missions, settings });
     }
@@ -2816,7 +2895,7 @@ function createHandler(db2, env2) {
       if (!b?.missionId || !b?.outcome || b.outcome === "running") {
         return json({ error: "need missionId and a settled outcome" }, 400);
       }
-      const id = await recordRun(db2, b.missionId, {
+      const id = await recordRun(db2, userId, b.missionId, {
         outcome: b.outcome,
         reason: b.reason,
         state: b.state,
@@ -2850,7 +2929,7 @@ function createHandler(db2, env2) {
           continue;
         }
         try {
-          const outcome = await recordObservation(db2, obs);
+          const outcome = await recordObservation(db2, userId, obs);
           results.push({ listingId: obs.listingId, changed: outcome.changed });
           if (outcome.changed) changes.push({ obs, was: outcome.previousState });
         } catch (err) {
@@ -2883,13 +2962,13 @@ function createHandler(db2, env2) {
       const only = url.searchParams.get("source");
       let results;
       if (only) {
-        const source = await getSource(db2, only);
+        const source = await getSource(db2, userId, only);
         if (!source) return json({ error: `no source "${only}"` }, 404);
-        results = [await sweepSource(db2, source)];
+        results = [await sweepSource(db2, userId, source)];
       } else {
-        results = await sweepAll(db2);
+        results = await sweepAll(db2, userId);
       }
-      await publish(db2, env2, results, now);
+      await publish(db2, userId, env2, results, now);
       return json({
         swept: results.map((r) => ({
           source: r.sourceId,
@@ -2911,7 +2990,7 @@ function createHandler(db2, env2) {
       if (!sourceId || !Array.isArray(body2.items)) {
         return json({ error: "need sourceId and items[]" }, 400);
       }
-      const source = await getSource(db2, sourceId);
+      const source = await getSource(db2, userId, sourceId);
       if (!source) return json({ error: `no source "${sourceId}"` }, 404);
       const config = source.config;
       const clean = dedupe(
@@ -2920,15 +2999,16 @@ function createHandler(db2, env2) {
           config.filters
         )
       );
-      const known = await knownIds(db2, sourceId);
+      const known = await knownIds(db2, userId, sourceId);
       const fresh = clean.filter((i) => !known.has(i.externalId));
       const isFirstSweep = !source.seeded;
-      const toAnnounce = await recordDiscoveries(db2, sourceId, fresh, !isFirstSweep);
+      const toAnnounce = await recordDiscoveries(db2, userId, sourceId, fresh, !isFirstSweep);
       for (const item of toAnnounce) {
-        await attachIdentity(db2, sourceId, source.retailer, item);
+        await attachIdentity(db2, userId, sourceId, source.retailer, item);
       }
       await finishSweep(
         db2,
+        userId,
         sourceId,
         isFirstSweep ? `seeded ${fresh.length} via watcher` : `watcher: ${fresh.length} new`,
         clean.length,
@@ -2938,6 +3018,7 @@ function createHandler(db2, env2) {
         await announce(env2.DISCORD_WEBHOOK_URL, source.label, source.retailer, toAnnounce, now);
         await markAnnounced(
           db2,
+          userId,
           sourceId,
           toAnnounce.map((f) => f.externalId)
         );
@@ -2950,7 +3031,7 @@ function createHandler(db2, env2) {
       });
     }
     if ((request.method === "POST" || request.method === "GET") && path === "/probe") {
-      const sources = await listAllSources(db2);
+      const sources = await listAllSources(db2, userId);
       const checks = [];
       for (const source of sources) {
         if (source.via === "watcher" || !source.url) {
@@ -2983,8 +3064,8 @@ function createHandler(db2, env2) {
     }
     if (request.method === "GET" && path === "/watchlist") {
       const [products, sources] = await Promise.all([
-        watchlist(db2),
-        listSources(db2, "watcher")
+        watchlist(db2, userId),
+        listSources(db2, userId, "watcher")
       ]);
       return json({
         products,

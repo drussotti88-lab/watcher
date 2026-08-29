@@ -40,10 +40,16 @@ function json(body: unknown, status = 200): Response {
 }
 
 /** Post everything a set of sweeps found, then mark it announced. */
-async function publish(db: Sql, env: Env, results: SweepResult[], now: string): Promise<void> {
+async function publish(
+  db: Sql,
+  userId: number,
+  env: Env,
+  results: SweepResult[],
+  now: string,
+): Promise<void> {
   for (const result of results) {
     if (!result.ok || result.fresh.length === 0) continue;
-    const source = await store.getSource(db, result.sourceId);
+    const source = await store.getSource(db, userId, result.sourceId);
     await announce(
       env.DISCORD_WEBHOOK_URL,
       result.label,
@@ -53,6 +59,7 @@ async function publish(db: Sql, env: Env, results: SweepResult[], now: string): 
     );
     await store.markAnnounced(
       db,
+      userId,
       result.sourceId,
       result.fresh.map((f) => f.externalId),
     );
@@ -83,19 +90,16 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
     // `/health` only. `/` belongs to the page now, and a health check that also
     // answered `/` would shadow it — the dashboard would never be reachable.
     if (request.method === 'GET' && path === '/health') {
-      const sources = await store.listSources(db);
-      return json({
-        ok: true,
-        sources: sources.map((s) => ({
-          id: s.id,
-          label: s.label,
-          via: s.via,
-          seeded: s.seeded,
-          lastSweptAt: s.lastSweptAt,
-          lastStatus: s.lastStatus,
-          lastCount: s.lastCount,
-        })),
-      });
+      // Public, so it says nothing about anybody. It used to list source
+      // labels, which was a small leak with one user and is somebody else's
+      // data now. What a health check has to answer is whether the database
+      // answers — nothing more.
+      try {
+        await store.countUsers(db);
+        return json({ ok: true });
+      } catch (err) {
+        return json({ ok: false, error: (err as Error).message }, 503);
+      }
     }
 
     // ── Installing ───────────────────────────────────────────────────────────
@@ -152,9 +156,10 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
     // Everything below is either the Watcher with its token or a signed-in
     // browser. Fail closed: an unset password or token shuts that door rather
     // than opening it.
-    const caller = await identify(request, env);
+    const caller = await identify(request, env, (hash) => store.userByTokenHash(db, hash));
+    const userId = caller.userId;
 
-    if (caller === 'none') {
+    if (caller.kind === 'none') {
       // A browser gets a login page; anything else gets an honest 401.
       const wantsHtml = (request.headers.get('accept') ?? '').includes('text/html');
       if (wantsHtml) return redirect('/login');
@@ -171,12 +176,12 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
     /** Everything the page renders, in one request. */
     if (request.method === 'GET' && path === '/api/dashboard') {
       const [missions, runs, changes, products, listings, settings] = await Promise.all([
-        store.listMissions(db),
-        store.recentRuns(db, 40),
-        store.recentObservations(db, 40),
-        store.listProducts(db),
-        store.listListings(db),
-        store.getSettings(db),
+        store.listMissions(db, userId),
+        store.recentRuns(db, userId, 40),
+        store.recentObservations(db, userId, 40),
+        store.listProducts(db, userId),
+        store.listListings(db, userId),
+        store.getSettings(db, userId),
       ]);
       return json({ missions, runs, changes, products, listings, settings, now });
     }
@@ -185,9 +190,9 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
     if (request.method === 'GET' && path.startsWith('/api/missions/') && path.endsWith('/runs')) {
       const id = Number(path.split('/')[3]);
       if (!Number.isInteger(id)) return json({ error: 'bad mission id' }, 400);
-      const mission = await store.getMission(db, id);
+      const mission = await store.getMission(db, userId, id);
       if (!mission) return json({ error: 'no such mission' }, 404);
-      return json({ mission, runs: await store.missionRuns(db, id, 200) });
+      return json({ mission, runs: await store.missionRuns(db, userId, id, 200) });
     }
 
     // ── Managing what is watched ─────────────────────────────────────────────
@@ -203,7 +208,7 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       const b = await body<store.ProductInput>();
       if (!b) return json({ error: 'body must be JSON' }, 400);
       try {
-        return json({ product: await store.upsertProduct(db, b) });
+        return json({ product: await store.upsertProduct(db, userId, b) });
       } catch (err) {
         // validateProduct speaks in sentences. Pass it through unchanged.
         return json({ error: (err as Error).message }, 400);
@@ -213,7 +218,7 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
     if (request.method === 'DELETE' && path.startsWith('/api/products/')) {
       const key = decodeURIComponent(path.slice('/api/products/'.length));
       if (!key) return json({ error: 'no product key' }, 400);
-      await store.deleteProduct(db, key);
+      await store.deleteProduct(db, userId, key);
       return json({ deleted: key });
     }
 
@@ -240,7 +245,7 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
           400,
         );
       }
-      const listing = await store.addListing(db, {
+      const listing = await store.addListing(db, userId, {
         productKey: b.productKey,
         retailer: parsed.retailer,
         externalId: parsed.externalId,
@@ -295,7 +300,7 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
         imageUrl: b?.imageUrl ?? '',
       };
 
-      const existing = await store.findListing(db, parsed.retailer, parsed.externalId);
+      const existing = await store.findListing(db, userId, parsed.retailer, parsed.externalId);
       if (existing) {
         // Only touch the product when a person actually typed something. The
         // slug-derived name is a guess, and letting a guess overwrite a name
@@ -303,34 +308,34 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
         // "pokemon-tcg-mega-evolution-tin".
         let product = null;
         if (typedName || details.msrp !== null || details.releaseDate || details.notes) {
-          product = await store.upsertProduct(db, {
+          product = await store.upsertProduct(db, userId, {
             key: existing.productKey,
             name: typedName || existing.productName,
             ...details,
           });
         }
         const mission =
-          (await store.missionForListing(db, existing.id)) ??
-          (await store.upsertMission(db, { listingId: existing.id, label: existing.productName }));
+          (await store.missionForListing(db, userId, existing.id)) ??
+          (await store.upsertMission(db, userId, { listingId: existing.id, label: existing.productName }));
         return json({ product, listing: existing, mission, alreadyTracked: true });
       }
 
       // A name from the URL slug is a guess, and it is labelled as one on the
       // page rather than presented as the product's real name.
-      const product = await store.upsertProduct(db, {
+      const product = await store.upsertProduct(db, userId, {
         name: typedName || parsed.name || `${parsed.retailer} ${parsed.externalId}`,
         // Only a slug-derived name is a guess. Once the Watcher reads the page
         // it replaces it; a name typed here is final.
         nameIsGuess: !typedName,
         ...details,
       });
-      const listing = await store.addListing(db, {
+      const listing = await store.addListing(db, userId, {
         productKey: product.key,
         retailer: parsed.retailer,
         externalId: parsed.externalId,
         url: parsed.url || raw,
       });
-      const mission = await store.upsertMission(db, {
+      const mission = await store.upsertMission(db, userId, {
         listingId: listing.id,
         label: product.name,
       });
@@ -340,7 +345,7 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
     if (request.method === 'DELETE' && path.startsWith('/api/listings/')) {
       const id = Number(path.slice('/api/listings/'.length));
       if (!Number.isInteger(id)) return json({ error: 'bad listing id' }, 400);
-      await store.deleteListing(db, id);
+      await store.deleteListing(db, userId, id);
       return json({ deleted: id });
     }
 
@@ -348,7 +353,7 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       const b = await body<store.MissionInput>();
       if (!b) return json({ error: 'body must be JSON' }, 400);
       try {
-        return json({ mission: await store.upsertMission(db, b) });
+        return json({ mission: await store.upsertMission(db, userId, b) });
       } catch (err) {
         // validateMission speaks in sentences, so pass it straight through.
         return json({ error: (err as Error).message }, 400);
@@ -365,26 +370,26 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
     if (request.method === 'POST' && path.endsWith('/check-now') && path.startsWith('/api/missions/')) {
       const id = Number(path.split('/')[3]);
       if (!Number.isInteger(id)) return json({ error: 'bad mission id' }, 400);
-      if (!(await store.requestCheckNow(db, id))) return json({ error: 'no such mission' }, 404);
+      if (!(await store.requestCheckNow(db, userId, id))) return json({ error: 'no such mission' }, 404);
       return json({ queued: id, note: 'the Watcher will check this on its next pass' }, 202);
     }
 
     if (request.method === 'DELETE' && path.startsWith('/api/missions/')) {
       const id = Number(path.slice('/api/missions/'.length));
       if (!Number.isInteger(id)) return json({ error: 'bad mission id' }, 400);
-      await store.deleteMission(db, id);
+      await store.deleteMission(db, userId, id);
       return json({ deleted: id });
     }
 
     if (request.method === 'GET' && path === '/api/settings') {
-      return json({ settings: await store.getSettings(db) });
+      return json({ settings: await store.getSettings(db, userId) });
     }
 
     if (request.method === 'POST' && path === '/api/settings') {
       const b = await body<Partial<store.Settings>>();
       if (!b) return json({ error: 'body must be JSON' }, 400);
       try {
-        return json({ settings: await store.setSettings(db, b) });
+        return json({ settings: await store.setSettings(db, userId, b) });
       } catch (err) {
         return json({ error: (err as Error).message }, 400);
       }
@@ -397,8 +402,8 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
      */
     if (request.method === 'GET' && path === '/api/missions/active') {
       const [missions, settings] = await Promise.all([
-        store.activeMissions(db),
-        store.getSettings(db),
+        store.activeMissions(db, userId),
+        store.getSettings(db, userId),
       ]);
       return json({ missions, settings });
     }
@@ -419,7 +424,7 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       if (!b?.missionId || !b?.outcome || b.outcome === 'running') {
         return json({ error: 'need missionId and a settled outcome' }, 400);
       }
-      const id = await store.recordRun(db, b.missionId, {
+      const id = await store.recordRun(db, userId, b.missionId, {
         outcome: b.outcome,
         reason: b.reason,
         state: b.state,
@@ -463,7 +468,7 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
           continue;
         }
         try {
-          const outcome = await store.recordObservation(db, obs);
+          const outcome = await store.recordObservation(db, userId, obs);
           results.push({ listingId: obs.listingId, changed: outcome.changed });
           if (outcome.changed) changes.push({ obs, was: outcome.previousState });
         } catch (err) {
@@ -502,13 +507,13 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       const only = url.searchParams.get('source');
       let results: SweepResult[];
       if (only) {
-        const source = await store.getSource(db, only);
+        const source = await store.getSource(db, userId, only);
         if (!source) return json({ error: `no source "${only}"` }, 404);
-        results = [await sweepSource(db, source)];
+        results = [await sweepSource(db, userId, source)];
       } else {
-        results = await sweepAll(db);
+        results = await sweepAll(db, userId);
       }
-      await publish(db, env, results, now);
+      await publish(db, userId, env, results, now);
       return json({
         swept: results.map((r) => ({
           source: r.sourceId,
@@ -541,7 +546,7 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       if (!sourceId || !Array.isArray(body.items)) {
         return json({ error: 'need sourceId and items[]' }, 400);
       }
-      const source = await store.getSource(db, sourceId);
+      const source = await store.getSource(db, userId, sourceId);
       if (!source) return json({ error: `no source "${sourceId}"` }, 404);
 
       const config = source.config;
@@ -552,16 +557,17 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
         ),
       );
 
-      const known = await store.knownIds(db, sourceId);
+      const known = await store.knownIds(db, userId, sourceId);
       const fresh = clean.filter((i) => !known.has(i.externalId));
       const isFirstSweep = !source.seeded;
-      const toAnnounce = await store.recordDiscoveries(db, sourceId, fresh, !isFirstSweep);
+      const toAnnounce = await store.recordDiscoveries(db, userId, sourceId, fresh, !isFirstSweep);
 
       for (const item of toAnnounce) {
-        await store.attachIdentity(db, sourceId, source.retailer, item);
+        await store.attachIdentity(db, userId, sourceId, source.retailer, item);
       }
       await store.finishSweep(
         db,
+        userId,
         sourceId,
         isFirstSweep ? `seeded ${fresh.length} via watcher` : `watcher: ${fresh.length} new`,
         clean.length,
@@ -572,6 +578,7 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
         await announce(env.DISCORD_WEBHOOK_URL, source.label, source.retailer, toAnnounce, now);
         await store.markAnnounced(
           db,
+          userId,
           sourceId,
           toAnnounce.map((f) => f.externalId),
         );
@@ -592,7 +599,7 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
      * actually fetch — and therefore which ones have to move to the Watcher.
      */
     if ((request.method === 'POST' || request.method === 'GET') && path === '/probe') {
-      const sources = await store.listAllSources(db);
+      const sources = await store.listAllSources(db, userId);
       const checks = [];
       for (const source of sources) {
         if (source.via === 'watcher' || !source.url) {
@@ -644,8 +651,8 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
      */
     if (request.method === 'GET' && path === '/watchlist') {
       const [products, sources] = await Promise.all([
-        store.watchlist(db),
-        store.listSources(db, 'watcher'),
+        store.watchlist(db, userId),
+        store.listSources(db, userId, 'watcher'),
       ]);
       return json({
         products,

@@ -10,10 +10,20 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
+/** Everything that existed before ownership did belongs to the first user. */
+const USER = 1;
+
 import { TestDb } from './pg.ts';
 import { createHandler } from '../src/app.ts';
 import * as store from '../src/store.ts';
-import { mintSession, sessionValid, safeEqual, COOKIE_NAME } from '../src/auth.ts';
+import {
+  mintSession,
+  sessionValid,
+  safeEqual,
+  identify,
+  hashToken,
+  COOKIE_NAME,
+} from '../src/auth.ts';
 import type { Env } from '../src/types.ts';
 
 const PASSWORD = 'a-long-enough-password';
@@ -368,6 +378,64 @@ test('a zero price is stored as absent, never as free', async () => {
     token: TOKEN,
     body: { observations: [{ listingId: tin, state: 'in', price: 0 }] },
   });
-  const [w] = await store.listMissions(db);
+  const [w] = await store.listMissions(db, USER);
   assert.equal(w!.price, null);
+});
+
+// ── Who a request is ─────────────────────────────────────────────────────────
+
+test('NOBODY IS USER ZERO, WHICH OWNS NOTHING', async () => {
+  // The direction to fail in: a bug that forgets to check `kind` filters
+  // everything out rather than letting everything through.
+  const caller = await identify(new Request('https://hub.test/'), {
+    INGEST_TOKEN: 'tok',
+    APP_PASSWORD: 'pw',
+  });
+  assert.equal(caller.kind, 'none');
+  assert.equal(caller.userId, 0);
+});
+
+test('a per-user Watcher token is matched by its hash, not its text', async () => {
+  const seen: string[] = [];
+  const caller = await identify(
+    new Request('https://hub.test/', { headers: { Authorization: 'Bearer secret-token' } }),
+    { INGEST_TOKEN: 'something-else' },
+    async (hash) => {
+      seen.push(hash);
+      return hash === (await hashToken('secret-token')) ? 7 : 0;
+    },
+  );
+
+  assert.equal(caller.kind, 'watcher');
+  assert.equal(caller.userId, 7);
+  assert.equal(seen.length, 1);
+  assert.notEqual(seen[0], 'secret-token', 'the lookup never sees the token itself');
+  assert.match(seen[0]!, /^[0-9a-f]{64}$/, 'it sees a SHA-256');
+});
+
+test('the shared environment token still answers, as the first user', async () => {
+  // The Watcher already running on a desk must not stop working the moment
+  // ownership ships.
+  const caller = await identify(
+    new Request('https://hub.test/', { headers: { Authorization: 'Bearer env-token' } }),
+    { INGEST_TOKEN: 'env-token' },
+  );
+  assert.equal(caller.kind, 'watcher');
+  assert.equal(caller.userId, 1);
+});
+
+test('a token that matches nobody is nobody', async () => {
+  const caller = await identify(
+    new Request('https://hub.test/', { headers: { Authorization: 'Bearer wrong' } }),
+    { INGEST_TOKEN: 'env-token' },
+    async () => 0,
+  );
+  assert.equal(caller.kind, 'none');
+  assert.equal(caller.userId, 0);
+});
+
+test('the same token always hashes the same way, and different ones do not collide', async () => {
+  assert.equal(await hashToken('abc'), await hashToken('abc'));
+  assert.notEqual(await hashToken('abc'), await hashToken('abd'));
+  assert.match(await hashToken('abc'), /^[0-9a-f]{64}$/);
 });

@@ -10,6 +10,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
+/** Everything that existed before ownership did belongs to the first user. */
+const USER = 1;
+
 import { TestDb } from './pg.ts';
 import { createHandler } from '../src/app.ts';
 import * as store from '../src/store.ts';
@@ -62,13 +65,18 @@ const call = async (
   return { status: res.status, body };
 };
 
-test('health is public and lists the sources', async () => {
-  const db = await setup();
-  const { status, body } = await call(db, 'GET', '/health');
-  assert.equal(status, 200);
+test('HEALTH IS PUBLIC AND SAYS NOTHING ABOUT ANYBODY', async () => {
+  // This test asserted that /health listed the sources, and that was fine when
+  // there was one user. It is somebody else's data now, on an endpoint that
+  // takes no credentials. A health check has to answer one question — does the
+  // database answer — and nothing more.
+  const db = await TestDb.create();
+  const res = await createHandler(db, env)(new Request('https://hub.test/health'));
+  const body = await res.json();
+
+  assert.equal(res.status, 200);
   assert.equal(body.ok, true);
-  assert.equal(body.sources[0].id, 'pc');
-  assert.equal(body.sources[0].seeded, true, 'a real boolean, not 1');
+  assert.equal(body.sources, undefined, 'no source labels, no retailers, no counts');
 });
 
 test('everything that changes state requires the token', async () => {
@@ -222,7 +230,7 @@ test('a price survives the round trip as a number, not a Postgres string', async
   const raw = await db.query<{ price: unknown }>('SELECT price FROM discoveries');
   assert.equal(typeof raw[0]!.price, 'string', 'this is what Postgres really hands back');
 
-  const [row] = await store.pendingDiscoveries(db, 'pc');
+  const [row] = await store.pendingDiscoveries(db, USER, 'pc');
   assert.ok(row);
   assert.equal(typeof row.price, 'number', 'and this is what the rest of the Hub must see');
   assert.equal(row.price, 73.76);
@@ -234,6 +242,6 @@ test('a zero price is read as absent, never as free', async () => {
     `INSERT INTO discoveries (source_id, external_id, name, url, price, announced)
      VALUES ('pc', 'p0', 'Pokemon Thing', 'https://x/p0', 0, false)`,
   );
-  const [row] = await store.pendingDiscoveries(db, 'pc');
+  const [row] = await store.pendingDiscoveries(db, USER, 'pc');
   assert.equal(row!.price, null, 'the same rule the readers use, for the same reason');
 });
