@@ -31,7 +31,7 @@
  */
 import type { StockState, Confidence } from '../types.ts';
 import type { ProductRead } from './types.ts';
-import { unknownRead, firstParty } from './types.ts';
+import { unknownRead, firstParty, decodeEntities } from './types.ts';
 
 /**
  * Target's availability vocabulary, from the recorded responses.
@@ -113,7 +113,7 @@ export function readTargetBodies(bodies: unknown[], tcin: string): ProductRead {
       const item = asRecord(product.item);
       const desc = item ? asRecord(item.product_description) : null;
       const title = desc ? String(desc.title ?? '') : '';
-      if (title && !name) name = title.replace(/<[^>]+>/g, '');
+      if (title && !name) name = decodeEntities(title.replace(/<[^>]+>/g, '')).trim();
 
       const p = asRecord(product.price);
       if (p) {

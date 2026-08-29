@@ -46,6 +46,45 @@ export interface ProductRead {
   note: string;
 }
 
+/**
+ * Turn a retailer's HTML-encoded title into the name a person would write.
+ *
+ * Target's product title arrives as `Pok&#233;mon Trading Card Game: 30th
+ * Celebration Elite Trainer Box`. Stored undecoded it shows up on the page
+ * exactly like that — and it is worse than the slug guess it replaced, because
+ * it looks like a deliberate name rather than an obvious mistake.
+ *
+ * Deliberately small: the five named entities that actually appear in product
+ * titles, plus numeric ones. This is not an HTML parser and should not become
+ * one — anything it does not recognise is left alone rather than mangled.
+ */
+const NAMED: Record<string, string> = {
+  amp: '&',
+  lt: '<',
+  gt: '>',
+  quot: '"',
+  apos: "'",
+  nbsp: ' ',
+};
+
+export function decodeEntities(text: string): string {
+  return text
+    .replace(/&#x([0-9a-f]+);/gi, (whole, hex: string) => codePoint(parseInt(hex, 16), whole))
+    .replace(/&#(\d+);/g, (whole, dec: string) => codePoint(Number(dec), whole))
+    .replace(/&([a-z]+);/gi, (whole, name: string) => NAMED[name.toLowerCase()] ?? whole);
+}
+
+function codePoint(n: number, whole: string): string {
+  // Anything outside the range of a real character is left as it was found.
+  // A wrong character is harder to notice than an obviously undecoded one.
+  if (!Number.isFinite(n) || n < 32 || n > 0x10ffff) return whole;
+  try {
+    return String.fromCodePoint(n);
+  } catch {
+    return whole;
+  }
+}
+
 /** A reading that commits to nothing. Every reader's failure case. */
 export function unknownRead(note: string, name = ''): ProductRead {
   return {

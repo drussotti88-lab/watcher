@@ -8,6 +8,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { decodeEntities } from '../src/readers/types.ts';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -326,4 +327,32 @@ test('every reader answers in the same shape', () => {
     }
     assert.ok(['retailer', 'marketplace', 'unknown'].includes(r.seller.kind));
   }
+});
+
+// ── Names as a person would write them ───────────────────────────────────────
+
+test("A TITLE'S ENTITIES ARE DECODED, or the name is worse than the guess", () => {
+  // Target's title arrives as "Pok&#233;mon …". Stored undecoded it looks like
+  // a deliberate name rather than an obvious mistake, which is worse than the
+  // slug guess it replaced.
+  assert.equal(
+    decodeEntities('Pok&#233;mon Trading Card Game: 30th Celebration Elite Trainer Box'),
+    'Pokémon Trading Card Game: 30th Celebration Elite Trainer Box',
+  );
+});
+
+test('the entities that actually appear in product titles all decode', () => {
+  assert.equal(decodeEntities('Scarlet &amp; Violet'), 'Scarlet & Violet');
+  assert.equal(decodeEntities('Mega Evolution &#8212; Ascended'), 'Mega Evolution — Ascended');
+  assert.equal(decodeEntities('&#x2014; dash'), '— dash');
+  assert.equal(decodeEntities('Trainer&nbsp;Box'), 'Trainer Box');
+  assert.equal(decodeEntities('Trainer&apos;s'), "Trainer's");
+});
+
+test('ANYTHING UNRECOGNISED IS LEFT ALONE, never guessed at', () => {
+  // A wrong character is harder to notice than an obviously undecoded one.
+  assert.equal(decodeEntities('100% &notarealentity; here'), '100% &notarealentity; here');
+  assert.equal(decodeEntities('&#999999999;'), '&#999999999;');
+  assert.equal(decodeEntities('&#0;'), '&#0;');
+  assert.equal(decodeEntities('plain text'), 'plain text');
 });
