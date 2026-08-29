@@ -478,3 +478,81 @@ test('A PRODUCT IS NOT TIED TO THE URL IT ARRIVED WITH', async () => {
   );
   assert.equal((await store.listProducts(db)).length, 1, 'and still one product');
 });
+
+// ── The name a slug guessed at ───────────────────────────────────────────────
+
+test('THE PAGE REPLACES A NAME THE URL GUESSED AT', async () => {
+  // Target's slug encodes "Pokémon" as "pok-233-mon", which titleises into
+  // "Pok 233 Mon Trading Card Game 30th Celebration Elite Trainer Box". The
+  // retailer's own page knows better, so the first real read wins.
+  const db = await TestDb.create();
+  const added = await call(db, 'POST', '/api/quick-add', { url: TARGET_URL });
+  assert.match(added.body.product.name, /Pokemon Tin|Pok/i, 'the guess is what a slug gives');
+
+  await call(db, 'POST', '/observations', {
+    observations: [
+      {
+        listingId: added.body.listing.id,
+        state: 'out',
+        confidence: 'exact',
+        productName: 'Pokémon TCG: 30th Celebration Elite Trainer Box',
+      },
+    ],
+  });
+
+  const [p] = await store.listProducts(db);
+  assert.equal(p!.name, 'Pokémon TCG: 30th Celebration Elite Trainer Box');
+});
+
+test('A NAME YOU TYPED IS NEVER OVERWRITTEN BY THE PAGE', async () => {
+  const db = await TestDb.create();
+  const added = await call(db, 'POST', '/api/quick-add', {
+    url: TARGET_URL,
+    name: '30th Celebration ETB',
+  });
+
+  await call(db, 'POST', '/observations', {
+    observations: [
+      {
+        listingId: added.body.listing.id,
+        state: 'out',
+        confidence: 'exact',
+        productName: 'Pokémon Trading Card Game: 30th Celebration Elite Trainer Box',
+      },
+    ],
+  });
+
+  const [p] = await store.listProducts(db);
+  assert.equal(p!.name, '30th Celebration ETB', 'yours, not theirs');
+});
+
+test('the page only gets to name it once', async () => {
+  // After the first read the name is no longer a guess, so a later page title
+  // change does not quietly rename a product you have been watching.
+  const db = await TestDb.create();
+  const added = await call(db, 'POST', '/api/quick-add', { url: TARGET_URL });
+  const obs = (productName: string) =>
+    call(db, 'POST', '/observations', {
+      observations: [{ listingId: added.body.listing.id, state: 'out', confidence: 'exact', productName }],
+    });
+
+  await obs('30th Celebration Elite Trainer Box');
+  await obs('SOMETHING ELSE ENTIRELY');
+
+  const [p] = await store.listProducts(db);
+  assert.equal(p!.name, '30th Celebration Elite Trainer Box');
+});
+
+test('an empty name from a failed read changes nothing', async () => {
+  // A check that could not complete has no name to offer, and must not blank
+  // the one we have.
+  const db = await TestDb.create();
+  const added = await call(db, 'POST', '/api/quick-add', { url: TARGET_URL });
+  const before = (await store.listProducts(db))[0]!.name;
+
+  await call(db, 'POST', '/observations', {
+    observations: [{ listingId: added.body.listing.id, state: 'unknown', confidence: 'unknown', productName: '' }],
+  });
+
+  assert.equal((await store.listProducts(db))[0]!.name, before);
+});

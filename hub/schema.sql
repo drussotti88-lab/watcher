@@ -192,6 +192,15 @@ CREATE INDEX IF NOT EXISTS missions_active_idx ON missions (enabled, armed);
 -- to run twice.
 ALTER TABLE missions ADD COLUMN IF NOT EXISTS check_now_at TIMESTAMPTZ;
 
+-- Was this product's name minted from a URL slug rather than typed?
+--
+-- A slug is lossy: Target encodes "Pokémon" as "pok-233-mon", which titleises
+-- into "Pok 233 Mon Trading Card Game 30th Celebration Elite Trainer Box". The
+-- retailer's own page states the real name, so the first successful read
+-- replaces a guess and clears this flag. A name a person typed is never a
+-- guess and is never overwritten.
+ALTER TABLE products ADD COLUMN IF NOT EXISTS name_is_guess BOOLEAN NOT NULL DEFAULT false;
+
 -- ---------------------------------------------------------------------------
 -- Account settings
 -- ---------------------------------------------------------------------------

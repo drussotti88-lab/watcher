@@ -63,6 +63,14 @@ test('an ordinary out-of-stock check is reported but writes no run', () => {
   assert.equal(v.observation.state, 'out');
 });
 
+test('the real product name travels with every reading', () => {
+  // The Hub mints a name from the URL slug when a listing is added, because a
+  // slug is all it has. Target's encodes "Pokémon" as "pok-233-mon", which
+  // titleises into "Pok 233 Mon". The page knows better, so the page wins.
+  const v = judge(mission(), reading({ name: 'Pokémon TCG: 30th Celebration Elite Trainer Box' }));
+  assert.equal(v.observation.productName, 'Pokémon TCG: 30th Celebration Elite Trainer Box');
+});
+
 test('every check reports the observation, run or no run', () => {
   const v = judge(mission(), reading({ state: 'out', price: 49.99, imageUrl: 'https://i/x.jpg' }));
   assert.equal(v.observation.listingId, 11);

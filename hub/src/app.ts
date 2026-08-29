@@ -319,6 +319,9 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       // page rather than presented as the product's real name.
       const product = await store.upsertProduct(db, {
         name: typedName || parsed.name || `${parsed.retailer} ${parsed.externalId}`,
+        // Only a slug-derived name is a guess. Once the Watcher reads the page
+        // it replaces it; a name typed here is final.
+        nameIsGuess: !typedName,
         ...details,
       });
       const listing = await store.addListing(db, {

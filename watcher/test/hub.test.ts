@@ -51,6 +51,7 @@ const hubWith = (script: Parameters<typeof stubFetch>[0]) => {
 
 const observation = (listingId: number): ObservationOut => ({
   listingId,
+  productName: 'Mega Evolution ETB',
   state: 'out',
   confidence: 'exact',
   price: null,

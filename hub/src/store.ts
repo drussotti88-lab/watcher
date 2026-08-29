@@ -307,6 +307,8 @@ export async function listProducts(db: Sql): Promise<ProductRow[]> {
 export interface ProductInput {
   key?: string;
   name: string;
+  /** True when the name came from a URL slug rather than from a person. */
+  nameIsGuess?: boolean;
   releaseDate?: string | null;
   msrp?: number | null;
   imageUrl?: string;
@@ -343,10 +345,11 @@ export async function upsertProduct(db: Sql, p: ProductInput): Promise<ProductRo
 
   const key = p.key?.trim() || keyForName(p.name);
   const rows = await db.query(
-    `INSERT INTO products (key, name, release_date, msrp, image_url, notes)
-     VALUES ($1, $2, $3, $4, $5, $6)
+    `INSERT INTO products (key, name, release_date, msrp, image_url, notes, name_is_guess)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
      ON CONFLICT (key) DO UPDATE SET
        name = EXCLUDED.name,
+       name_is_guess = EXCLUDED.name_is_guess,
        -- COALESCE, not EXCLUDED: an edit that omits a field must not blank a
        -- value someone already took the trouble to set.
        release_date = COALESCE(EXCLUDED.release_date, products.release_date),
@@ -354,7 +357,15 @@ export async function upsertProduct(db: Sql, p: ProductInput): Promise<ProductRo
        image_url = CASE WHEN EXCLUDED.image_url = '' THEN products.image_url ELSE EXCLUDED.image_url END,
        notes = CASE WHEN EXCLUDED.notes = '' THEN products.notes ELSE EXCLUDED.notes END
      RETURNING *`,
-    [key, p.name.trim(), p.releaseDate || null, p.msrp ?? null, p.imageUrl ?? '', p.notes ?? ''],
+    [
+      key,
+      p.name.trim(),
+      p.releaseDate || null,
+      p.msrp ?? null,
+      p.imageUrl ?? '',
+      p.notes ?? '',
+      p.nameIsGuess === true,
+    ],
   );
   return toProduct(rows[0]!);
 }
@@ -898,6 +909,8 @@ export async function recentRuns(db: Sql, limit = 50): Promise<RunRow[]> {
 /** One reading of one listing, as the Watcher reports it. */
 export interface ObservationIn {
   listingId: number;
+  /** The retailer's own name for this product. Replaces a slug guess. */
+  productName?: string;
   state: 'in' | 'out' | 'queue' | 'unknown';
   confidence?: 'exact' | 'inferred' | 'unknown';
   price?: number | null;
@@ -1007,6 +1020,18 @@ export async function recordObservation(
       obs.sellerName ?? '',
       obs.listingId,
     ]);
+  }
+
+  // The page knows the product's name better than its own URL does. Replace a
+  // guess with it, once, and never touch a name a person typed.
+  const realName = (obs.productName ?? '').trim();
+  if (realName && realName.length <= 200) {
+    await db.query(
+      `UPDATE products SET name = $1, name_is_guess = false
+        WHERE key = (SELECT product_key FROM listings WHERE id = $2)
+          AND name_is_guess = true`,
+      [realName, obs.listingId],
+    );
   }
 
   // An image is worth having the first time we see one, and never worth

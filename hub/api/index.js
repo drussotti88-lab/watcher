@@ -463,10 +463,11 @@ async function upsertProduct(db2, p) {
   if (problem) throw new Error(problem);
   const key = p.key?.trim() || keyForName(p.name);
   const rows = await db2.query(
-    `INSERT INTO products (key, name, release_date, msrp, image_url, notes)
-     VALUES ($1, $2, $3, $4, $5, $6)
+    `INSERT INTO products (key, name, release_date, msrp, image_url, notes, name_is_guess)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
      ON CONFLICT (key) DO UPDATE SET
        name = EXCLUDED.name,
+       name_is_guess = EXCLUDED.name_is_guess,
        -- COALESCE, not EXCLUDED: an edit that omits a field must not blank a
        -- value someone already took the trouble to set.
        release_date = COALESCE(EXCLUDED.release_date, products.release_date),
@@ -474,7 +475,15 @@ async function upsertProduct(db2, p) {
        image_url = CASE WHEN EXCLUDED.image_url = '' THEN products.image_url ELSE EXCLUDED.image_url END,
        notes = CASE WHEN EXCLUDED.notes = '' THEN products.notes ELSE EXCLUDED.notes END
      RETURNING *`,
-    [key, p.name.trim(), p.releaseDate || null, p.msrp ?? null, p.imageUrl ?? "", p.notes ?? ""]
+    [
+      key,
+      p.name.trim(),
+      p.releaseDate || null,
+      p.msrp ?? null,
+      p.imageUrl ?? "",
+      p.notes ?? "",
+      p.nameIsGuess === true
+    ]
   );
   return toProduct(rows[0]);
 }
@@ -844,6 +853,15 @@ async function recordObservation(db2, obs) {
       obs.sellerName ?? "",
       obs.listingId
     ]);
+  }
+  const realName = (obs.productName ?? "").trim();
+  if (realName && realName.length <= 200) {
+    await db2.query(
+      `UPDATE products SET name = $1, name_is_guess = false
+        WHERE key = (SELECT product_key FROM listings WHERE id = $2)
+          AND name_is_guess = true`,
+      [realName, obs.listingId]
+    );
   }
   if (obs.imageUrl) {
     await db2.query(
@@ -2533,6 +2551,9 @@ function createHandler(db2, env2) {
       }
       const product = await upsertProduct(db2, {
         name: typedName || parsed.name || `${parsed.retailer} ${parsed.externalId}`,
+        // Only a slug-derived name is a guess. Once the Watcher reads the page
+        // it replaces it; a name typed here is final.
+        nameIsGuess: !typedName,
         ...details
       });
       const listing = await addListing(db2, {

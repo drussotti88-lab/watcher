@@ -46,22 +46,30 @@ export class Browser {
       : this.config.browser.watchProfileDir;
   }
 
+  /**
+   * Start Chrome. The only part that touches Playwright, and therefore the
+   * only part the recovery tests have to stand in for.
+   */
+  protected async launch(dir: string): Promise<BrowserContext> {
+    return chromium.launchPersistentContext(dir, {
+      channel:
+        this.config.browser.channel === 'chromium' ? undefined : this.config.browser.channel,
+      ...(this.config.browser.executablePath
+        ? { executablePath: this.config.browser.executablePath }
+        : {}),
+      headless: !this.config.browser.headed,
+      viewport: { width: 1366, height: 900 },
+      args: ['--disable-blink-features=AutomationControlled'],
+    });
+  }
+
   async open(): Promise<BrowserContext> {
     if (this.context) return this.context;
     const dir = resolve(process.cwd(), this.profileDir);
     mkdirSync(dir, { recursive: true });
 
     try {
-      this.context = await chromium.launchPersistentContext(dir, {
-        channel:
-          this.config.browser.channel === 'chromium' ? undefined : this.config.browser.channel,
-        ...(this.config.browser.executablePath
-          ? { executablePath: this.config.browser.executablePath }
-          : {}),
-        headless: !this.config.browser.headed,
-        viewport: { width: 1366, height: 900 },
-        args: ['--disable-blink-features=AutomationControlled'],
-      });
+      this.context = (await this.launch(dir)) as BrowserContext;
     } catch (err) {
       const msg = (err as Error).message;
       const channel = this.config.browser.channel;
@@ -95,10 +103,36 @@ export class Browser {
     }
 
     this.context.setDefaultNavigationTimeout(this.config.browser.navigationTimeoutMs);
+
+    // A closed browser must not be a permanent one.
+    //
+    // Chrome goes away for reasons that have nothing to do with us: the
+    // machine sleeps, someone closes the window, the profile gets cleaned up.
+    // Without this the cached context stays cached, every later check dies on
+    // "Target page, context or browser has been closed", and the Watcher goes
+    // on reporting "1 checked" every ninety seconds for hours — busy, honest
+    // about each failure, and producing nothing. Observed doing exactly that.
+    this.context.on('close', () => {
+      this.context = null;
+    });
+
     return this.context;
   }
 
   async page(): Promise<Page> {
+    try {
+      return await this.newPage();
+    } catch (err) {
+      // The close event is the main defence; this catches the race where the
+      // browser dies between opening it and using it. One retry, on a
+      // genuinely fresh context — if that fails too, the error is real.
+      if (!/closed|disconnected|crashed/i.test((err as Error).message)) throw err;
+      this.context = null;
+      return this.newPage();
+    }
+  }
+
+  private async newPage(): Promise<Page> {
     const ctx = await this.open();
     const existing = ctx.pages();
     return existing.length > 0 ? existing[0]! : ctx.newPage();

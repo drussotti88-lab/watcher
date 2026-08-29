@@ -48,6 +48,7 @@ export function judge(
 ): Verdict {
   const observation: ObservationOut = {
     listingId: mission.listingId,
+    productName: reading.name,
     state: reading.state,
     confidence: reading.confidence,
     price: reading.price,

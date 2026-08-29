@@ -51,6 +51,15 @@ export const DEFAULT_SETTINGS: Settings = { taxRate: 0, shippingAllowance: 0 };
 
 export interface ObservationOut {
   listingId: number;
+  /**
+   * The product's real name, as the retailer's own page states it.
+   *
+   * The Hub mints a name from the URL slug when a listing is first added,
+   * because that is all it has. A slug is lossy — Target's encodes "Pokémon"
+   * as "pok-233-mon", which titleises into "Pok 233 Mon" — so the first proper
+   * read replaces it. A name a person typed is never touched.
+   */
+  productName: string;
   state: 'in' | 'out' | 'queue' | 'unknown';
   confidence: 'exact' | 'inferred' | 'unknown';
   price: number | null;
