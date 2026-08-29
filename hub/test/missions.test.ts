@@ -354,3 +354,60 @@ test('active missions are what the Watcher polls, and carry the mandate', async 
   assert.equal(m.ceiling, 49.99, 'a number, not a Postgres string');
   assert.equal(m.sellerPolicy, 'retailer_only');
 });
+
+// ── Quick add ────────────────────────────────────────────────────────────────
+
+test('quick add turns one URL into a watched mission', async () => {
+  const db = await TestDb.create();
+  const { status, body } = await call(db, 'POST', '/api/quick-add', { url: TARGET_URL });
+
+  assert.equal(status, 201);
+  assert.equal(body.alreadyTracked, false);
+  assert.equal(body.listing.retailer, 'Target');
+  assert.equal(body.listing.externalId, '1012644666');
+  assert.ok(body.mission.id);
+});
+
+test('QUICK ADD NEVER ARMS ANYTHING', async () => {
+  // Arming is a decision. A decision does not belong inside a shortcut you
+  // press on a phone while walking.
+  const db = await TestDb.create();
+  const { body } = await call(db, 'POST', '/api/quick-add', { url: TARGET_URL });
+
+  assert.equal(body.mission.armed, false);
+  assert.equal(body.mission.ceiling, null);
+  assert.equal(body.mission.enabled, true, 'but it does start watching');
+});
+
+test('quick-adding the same URL twice does not make a second buyer', async () => {
+  // Two missions on one listing is two checkouts racing each other.
+  const db = await TestDb.create();
+  const first = await call(db, 'POST', '/api/quick-add', { url: TARGET_URL });
+  const again = await call(db, 'POST', '/api/quick-add', { url: TARGET_URL + '?ref=whatever' });
+
+  assert.equal(again.body.alreadyTracked, true);
+  assert.equal(again.body.mission.id, first.body.mission.id);
+  assert.equal((await store.listMissions(db)).length, 1);
+});
+
+test('quick add refuses a URL it cannot identify, in words', async () => {
+  const db = await TestDb.create();
+  const { status, body } = await call(db, 'POST', '/api/quick-add', {
+    url: 'https://www.target.com/c/trading-cards/-/N-5tdv0',
+  });
+  assert.equal(status, 400);
+  assert.match(body.error, /could not read a retailer and product id/);
+});
+
+test('quick add on a listing that already exists adopts it rather than duplicating', async () => {
+  const db = await TestDb.create();
+  const product = await call(db, 'POST', '/api/products', { name: 'Pitch Black ETB' });
+  const listing = await call(db, 'POST', '/api/listings', {
+    productKey: product.body.product.key,
+    url: TARGET_URL,
+  });
+
+  const { body } = await call(db, 'POST', '/api/quick-add', { url: TARGET_URL });
+  assert.equal(body.listing.id, listing.body.listing.id);
+  assert.equal((await store.listListings(db)).length, 1);
+});

@@ -198,6 +198,15 @@ details[open] > summary::before { content: '▾ '; }
 details > summary:hover { color: var(--ink); }
 .off { opacity: .5; }
 
+header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.quickadd { margin-bottom: 14px; border-color: var(--accent); }
+.quickadd h2 { margin: 0; font: 700 17px/1.3 var(--display); color: var(--ink); }
+#install { flex: none; }
+
+/* Room for the notch and the home indicator once it is installed. */
+body { padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right); }
+main { padding-bottom: calc(24px + env(safe-area-inset-bottom)); }
+
 .login { max-width: 350px; margin: 15vh auto; }
 .login .card { padding: 26px 24px; }
 .err { color: var(--alert); font-size: 13px; min-height: 20px; }
@@ -225,13 +234,42 @@ export function loginPage(message = ''): string {
 export function dashboardPage(): string {
   return `<!doctype html>
 <html lang="en"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Hub</title>${FONTS}<style>${STYLE}</style></head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Hub</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#09080e">
+<link rel="icon" href="/icon-192.png" sizes="192x192" type="image/png">
+<!-- iOS ignores the manifest for the home-screen icon and the status bar. -->
+<link rel="apple-touch-icon" href="/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Hub">
+${FONTS}<style>${STYLE}</style></head>
 <body><main>
   <header>
-    <h1>Hub</h1>
-    <span class="sub" id="summary">loading…</span>
+    <div>
+      <h1>Hub</h1>
+      <span class="sub" id="summary">loading…</span>
+    </div>
+    <button id="install" class="small" hidden>Install</button>
   </header>
+
+  <div class="card quickadd" id="quickadd" hidden>
+    <h2>Add a listing</h2>
+    <p class="sub">Paste a Target, Pokémon Center or Walmart product link. It
+      starts watching straight away — never armed, never with a ceiling.</p>
+    <form class="stack" id="quick-form" style="margin-top:12px">
+      <input type="url" name="url" id="quick-url" required
+             placeholder="https://www.target.com/p/…/A-1012644666"
+             autocomplete="off" autocapitalize="off" spellcheck="false">
+      <div class="actions">
+        <button type="submit" class="primary">Watch this</button>
+        <button type="button" class="small" data-act="quick-close">Close</button>
+        <span class="msg" id="quick-msg"></span>
+      </div>
+    </form>
+  </div>
 
   <div class="tabs">
     <button class="tab on" data-tab="missions">Missions<span class="count" id="c-missions"></span></button>
@@ -908,6 +946,92 @@ for (const tab of document.querySelectorAll('.tab')) {
 
 document.getElementById('refresh').addEventListener('click', (e) =>
   withButton(e.target, 'Refreshing…', null, load));
+
+// ── Installing, and quick adds ───────────────────────────────────────────────
+
+navigator.serviceWorker && navigator.serviceWorker.register('/sw.js').catch(() => {});
+
+const installBtn = document.getElementById('install');
+let installPrompt = null;
+
+// Chrome and Edge fire this when the app is installable. Safari never does, so
+// the button below falls back to telling you where the button is on iOS rather
+// than pretending it can do it for you.
+addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  installPrompt = e;
+  installBtn.hidden = false;
+});
+addEventListener('appinstalled', () => { installBtn.hidden = true; installPrompt = null; });
+
+// typeof, not a bare reference: one missing global must not take the whole
+// page script down with it. Everything below this line is the reason the
+// dashboard renders at all.
+const standalone =
+  (typeof matchMedia === 'function' && matchMedia('(display-mode: standalone)').matches) ||
+  navigator.standalone === true;
+const iOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+  (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+if (iOS && !standalone) installBtn.hidden = false;
+
+installBtn.addEventListener('click', async () => {
+  if (installPrompt) {
+    installPrompt.prompt();
+    await installPrompt.userChoice;
+    installPrompt = null;
+    installBtn.hidden = true;
+    return;
+  }
+  // No prompt available: say what to press rather than doing nothing.
+  say(document.getElementById('summary'),
+    iOS ? 'Share → Add to Home Screen' : 'Use your browser menu → Install',
+    true);
+});
+
+const quick = document.getElementById('quickadd');
+const quickUrl = document.getElementById('quick-url');
+const quickMsg = document.getElementById('quick-msg');
+
+function openQuickAdd(url) {
+  quick.hidden = false;
+  if (url) quickUrl.value = url;
+  quickUrl.focus();
+}
+quick.querySelector('[data-act=quick-close]').addEventListener('click', () => {
+  quick.hidden = true;
+  history.replaceState(null, '', '/');
+});
+
+/**
+ * Pull a product link out of whatever the share sheet handed us.
+ *
+ * Android puts it in "url" from some apps and buried in "text" from others —
+ * usually with a title in front of it — so take the first http(s) run of
+ * characters from either rather than trusting the field name.
+ */
+function sharedUrl() {
+  const q = new URLSearchParams(location.search);
+  const direct = (q.get('url') || '').trim();
+  if (/^https?:\\/\\//i.test(direct)) return direct;
+  const m = ((q.get('text') || '') + ' ' + (q.get('title') || '')).match(/https?:\\/\\/\\S+/);
+  return m ? m[0] : '';
+}
+
+document.getElementById('quick-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const form = e.target;
+  await withButton(form.querySelector('button[type=submit]'), 'Adding…', quickMsg, async () => {
+    const r = await api('POST', '/api/quick-add', { url: quickUrl.value.trim() });
+    form.reset();
+    history.replaceState(null, '', '/');
+    load();
+    return r.alreadyTracked
+      ? 'already watching that one — nothing changed'
+      : 'watching “' + r.product.name + '” — set a ceiling before arming it';
+  });
+});
+
+if (location.pathname === '/add' || sharedUrl()) openQuickAdd(sharedUrl());
 
 let timer = setInterval(load, 30000);
 document.getElementById('auto').addEventListener('change', (e) => {

@@ -30,6 +30,7 @@ import { probeUrl } from './fetcher.ts';
 import { identify, mintSession, safeEqual, sessionCookie, clearCookie } from './auth.ts';
 import { loginPage, dashboardPage } from './page.ts';
 import { identifyListing } from './parsers/identify.ts';
+import { MANIFEST, SERVICE_WORKER, iconResponse } from './pwa.ts';
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body, null, 2), {
@@ -97,6 +98,32 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       });
     }
 
+    // ── Installing ───────────────────────────────────────────────────────────
+    //
+    // Public, and they have to be. A manifest is fetched without credentials
+    // unless it is marked otherwise, and a service worker registers before
+    // anything has signed in — put these behind the session and the browser
+    // silently never offers to install the app. None of the three carries any
+    // data; they are a name, three icons and a fetch handler.
+    if (request.method === 'GET' && path === '/manifest.webmanifest') {
+      return new Response(JSON.stringify(MANIFEST, null, 2), {
+        headers: { 'Content-Type': 'application/manifest+json; charset=utf-8' },
+      });
+    }
+    if (request.method === 'GET' && path === '/sw.js') {
+      return new Response(SERVICE_WORKER, {
+        headers: {
+          'Content-Type': 'text/javascript; charset=utf-8',
+          // Never cache the worker itself, or a fix to it can take a day to land.
+          'Cache-Control': 'no-cache',
+        },
+      });
+    }
+    if (request.method === 'GET' && path.startsWith('/icon-') && path.endsWith('.png')) {
+      const icon = iconResponse(path.slice('/icon-'.length, -'.png'.length));
+      if (icon) return icon;
+    }
+
     // ── The browser's way in ─────────────────────────────────────────────────
     const secure = url.protocol === 'https:';
 
@@ -135,7 +162,9 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
     }
 
     // ── The page ─────────────────────────────────────────────────────────────
-    if (request.method === 'GET' && (path === '/' || path === '/dashboard')) {
+    if (request.method === 'GET' && (path === '/' || path === '/dashboard' || path === '/add')) {
+      // `/add` is the share target and the app shortcut. Same document — the
+      // page notices the path and the shared link and opens the quick-add box.
       return html(dashboardPage());
     }
 
@@ -217,6 +246,63 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
         url: b.url.trim(),
       });
       return json({ listing });
+    }
+
+    /**
+     * Quick add: one URL in, a watched mission out.
+     *
+     * The whole point of the installed app. On a phone you have a Target link
+     * and thirty seconds, and the three-step path — create a product, add a
+     * listing to it, then a mission to watch it — is three steps too many.
+     *
+     * Two rules it keeps rather than skipping:
+     *   · a URL already tracked returns the existing mission rather than a
+     *     duplicate. Two missions on one listing is two buyers.
+     *   · the mission arrives **watching, never armed, with no ceiling**.
+     *     Arming is a decision, and a decision does not belong in a shortcut.
+     */
+    if (request.method === 'POST' && path === '/api/quick-add') {
+      const b = await body<{ url?: string; name?: string }>();
+      const raw = (b?.url ?? '').trim();
+      if (!raw) return json({ error: 'need a URL' }, 400);
+
+      const parsed = identifyListing(raw);
+      if (!parsed) {
+        return json(
+          {
+            error:
+              'could not read a retailer and product id out of that URL. Expected a ' +
+              'target.com/p/…/A-123, pokemoncenter.com/product/100-123/… or ' +
+              'walmart.com/ip/…/123 link.',
+          },
+          400,
+        );
+      }
+
+      const existing = await store.findListing(db, parsed.retailer, parsed.externalId);
+      if (existing) {
+        const mission =
+          (await store.missionForListing(db, existing.id)) ??
+          (await store.upsertMission(db, { listingId: existing.id, label: existing.productName }));
+        return json({ listing: existing, mission, alreadyTracked: true });
+      }
+
+      // A name from the URL slug is a guess, and it is labelled as one on the
+      // page rather than presented as the product's real name.
+      const product = await store.upsertProduct(db, {
+        name: (b?.name ?? '').trim() || parsed.name || `${parsed.retailer} ${parsed.externalId}`,
+      });
+      const listing = await store.addListing(db, {
+        productKey: product.key,
+        retailer: parsed.retailer,
+        externalId: parsed.externalId,
+        url: parsed.url || raw,
+      });
+      const mission = await store.upsertMission(db, {
+        listingId: listing.id,
+        label: product.name,
+      });
+      return json({ product, listing, mission, alreadyTracked: false }, 201);
     }
 
     if (request.method === 'DELETE' && path.startsWith('/api/listings/')) {

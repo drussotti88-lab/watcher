@@ -401,6 +401,21 @@ function toListing(r: Record<string, unknown>): ListingRow {
   };
 }
 
+/** The listing for this retailer + id, if we already track it. */
+export async function findListing(
+  db: Sql,
+  retailer: string,
+  externalId: string,
+): Promise<ListingRow | null> {
+  const rows = await db.query(
+    `SELECT l.*, p.name AS product_name FROM listings l
+       JOIN products p ON p.key = l.product_key
+      WHERE l.retailer = $1 AND l.external_id = $2`,
+    [retailer.trim(), externalId.trim()],
+  );
+  return rows[0] ? toListing(rows[0]) : null;
+}
+
 export async function listListings(db: Sql, productKey?: string): Promise<ListingRow[]> {
   const sql = `SELECT l.*, p.name AS product_name FROM listings l
                  JOIN products p ON p.key = l.product_key
@@ -556,6 +571,12 @@ export async function listMissions(db: Sql): Promise<MissionRow[]> {
         WHEN 'unchecked' THEN 3 ELSE 4 END,
       m.armed DESC, p.name, l.retailer`);
   return rows.map(toMission);
+}
+
+/** The mission watching this listing, if there is one. At most one, by schema. */
+export async function missionForListing(db: Sql, listingId: number): Promise<MissionRow | null> {
+  const rows = await db.query(`${MISSION_SELECT} WHERE m.listing_id = $1`, [listingId]);
+  return rows[0] ? toMission(rows[0]) : null;
 }
 
 export async function getMission(db: Sql, id: number): Promise<MissionRow | null> {

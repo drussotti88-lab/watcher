@@ -64,7 +64,10 @@ const DASHBOARD = {
   ],
 };
 
-async function boot(dashboard: unknown = DASHBOARD): Promise<Harness> {
+async function boot(
+  dashboard: unknown = DASHBOARD,
+  url = 'https://hub.test/',
+): Promise<Harness> {
   const calls: Call[] = [];
   const replies = new Map<string, unknown>();
   const failures = new Map<string, string>();
@@ -89,7 +92,7 @@ async function boot(dashboard: unknown = DASHBOARD): Promise<Harness> {
 
   const dom = new JSDOM(dashboardPage(), {
     runScripts: 'dangerously',
-    url: 'https://hub.test/',
+    url,
     beforeParse: stub,
   });
   const win = dom.window as any;
@@ -460,4 +463,76 @@ test('a mission already waiting on a test run shows it', async () => {
   const h = await boot(pending);
   const btn = $(h, 'form[data-mission="1"]').querySelector('[data-act=check-now]');
   assert.match(btn.textContent, /queued/i);
+});
+
+// ── Quick add, and installing ────────────────────────────────────────────────
+
+test('QUICK ADD SENDS THE URL YOU PASTED', async () => {
+  // Same lesson as the product form above: a button that looks right and posts
+  // nothing passes every test that does not press it.
+  const h = await boot(DASHBOARD, 'https://hub.test/add');
+  const form = $(h, '#quick-form');
+  assert.ok(form, 'the quick-add box should be open on /add');
+
+  form.querySelector('#quick-url').value = 'https://www.target.com/p/x/-/A-1012944745';
+  h.reply('POST /api/quick-add', {
+    product: { name: 'Mega Forces Tin' }, listing: {}, mission: {}, alreadyTracked: false,
+  });
+
+  submit(form, h.dom.window);
+  await h.settle();
+
+  const call = h.calls.find((c) => c.path === '/api/quick-add');
+  assert.ok(call, 'submitting quick add must reach the API');
+  assert.equal(call.body.url, 'https://www.target.com/p/x/-/A-1012944745');
+});
+
+test('a link shared from the phone arrives pre-filled', async () => {
+  const shared = 'https://www.target.com/p/tin/-/A-1012944745';
+  const h = await boot(DASHBOARD, 'https://hub.test/add?url=' + encodeURIComponent(shared));
+  assert.equal($(h, '#quickadd').hidden, false);
+  assert.equal($(h, '#quick-url').value, shared);
+});
+
+test('a link buried in the shared text is still found', async () => {
+  // Android hands some shares over as "Product name https://…" in `text`
+  // rather than as a clean `url`.
+  const h = await boot(
+    DASHBOARD,
+    'https://hub.test/add?text=' +
+      encodeURIComponent('Pokémon tin https://www.target.com/p/tin/-/A-1012944745'),
+  );
+  assert.equal($(h, '#quick-url').value, 'https://www.target.com/p/tin/-/A-1012944745');
+});
+
+test('the quick-add box stays shut on the ordinary dashboard', async () => {
+  const h = await boot();
+  assert.equal($(h, '#quickadd').hidden, true);
+});
+
+test('an already-tracked link says so rather than claiming a new watch', async () => {
+  const h = await boot(DASHBOARD, 'https://hub.test/add');
+  const form = $(h, '#quick-form');
+  form.querySelector('#quick-url').value = 'https://www.target.com/p/x/-/A-1012644666';
+  h.reply('POST /api/quick-add', { listing: {}, mission: {}, alreadyTracked: true });
+
+  submit(form, h.dom.window);
+  await h.settle();
+
+  assert.match($(h, '#quick-msg').textContent, /already watching/i);
+});
+
+test('the install button is hidden until a browser offers an install', async () => {
+  // Chrome fires beforeinstallprompt; Safari never does. A button that is
+  // always there and usually does nothing is worse than no button.
+  const h = await boot();
+  assert.equal($(h, '#install').hidden, true);
+});
+
+test('the page asks the browser to register a service worker', async () => {
+  // Without one there is no install prompt, on any browser.
+  const html = dashboardPage();
+  assert.match(html, /serviceWorker/);
+  assert.match(html, /\/sw\.js/);
+  assert.match(html, /rel="manifest"/);
 });
