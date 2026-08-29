@@ -1814,13 +1814,14 @@ function missionCard(m) {
     right.appendChild(el('div', 'meta', 'in stock since ' + ago(m.lastChangedAt)));
   }
   // How many the retailer says it can ship. Target states a real number in its
-  // fulfillment API; Pok\xE9mon Center and Walmart do not, and null means "not
-  // stated" rather than "none".
+  // fulfillment API; Pok\xE9mon Center and Walmart do not.
   //
-  // Only shown when it adds something. "0 available" next to OUT OF STOCK is
-  // the same fact twice \u2014 the shape of noise this card has already been
-  // cleaned of once.
-  if (m.availableQuantity > 0) {
+  // Zero is shown, deliberately. It was hidden for an afternoon as "the same
+  // fact as OUT OF STOCK", and that was wrong: "0 available" is evidence the
+  // count was actually read, and a listing where we read zero is not the same
+  // as one where the retailer never said. Absence is the only thing that means
+  // nothing was stated, so absence has to be reserved for it.
+  if (m.availableQuantity !== null && m.availableQuantity !== undefined) {
     right.appendChild(el('div', 'meta', m.availableQuantity + ' available'));
   }
 

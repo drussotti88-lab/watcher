@@ -812,14 +812,16 @@ test('a successful add closes the dialog', async () => {
 
 // ── Numbers that add something, and a log that does not lie by omission ──────
 
-test('"0 AVAILABLE" IS NOT SHOWN NEXT TO OUT OF STOCK', async () => {
-  // The same fact twice, which is the shape of noise this card has already
-  // been cleaned of once.
+test('ZERO IS SHOWN — it is evidence the count was read', async () => {
+  // This test asserted the opposite for an afternoon, on the grounds that "0
+  // available" beside OUT OF STOCK was the same fact twice. It is not. A
+  // listing where the retailer said zero is different from one where it never
+  // said, and absence has to be reserved for the second.
   const d = JSON.parse(JSON.stringify(DASHBOARD));
   d.missions[0].state = 'out';
   d.missions[0].availableQuantity = 0;
   const h = await boot(d);
-  assert.doesNotMatch($(h, '#missions').textContent, /0 available/);
+  assert.match($(h, '#missions').textContent, /0 available/);
 });
 
 test('a real count is shown when it tells you something', async () => {
