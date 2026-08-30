@@ -46,6 +46,18 @@ export interface WalmartRow {
   /** The publisher's street date, when Walmart has one. */
   releaseDate: string | null;
   imageUrl: string;
+  /**
+   * How many other sellers have an offer on this same listing.
+   *
+   * The field that explains the surprise. Walmart's own listing can be out of
+   * stock while the product page still shows a price — the buy box falls to a
+   * marketplace seller, sometimes at forty times the money. The search says
+   * Walmart, at Walmart's price, out of stock, and every word of that is true;
+   * the page just looks nothing like it.
+   */
+  otherOffers: number | null;
+  /** Can this be put in a basket right now? False for every out-of-stock row. */
+  canAddToCart: boolean;
 }
 
 export interface WalmartMeta {
@@ -144,6 +156,8 @@ export function readWalmartSearch(data: unknown): WalmartRow[] {
         isPreOrder: i.preOrder?.isPreOrder === true,
         releaseDate: isoDate(i.preOrder?.streetDate ?? i.preOrder?.releaseDate),
         imageUrl: String(i.imageInfo?.thumbnailUrl ?? '').trim(),
+        otherOffers: num(i.additionalOfferCount),
+        canAddToCart: i.canAddToCart === true || i.showAtc === true,
       });
     }
   }

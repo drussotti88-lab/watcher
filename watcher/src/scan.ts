@@ -213,6 +213,8 @@ export interface Candidate {
   isPreOrder: boolean;
   /** Why it was surfaced: 'buyable', 'scheduled', 'recent'. May be blank. */
   signal: string;
+  /** Other sellers holding an offer on the same listing. Null when unknown. */
+  otherOffers: number | null;
 }
 
 /**
@@ -243,6 +245,7 @@ export function candidates(verdicts: ScanVerdict[], foundBy = ''): Candidate[] {
       tcg,
       foundBy,
       retailer: 'Target',
+      otherOffers: null,
       // Target publishes no pre-order flag; a street date in the future on
       // something buyable is the only tell there is.
       isPreOrder: v.row.state === 'in' && isFuture(v.row.releaseDate),
@@ -275,6 +278,7 @@ export function toDiscovered(c: Candidate): {
   releaseDate: string | null;
   orderLimit: number | null;
   signal: string;
+  otherOffers: number | null;
 } {
   return {
     externalId: c.row.tcin,
@@ -295,6 +299,7 @@ export function toDiscovered(c: Candidate): {
     releaseDate: c.row.releaseDate,
     orderLimit: c.row.orderLimit,
     signal: c.signal,
+    otherOffers: c.otherOffers,
   };
 }
 
@@ -489,6 +494,7 @@ export function pcCandidates(verdicts: PcVerdict[], foundBy = ''): Candidate[] {
     // the review card say `found by "recent"`.
     foundBy,
     retailer: 'Pokemon Center',
+    otherOffers: null,
     // Pokémon Center says PreOrder in its own markup on the product page; on a
     // category page the tell is the same as Target's — a future street date on
     // something that is not simply out of stock.
@@ -608,6 +614,7 @@ export function walmartCandidates(rows: WalmartRow[], foundBy = ''): Candidate[]
     if (tcg.verdict === 'no') continue;
     out.push({
       retailer: 'Walmart',
+      otherOffers: row.otherOffers,
       // The one retailer of the three that states it outright.
       isPreOrder: row.isPreOrder,
       signal: row.isPreOrder ? 'scheduled' : row.state === 'in' ? 'buyable' : 'recent',

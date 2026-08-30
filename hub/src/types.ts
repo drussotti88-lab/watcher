@@ -38,6 +38,14 @@ export interface Discovered {
   /** Per-customer cap, when the retailer states it. */
   orderLimit?: number | null;
   /**
+   * Other sellers with an offer on the same listing.
+   *
+   * Walmart's own listing being out of stock does not make the page empty — the
+   * buy box falls to a marketplace seller, often at many times the price. The
+   * find is still right; the surprise on clicking through is what needs saying.
+   */
+  otherOffers?: number | null;
+  /**
    * Why the sweep surfaced it: 'buyable', 'scheduled', 'recent'.
    *
    * Distinct from foundBy, which is the *query*. Pokémon Center is walked

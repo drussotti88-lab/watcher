@@ -160,8 +160,9 @@ export async function recordDiscoveries(
     text: `INSERT INTO discoveries
              (user_id, source_id, external_id, url, name, price, announced, kind, confidence,
               found_by, image_url, retailer, state, is_pre_order, release_date, order_limit,
-              signal)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+              signal, other_offers)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
+                   $18)
            ON CONFLICT (user_id, source_id, external_id) DO UPDATE SET
              found_by = CASE
                WHEN EXCLUDED.found_by = '' THEN discoveries.found_by
@@ -191,6 +192,7 @@ export async function recordDiscoveries(
              is_pre_order = EXCLUDED.is_pre_order,
              release_date = EXCLUDED.release_date,
              signal = EXCLUDED.signal,
+             other_offers = EXCLUDED.other_offers,
              price = COALESCE(EXCLUDED.price, discoveries.price),
              order_limit = COALESCE(EXCLUDED.order_limit, discoveries.order_limit),
              retailer = CASE
@@ -215,6 +217,7 @@ export async function recordDiscoveries(
       item.releaseDate ?? '',
       item.orderLimit ?? null,
       item.signal ?? '',
+      item.otherOffers ?? null,
     ],
   }));
   await db.batch(statements);
@@ -1852,6 +1855,8 @@ export interface DiscoveryRow {
   orderLimit: number | null;
   /** 'buyable' | 'scheduled' | 'recent' — why it was surfaced. */
   signal: string;
+  /** Other sellers with an offer on the same listing. Null when unknown. */
+  otherOffers: number | null;
 }
 
 function toDiscovery(r: Record<string, unknown>): DiscoveryRow {
@@ -1875,6 +1880,8 @@ function toDiscovery(r: Record<string, unknown>): DiscoveryRow {
     releaseDate: String(r.release_date ?? ''),
     orderLimit: r.order_limit === null || r.order_limit === undefined ? null : Number(r.order_limit),
     signal: String(r.signal ?? ''),
+    otherOffers:
+      r.other_offers === null || r.other_offers === undefined ? null : Number(r.other_offers),
   };
 }
 

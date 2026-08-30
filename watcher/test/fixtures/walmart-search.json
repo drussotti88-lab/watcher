@@ -73,7 +73,11 @@
          },
          "catalogProductType": "Card Games",
          "type": "REGULAR",
-         "brand": null
+         "brand": null,
+         "additionalOfferCount": 6,
+         "canAddToCart": false,
+         "showAtc": false,
+         "buyBoxSuppression": false
         },
         {
          "__typename": "Product",
@@ -137,7 +141,11 @@
          },
          "catalogProductType": "Trading Card Sleeves & Holders",
          "type": "REGULAR",
-         "brand": null
+         "brand": null,
+         "additionalOfferCount": 2,
+         "canAddToCart": false,
+         "showAtc": false,
+         "buyBoxSuppression": false
         },
         {
          "__typename": "Product",
@@ -201,7 +209,11 @@
          },
          "catalogProductType": "Trading Cards",
          "type": "REGULAR",
-         "brand": null
+         "brand": null,
+         "additionalOfferCount": 9,
+         "canAddToCart": false,
+         "showAtc": false,
+         "buyBoxSuppression": false
         },
         {
          "__typename": "Product",
@@ -265,7 +277,11 @@
          },
          "catalogProductType": "Trading Card Games",
          "type": "REGULAR",
-         "brand": null
+         "brand": null,
+         "additionalOfferCount": 6,
+         "canAddToCart": false,
+         "showAtc": false,
+         "buyBoxSuppression": false
         },
         {
          "__typename": "Product",
@@ -329,7 +345,11 @@
          },
          "catalogProductType": "Trading Card Games",
          "type": "REGULAR",
-         "brand": null
+         "brand": null,
+         "additionalOfferCount": 24,
+         "canAddToCart": false,
+         "showAtc": false,
+         "buyBoxSuppression": false
         },
         {
          "__typename": "Product",
@@ -393,7 +413,11 @@
          },
          "catalogProductType": "Trading Card Games",
          "type": "REGULAR",
-         "brand": null
+         "brand": null,
+         "additionalOfferCount": 1,
+         "canAddToCart": false,
+         "showAtc": false,
+         "buyBoxSuppression": false
         },
         {
          "__typename": "Product",
@@ -457,7 +481,11 @@
          },
          "catalogProductType": "Trading Card Games",
          "type": "REGULAR",
-         "brand": null
+         "brand": null,
+         "additionalOfferCount": null,
+         "canAddToCart": false,
+         "showAtc": false,
+         "buyBoxSuppression": false
         },
         {
          "__typename": "Product",
@@ -521,7 +549,11 @@
          },
          "catalogProductType": "Trading Card Games",
          "type": "REGULAR",
-         "brand": null
+         "brand": null,
+         "additionalOfferCount": 5,
+         "canAddToCart": false,
+         "showAtc": false,
+         "buyBoxSuppression": false
         },
         {
          "__typename": "AdPlaceholder",
@@ -589,7 +621,11 @@
          },
          "catalogProductType": "Trading Card Games",
          "type": "REGULAR",
-         "brand": null
+         "brand": null,
+         "additionalOfferCount": 10,
+         "canAddToCart": false,
+         "showAtc": false,
+         "buyBoxSuppression": false
         },
         {
          "__typename": "Product",
@@ -653,7 +689,11 @@
          },
          "catalogProductType": "Card Games",
          "type": "REGULAR",
-         "brand": null
+         "brand": null,
+         "additionalOfferCount": null,
+         "canAddToCart": false,
+         "showAtc": false,
+         "buyBoxSuppression": false
         },
         {
          "__typename": "Product",
@@ -717,7 +757,11 @@
          },
          "catalogProductType": "Trading Card Games",
          "type": "REGULAR",
-         "brand": null
+         "brand": null,
+         "additionalOfferCount": 7,
+         "canAddToCart": false,
+         "showAtc": false,
+         "buyBoxSuppression": false
         },
         {
          "__typename": "Product",
@@ -781,7 +825,11 @@
          },
          "catalogProductType": "Trading Card Games",
          "type": "REGULAR",
-         "brand": null
+         "brand": null,
+         "additionalOfferCount": 5,
+         "canAddToCart": false,
+         "showAtc": false,
+         "buyBoxSuppression": false
         },
         {
          "__typename": "Product",
@@ -845,7 +893,11 @@
          },
          "catalogProductType": "Trading Card Games",
          "type": "REGULAR",
-         "brand": null
+         "brand": null,
+         "additionalOfferCount": 4,
+         "canAddToCart": false,
+         "showAtc": false,
+         "buyBoxSuppression": false
         },
         {
          "__typename": "Product",
@@ -909,7 +961,11 @@
          },
          "catalogProductType": "Trading Card Games",
          "type": "REGULAR",
-         "brand": null
+         "brand": null,
+         "additionalOfferCount": 2,
+         "canAddToCart": false,
+         "showAtc": false,
+         "buyBoxSuppression": false
         },
         {
          "__typename": "Product",
@@ -973,7 +1029,11 @@
          },
          "catalogProductType": "Trading Cards",
          "type": "REGULAR",
-         "brand": null
+         "brand": null,
+         "additionalOfferCount": 1,
+         "canAddToCart": false,
+         "showAtc": false,
+         "buyBoxSuppression": false
         },
         {
          "__typename": "Product",
@@ -1037,7 +1097,11 @@
          },
          "catalogProductType": "Trading Card Games",
          "type": "REGULAR",
-         "brand": null
+         "brand": null,
+         "additionalOfferCount": 7,
+         "canAddToCart": false,
+         "showAtc": false,
+         "buyBoxSuppression": false
         },
         {
          "__typename": "Product",
@@ -1101,7 +1165,11 @@
          },
          "catalogProductType": "Card Games",
          "type": "REGULAR",
-         "brand": null
+         "brand": null,
+         "additionalOfferCount": 3,
+         "canAddToCart": false,
+         "showAtc": false,
+         "buyBoxSuppression": false
         },
         {
          "__typename": "Product",
@@ -1165,7 +1233,11 @@
          },
          "catalogProductType": "Trading Card Games",
          "type": "REGULAR",
-         "brand": null
+         "brand": null,
+         "additionalOfferCount": 6,
+         "canAddToCart": false,
+         "showAtc": false,
+         "buyBoxSuppression": false
         },
         {
          "__typename": "Product",
@@ -1229,7 +1301,11 @@
          },
          "catalogProductType": "Trading Card Games",
          "type": "REGULAR",
-         "brand": null
+         "brand": null,
+         "additionalOfferCount": 9,
+         "canAddToCart": false,
+         "showAtc": false,
+         "buyBoxSuppression": false
         },
         {
          "__typename": "Product",
@@ -1293,7 +1369,11 @@
          },
          "catalogProductType": "Card Games",
          "type": "REGULAR",
-         "brand": null
+         "brand": null,
+         "additionalOfferCount": 1,
+         "canAddToCart": false,
+         "showAtc": false,
+         "buyBoxSuppression": false
         },
         {
          "__typename": "Product",
@@ -1357,7 +1437,11 @@
          },
          "catalogProductType": "Trading Card Games",
          "type": "REGULAR",
-         "brand": null
+         "brand": null,
+         "additionalOfferCount": 6,
+         "canAddToCart": false,
+         "showAtc": false,
+         "buyBoxSuppression": false
         },
         {
          "__typename": "Product",
@@ -1421,7 +1505,11 @@
          },
          "catalogProductType": "Card Games",
          "type": "REGULAR",
-         "brand": null
+         "brand": null,
+         "additionalOfferCount": 2,
+         "canAddToCart": false,
+         "showAtc": false,
+         "buyBoxSuppression": false
         },
         {
          "__typename": "Product",
@@ -1485,7 +1573,11 @@
          },
          "catalogProductType": "Trading Card Sleeves & Holders",
          "type": "REGULAR",
-         "brand": null
+         "brand": null,
+         "additionalOfferCount": 2,
+         "canAddToCart": false,
+         "showAtc": false,
+         "buyBoxSuppression": false
         },
         {
          "__typename": "Product",
@@ -1549,7 +1641,11 @@
          },
          "catalogProductType": "Trading Card Games",
          "type": "REGULAR",
-         "brand": null
+         "brand": null,
+         "additionalOfferCount": 6,
+         "canAddToCart": false,
+         "showAtc": false,
+         "buyBoxSuppression": false
         },
         {
          "__typename": "Product",
@@ -1613,7 +1709,11 @@
          },
          "catalogProductType": "Trading Card Games",
          "type": "REGULAR",
-         "brand": null
+         "brand": null,
+         "additionalOfferCount": 1,
+         "canAddToCart": false,
+         "showAtc": false,
+         "buyBoxSuppression": false
         },
         {
          "__typename": "Product",
@@ -1677,7 +1777,11 @@
          },
          "catalogProductType": "Trading Card Games",
          "type": "REGULAR",
-         "brand": null
+         "brand": null,
+         "additionalOfferCount": 1,
+         "canAddToCart": false,
+         "showAtc": false,
+         "buyBoxSuppression": false
         },
         {
          "__typename": "Product",
@@ -1741,7 +1845,11 @@
          },
          "catalogProductType": "Trading Card Games",
          "type": "REGULAR",
-         "brand": null
+         "brand": null,
+         "additionalOfferCount": null,
+         "canAddToCart": false,
+         "showAtc": false,
+         "buyBoxSuppression": false
         },
         {
          "__typename": "Product",
@@ -1805,7 +1913,11 @@
          },
          "catalogProductType": "Trading Card Games",
          "type": "REGULAR",
-         "brand": null
+         "brand": null,
+         "additionalOfferCount": null,
+         "canAddToCart": false,
+         "showAtc": false,
+         "buyBoxSuppression": false
         },
         {
          "__typename": "Product",
@@ -1869,7 +1981,11 @@
          },
          "catalogProductType": "Trading Card Games",
          "type": "REGULAR",
-         "brand": null
+         "brand": null,
+         "additionalOfferCount": 1,
+         "canAddToCart": false,
+         "showAtc": false,
+         "buyBoxSuppression": false
         }
        ]
       }

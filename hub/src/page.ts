@@ -1696,7 +1696,12 @@ function renderFinds() {
     const facts = [];
     if (d.retailer) facts.push(d.retailer);
     if (d.kind) facts.push(d.kind);
-    if (d.price) facts.push(money(d.price));
+    // Whose price this is, when it is not the one the page will show you.
+    if (d.price) {
+      facts.push(d.state === 'out' && d.otherOffers > 0
+        ? money(d.price) + ' at ' + (d.retailer || 'the retailer')
+        : money(d.price));
+    }
     if (d.orderLimit) facts.push('limit ' + d.orderLimit + ' per order');
     left.appendChild(el('div', 'meta', facts.join(' · ')));
 
@@ -1720,6 +1725,18 @@ function renderFinds() {
           : days > 0 ? 'releases ' + d.releaseDate + ' · ' + days + 'd'
           : days === 0 ? 'releases today'
           : 'released ' + d.releaseDate));
+    }
+
+    // The warning that was missing.
+    //
+    // A Walmart find is its own listing, at its own price, out of stock — all
+    // true, and then the link opens a page where a marketplace seller holds
+    // the buy box at forty times the money, because Walmart has none and the
+    // box falls to whoever does. Nothing is wrong with the find. Being sent to
+    // that page with no warning is what was wrong.
+    if (d.state === 'out' && d.otherOffers > 0) {
+      tags.appendChild(el('span', 'pill flag',
+        d.otherOffers + (d.otherOffers === 1 ? ' reseller has' : ' resellers have') + ' the buy box'));
     }
 
     if (d.confidence === 'unsure') {

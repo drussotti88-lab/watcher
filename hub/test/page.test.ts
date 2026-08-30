@@ -1817,3 +1817,42 @@ test('a list that is ALL back catalogue is not an empty page', async () => {
   const h = await boot(withFinds([MIXED[3]!, MIXED[4]!]));
   assert.equal(findNames(h).length, 2);
 });
+
+test('A FIND WARNS YOU WHEN RESELLERS HOLD THE BUY BOX', async () => {
+  // The find is right: Walmart's own listing, Walmart's own price, out of
+  // stock. Then the link opens a page showing a marketplace seller at forty
+  // times the money. Clicking through should never be a surprise.
+  const h = await boot(withFinds([
+    { ...RICH_FIND, retailer: 'Walmart', state: 'out', isPreOrder: false,
+      releaseDate: '', signal: 'recent', price: 49.87, otherOffers: 6 },
+  ]));
+  assert.ok(findPills(h).includes('6 resellers have the buy box'),
+    findPills(h).join(' | '));
+  // And the price is labelled as the retailer's, not the page's.
+  assert.match(h.doc.querySelector('#finds-list .meta')?.textContent ?? '',
+    /\$49\.87 at Walmart/);
+});
+
+test('one reseller is singular', async () => {
+  const h = await boot(withFinds([
+    { ...RICH_FIND, retailer: 'Walmart', state: 'out', releaseDate: '', otherOffers: 1 },
+  ]));
+  assert.ok(findPills(h).includes('1 reseller has the buy box'));
+});
+
+test('no warning when the retailer has it in stock itself', async () => {
+  // The buy box is the retailer's when the retailer has stock, whatever else
+  // is listed behind it. Warning then would be crying wolf.
+  const h = await boot(withFinds([
+    { ...RICH_FIND, retailer: 'Walmart', state: 'in', releaseDate: '', otherOffers: 6 },
+  ]));
+  assert.ok(!findPills(h).some((p) => p.includes('buy box')));
+  assert.match(h.doc.querySelector('#finds-list .meta')?.textContent ?? '', /\$59\.99$|\$59\.99 ·/);
+});
+
+test('a find with no offer count claims nothing about resellers', async () => {
+  const h = await boot(withFinds([
+    { ...RICH_FIND, retailer: 'Pokemon Center', state: 'out', releaseDate: '', otherOffers: null },
+  ]));
+  assert.ok(!findPills(h).some((p) => p.includes('buy box')));
+});

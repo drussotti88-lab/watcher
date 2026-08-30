@@ -383,8 +383,9 @@ async function recordDiscoveries(db2, userId, sourceId, items, announce2) {
     text: `INSERT INTO discoveries
              (user_id, source_id, external_id, url, name, price, announced, kind, confidence,
               found_by, image_url, retailer, state, is_pre_order, release_date, order_limit,
-              signal)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+              signal, other_offers)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
+                   $18)
            ON CONFLICT (user_id, source_id, external_id) DO UPDATE SET
              found_by = CASE
                WHEN EXCLUDED.found_by = '' THEN discoveries.found_by
@@ -414,6 +415,7 @@ async function recordDiscoveries(db2, userId, sourceId, items, announce2) {
              is_pre_order = EXCLUDED.is_pre_order,
              release_date = EXCLUDED.release_date,
              signal = EXCLUDED.signal,
+             other_offers = EXCLUDED.other_offers,
              price = COALESCE(EXCLUDED.price, discoveries.price),
              order_limit = COALESCE(EXCLUDED.order_limit, discoveries.order_limit),
              retailer = CASE
@@ -437,7 +439,8 @@ async function recordDiscoveries(db2, userId, sourceId, items, announce2) {
       item.isPreOrder === true,
       item.releaseDate ?? "",
       item.orderLimit ?? null,
-      item.signal ?? ""
+      item.signal ?? "",
+      item.otherOffers ?? null
     ]
   }));
   await db2.batch(statements);
@@ -1286,7 +1289,8 @@ function toDiscovery(r) {
     isPreOrder: Boolean(r.is_pre_order),
     releaseDate: String(r.release_date ?? ""),
     orderLimit: r.order_limit === null || r.order_limit === void 0 ? null : Number(r.order_limit),
-    signal: String(r.signal ?? "")
+    signal: String(r.signal ?? ""),
+    otherOffers: r.other_offers === null || r.other_offers === void 0 ? null : Number(r.other_offers)
   };
 }
 async function discoveriesToReview(db2, userId, limit = 200) {
@@ -3396,7 +3400,12 @@ function renderFinds() {
     const facts = [];
     if (d.retailer) facts.push(d.retailer);
     if (d.kind) facts.push(d.kind);
-    if (d.price) facts.push(money(d.price));
+    // Whose price this is, when it is not the one the page will show you.
+    if (d.price) {
+      facts.push(d.state === 'out' && d.otherOffers > 0
+        ? money(d.price) + ' at ' + (d.retailer || 'the retailer')
+        : money(d.price));
+    }
     if (d.orderLimit) facts.push('limit ' + d.orderLimit + ' per order');
     left.appendChild(el('div', 'meta', facts.join(' \xB7 ')));
 
@@ -3420,6 +3429,18 @@ function renderFinds() {
           : days > 0 ? 'releases ' + d.releaseDate + ' \xB7 ' + days + 'd'
           : days === 0 ? 'releases today'
           : 'released ' + d.releaseDate));
+    }
+
+    // The warning that was missing.
+    //
+    // A Walmart find is its own listing, at its own price, out of stock \u2014 all
+    // true, and then the link opens a page where a marketplace seller holds
+    // the buy box at forty times the money, because Walmart has none and the
+    // box falls to whoever does. Nothing is wrong with the find. Being sent to
+    // that page with no warning is what was wrong.
+    if (d.state === 'out' && d.otherOffers > 0) {
+      tags.appendChild(el('span', 'pill flag',
+        d.otherOffers + (d.otherOffers === 1 ? ' reseller has' : ' resellers have') + ' the buy box'));
     }
 
     if (d.confidence === 'unsure') {

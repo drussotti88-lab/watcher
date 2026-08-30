@@ -627,3 +627,14 @@ UPDATE discoveries d
    SET retailer = s.retailer
   FROM sources s
  WHERE s.user_id = d.user_id AND s.id = d.source_id AND d.retailer = '';
+
+-- How many other sellers are waiting behind a retailer's own listing.
+--
+-- Walmart's search, filtered to its own stock, returns exactly that: Walmart's
+-- listing, at Walmart's price, out of stock. Truthful — and then the link goes
+-- to a page where a reseller holds the buy box at forty times the money,
+-- because Walmart has none and the box falls to whoever does.
+--
+-- Nothing was wrong with the find. What was missing was the warning, so
+-- `additionalOfferCount` is carried through and said out loud on the card.
+ALTER TABLE discoveries ADD COLUMN IF NOT EXISTS other_offers INTEGER;

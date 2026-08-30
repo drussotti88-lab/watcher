@@ -129,3 +129,28 @@ test('__NEXT_DATA__ is found even with the nonce attribute Walmart adds', () => 
   assert.equal(nextData('<html></html>'), null);
   assert.equal(nextData('<script id="__NEXT_DATA__">nope</script>'), null);
 });
+
+test('THE OTHER SELLERS ARE COUNTED, BECAUSE THEY ARE THE SURPRISE', async () => {
+  // Every row here is Walmart's own listing, at Walmart's own price, out of
+  // stock — and all of that is true. Then the link opens a page where a
+  // marketplace seller holds the buy box at forty times the money, because
+  // Walmart has none and the box falls to whoever does. Nothing was wrong with
+  // the find; the warning was what was missing.
+  const withOffers = rows.filter((r) => (r.otherOffers ?? 0) > 0);
+  assert.ok(withOffers.length > 10, `expected most rows to have rival offers, got ${withOffers.length}`);
+
+  const crown = rows.find((r) => r.usItemId === '2541703476');
+  assert.equal(crown?.otherOffers, 6);
+  assert.equal(crown?.state, 'out', "Walmart's own listing is the one out of stock");
+  assert.equal(crown?.sellerName, 'Walmart.com');
+  assert.equal(crown?.price, 49.87, "and the price is Walmart's, not the buy box's");
+});
+
+test('nothing on this page can be put in a basket', async () => {
+  // The other half of the same fact, and the one that makes the warning
+  // truthful rather than alarmist: Walmart is genuinely out of every one of
+  // these, so none is buyable from Walmart at any price today.
+  for (const r of rows) {
+    assert.equal(r.canAddToCart, false, `${r.name} claims to be addable`);
+  }
+});
