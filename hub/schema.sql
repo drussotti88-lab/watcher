@@ -638,3 +638,19 @@ UPDATE discoveries d
 -- Nothing was wrong with the find. What was missing was the warning, so
 -- `additionalOfferCount` is carried through and said out loud on the card.
 ALTER TABLE discoveries ADD COLUMN IF NOT EXISTS other_offers INTEGER;
+
+-- Relabel mini tins that were recorded before the classifier told them apart.
+--
+-- `kind` is deliberately never overwritten on a re-sighting: a row already
+-- labelled should not be relabelled by a later sweep that guessed worse. The
+-- cost of that rule is that improving the classifier never reaches rows already
+-- in the ledger — and a mini tin labelled `tin` now quotes a typical price of
+-- $24.99 against a real one nearer $12.99, which is exactly the number somebody
+-- would anchor a ceiling to.
+--
+-- Narrow on purpose: only rows whose name says mini tin, only where the kind is
+-- the one the old classifier would have given.
+UPDATE discoveries
+   SET kind = 'mini tin'
+ WHERE kind = 'tin'
+   AND (name ILIKE '%mini tin%' OR name ILIKE '%mini tins%');
