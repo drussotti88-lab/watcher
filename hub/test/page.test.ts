@@ -1393,7 +1393,8 @@ test('A CAPPED QUANTITY IS SHOWN AS A FLOOR, NOT A COUNT', async () => {
   const h = await boot(withRelease({ state: 'in', availableQuantity: 10, orderLimit: 2 }));
   const text = h.doc.body.querySelector('#tab-missions').textContent;
   assert.match(text, /10\+ available/);
-  assert.match(text, /at least 10/);
+  // And nothing explaining what the plus means. The plus means it.
+  assert.ok(!text.includes('at least 10'));
 });
 
 test('a number below the ceiling is reported plainly', async () => {

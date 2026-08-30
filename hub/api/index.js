@@ -2436,13 +2436,10 @@ function missionCard(m) {
   // number falls under the ceiling and starts telling the truth.
   if (m.availableQuantity !== null && m.availableQuantity !== undefined) {
     const q = m.availableQuantity;
+    // The plus carries the whole meaning. A sentence underneath explaining
+    // that "10+" means at least ten is the interface apologising for itself.
     const capped = q === 10 || q === 20;
-    right.appendChild(el('div', 'meta', (capped ? q + '+ available' : q + ' available')));
-    if (capped) {
-      const hint = el('div', 'meta', 'Target caps this figure \u2014 it means at least ' + q);
-      hint.style.opacity = '.7';
-      right.appendChild(hint);
-    }
+    right.appendChild(el('div', 'meta', capped ? q + '+ available' : q + ' available'));
   }
   // The number you can actually walk away with, which is not the one above.
   // A limit of 2 against 10 available is two, and burying that in the note
