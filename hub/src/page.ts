@@ -769,7 +769,15 @@ function missionCard(m) {
     const label = m.state === 'in' ? 'IN STOCK'
       : m.state === 'out' ? 'out of stock'
       : m.state === 'unchecked' ? 'never checked' : m.state;
-    flags.appendChild(el('span', 'pill s-' + m.state, label));
+    // A pre-order is orderable, not in stock, and those call for different
+    // decisions — one is a race, the other is a queue. Saying IN STOCK on a
+    // box that ships in November is the single most misleading thing this
+    // card could say.
+    if (m.isPreOrder && m.state === 'in') {
+      flags.appendChild(el('span', 'pill s-queue', 'PRE-ORDER'));
+    } else {
+      flags.appendChild(el('span', 'pill s-' + m.state, label));
+    }
   }
 
   if (!m.enabled) flags.appendChild(el('span', 'pill s-out', 'paused'));
@@ -788,9 +796,15 @@ function missionCard(m) {
   if (m.confidence === 'inferred' && !notReading(m)) {
     flags.appendChild(el('span', 'pill s-unknown', 'inferred read'));
   }
-  if (m.isPreOrder) {
-    flags.appendChild(el('span', 'pill s-queue',
-      'preorder' + (m.releaseDate ? ' · ' + m.releaseDate : '')));
+  if (m.isPreOrder && m.releaseDate) {
+    flags.appendChild(el('span', 'pill info', 'ships ' + m.releaseDate));
+  }
+  // What an armed mission would actually do about it. Worth saying on the card
+  // rather than only inside the settings panel, because it decides whether
+  // money moves.
+  if (m.isPreOrder && m.armed) {
+    flags.appendChild(el('span', 'pill ' + (m.preOrderPolicy === 'allow' ? 'flag' : 'info'),
+      m.preOrderPolicy === 'allow' ? 'will buy pre-orders' : 'stock only — will not buy'));
   }
   // The one thing on this card that looks forwards.
   //
@@ -923,6 +937,13 @@ function missionPanel(m) {
           <option value="any">Any seller, under the ceiling</option>
         </select>
       </label>
+      <label class="f">Pre-orders
+        <span class="hint">orderable now, ships on release day</span>
+        <select name="preOrderPolicy">
+          <option value="skip">Skip — buy stock only</option>
+          <option value="allow">Buy pre-orders too</option>
+        </select>
+      </label>
     </div>
     <label class="check"><input type="checkbox" name="enabled"> Watching — check this listing on schedule</label>
     <label class="check"><input type="checkbox" name="armed"> Armed — may buy without asking me</label>
@@ -954,6 +975,7 @@ function missionPanel(m) {
   q('quantity').value = m.quantity;
   q('checkEverySeconds').value = String(m.checkEverySeconds);
   q('sellerPolicy').value = m.sellerPolicy;
+  q('preOrderPolicy').value = m.preOrderPolicy || 'skip';
   q('enabled').checked = m.enabled;
   q('armed').checked = m.armed;
   const msg = form.querySelector('.msg');
@@ -982,6 +1004,7 @@ function missionPanel(m) {
           ceiling: num(f.ceiling),
           quantity: Number(f.quantity),
           sellerPolicy: f.sellerPolicy,
+          preOrderPolicy: f.preOrderPolicy,
           checkEverySeconds: Number(f.checkEverySeconds),
         });
         load();

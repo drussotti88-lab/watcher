@@ -26,6 +26,16 @@ export interface Mission {
   ceiling: number | null;
   quantity: number;
   sellerPolicy: 'retailer_only' | 'any';
+  /**
+   * What to do when the thing on offer is a pre-order.
+   *
+   * 'skip' is the default and the safe direction. A pre-order is orderable but
+   * it is not stock: the money leaves now and the box arrives whenever the
+   * publisher says. Buying one on a mission set up to catch a restock is a
+   * surprise, and surprises about money are the kind this system exists to
+   * avoid.
+   */
+  preOrderPolicy: 'skip' | 'allow';
   checkEverySeconds: number;
   /** A "test run" was asked for. Due now, whatever the schedule says. */
   checkNow?: boolean;

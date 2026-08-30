@@ -95,6 +95,7 @@ const MISSION_FIELDS = [
   'ceiling',
   'quantity',
   'sellerPolicy',
+  'preOrderPolicy',
   'checkEverySeconds',
   'state',
   'price',
@@ -413,4 +414,30 @@ test('THE WATCHER OWN CODE CAN POST A LOG LINE THIS HUB ACCEPTS', async (t) => {
   assert.ok(line.message.includes('target.com'), 'the diagnosis did not survive');
   assert.ok(!line.message.includes('018F2A9C3B4D5E6F7A8B'), 'the visitor id survived, and must not');
   assert.deepEqual(exported.body.warnings, []);
+});
+
+test('THE PRE-ORDER POLICY REACHES THE WATCHER, OR IT CANNOT ENFORCE IT', async () => {
+  // judge() declines a pre-order on this field. If the Hub stopped sending it
+  // the Watcher would read undefined, which is not 'allow' — so it would fail
+  // safe — but it would also silently ignore a mission set to allow them.
+  const { db, listingId } = await withMission();
+  await call(db, 'POST', '/api/missions', { listingId, preOrderPolicy: 'allow' });
+
+  const { body } = await call(db, 'GET', '/api/missions/active');
+  assert.equal(body.missions[0].preOrderPolicy, 'allow');
+});
+
+test('a mission defaults to skipping pre-orders', async () => {
+  // The safe direction, and the one a person who did not think about it wants:
+  // a mission set up to catch a restock should not buy a November ship date.
+  const { db } = await withMission();
+  const { body } = await call(db, 'GET', '/api/missions/active');
+  assert.equal(body.missions[0].preOrderPolicy, 'skip');
+});
+
+test('a nonsense policy is refused rather than stored', async () => {
+  const { db, listingId } = await withMission();
+  const res = await call(db, 'POST', '/api/missions', { listingId, preOrderPolicy: 'maybe' });
+  assert.equal(res.status, 400);
+  assert.match(res.body.error, /skip.*allow/);
 });

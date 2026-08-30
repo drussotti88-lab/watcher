@@ -119,6 +119,31 @@ export function judge(
     };
   }
 
+  // ── A pre-order is orderable, and it is not stock ─────────────────────────
+  //
+  // Every reader already knew this and nothing acted on it. schema.org's
+  // PreOrder maps to state 'in' — correctly, you can put it in a basket — and
+  // Walmart states `preOrder.isPreOrder` outright. So a mission armed to catch
+  // a restock would have paid for something shipping in three months and
+  // reported success.
+  //
+  // Checked before the ceiling on purpose: "this is a pre-order" is a better
+  // reason to decline than "it costs too much", and it is the one you want in
+  // the log.
+  if (reading.preOrder.isPreOrder && mission.preOrderPolicy !== 'allow') {
+    const when = reading.preOrder.releaseDate
+      ? `releases ${reading.preOrder.releaseDate}`
+      : 'no release date given';
+    return {
+      observation,
+      run: {
+        ...base,
+        outcome: 'declined',
+        reason: `pre-order (${when}), and this mission buys stock only`,
+      },
+    };
+  }
+
   if (mission.ceiling === null) {
     return {
       observation,

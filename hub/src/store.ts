@@ -595,6 +595,16 @@ export async function deleteListing(db: Sql, userId: number, id: number): Promis
 
 export type SellerPolicy = 'retailer_only' | 'any';
 
+/**
+ * Whether a mission may buy something that is orderable but not in stock.
+ *
+ * A pre-order takes the money now and delivers when the publisher says. On a
+ * mission set up to catch a restock that is a surprise, and surprises about
+ * money are what this system exists to prevent — so 'skip' is the default and
+ * allowing it is a deliberate act.
+ */
+export type PreOrderPolicy = 'skip' | 'allow';
+
 export interface MissionInput {
   listingId: number;
   label?: string;
@@ -603,6 +613,7 @@ export interface MissionInput {
   ceiling?: number | null;
   quantity?: number;
   sellerPolicy?: SellerPolicy;
+  preOrderPolicy?: PreOrderPolicy;
   checkEverySeconds?: number;
   notes?: string;
 }
@@ -836,6 +847,8 @@ export interface MissionRow {
   ceiling: number | null;
   quantity: number;
   sellerPolicy: SellerPolicy;
+  /** 'skip' declines a pre-order; 'allow' treats it as buyable. */
+  preOrderPolicy: PreOrderPolicy;
   checkEverySeconds: number;
   /** A "test run" is pending: check this one next pass, whatever its schedule. */
   checkNow: boolean;
@@ -873,6 +886,7 @@ function toMission(r: Record<string, unknown>): MissionRow {
     ceiling: toPrice(r.ceiling),
     quantity: Number(r.quantity ?? 1),
     sellerPolicy: (String(r.seller_policy ?? 'retailer_only') as SellerPolicy),
+    preOrderPolicy: (String(r.preorder_policy ?? 'skip') as PreOrderPolicy),
     checkEverySeconds: Number(r.check_every_s ?? 60),
     checkNow: r.check_now_at !== null && r.check_now_at !== undefined,
     notes: String(r.notes ?? ''),
@@ -990,6 +1004,9 @@ export function validateMission(m: MissionInput): string | null {
   if (m.armed && (m.ceiling === undefined || m.ceiling === null)) {
     return 'set a price ceiling before arming — armed with no ceiling is an open cheque';
   }
+  if (m.preOrderPolicy && !['skip', 'allow'].includes(m.preOrderPolicy)) {
+    return "preOrderPolicy must be 'skip' or 'allow'";
+  }
   if (m.sellerPolicy && !['retailer_only', 'any'].includes(m.sellerPolicy)) {
     return 'seller policy must be retailer_only or any';
   }
@@ -1019,8 +1036,8 @@ export async function upsertMission(
 
   const rows = await db.query(
     `INSERT INTO missions (user_id, listing_id, label, enabled, armed, ceiling, quantity,
-                           seller_policy, check_every_s, notes)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+                           seller_policy, preorder_policy, check_every_s, notes)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
      ON CONFLICT (listing_id) DO UPDATE SET
        label = EXCLUDED.label,
        enabled = EXCLUDED.enabled,
@@ -1028,6 +1045,7 @@ export async function upsertMission(
        ceiling = EXCLUDED.ceiling,
        quantity = EXCLUDED.quantity,
        seller_policy = EXCLUDED.seller_policy,
+       preorder_policy = EXCLUDED.preorder_policy,
        check_every_s = EXCLUDED.check_every_s,
        notes = EXCLUDED.notes
      RETURNING id`,
@@ -1040,6 +1058,7 @@ export async function upsertMission(
       m.ceiling ?? null,
       m.quantity ?? 1,
       m.sellerPolicy ?? 'retailer_only',
+      m.preOrderPolicy ?? 'skip',
       m.checkEverySeconds ?? 60,
       m.notes ?? '',
     ],

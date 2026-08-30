@@ -1452,3 +1452,69 @@ test('THE TABS WRAP RATHER THAN RUNNING OFF THE EDGE', async () => {
   const tabs = /\.tabs \{([^}]*)\}/.exec(style)?.[1] ?? '';
   assert.match(tabs, /flex-wrap:\s*wrap/);
 });
+
+// ── Pre-order is not in stock ────────────────────────────────────────────────
+
+const preorderMission = (over: Record<string, unknown> = {}): unknown => {
+  const base = JSON.parse(JSON.stringify(DASHBOARD));
+  Object.assign(base.missions[0], {
+    state: 'in', isPreOrder: true, releaseDate: '2026-11-14',
+    preOrderPolicy: 'skip', armed: false, ...over,
+  });
+  return base;
+};
+
+test('A PRE-ORDER DOES NOT SAY IN STOCK', async () => {
+  // Orderable and in stock call for different decisions — one is a race, the
+  // other is a queue. "IN STOCK" on a box that ships in November is the single
+  // most misleading thing this card could say.
+  const h = await boot(preorderMission());
+  const pills = [...h.doc.querySelectorAll('.pill')].map((p) => p.textContent);
+  assert.ok(pills.includes('PRE-ORDER'));
+  assert.ok(!pills.includes('IN STOCK'));
+});
+
+test('and it says when it ships', async () => {
+  const h = await boot(preorderMission());
+  const pills = [...h.doc.querySelectorAll('.pill')].map((p) => p.textContent);
+  assert.ok(pills.some((t) => t.includes('ships 2026-11-14')));
+});
+
+test('AN ARMED MISSION SAYS WHAT IT WILL DO ABOUT IT', async () => {
+  // Whether money moves is worth saying on the card, not only inside a panel.
+  const skip = await boot(preorderMission({ armed: true, preOrderPolicy: 'skip' }));
+  assert.ok([...skip.doc.querySelectorAll('.pill')].some((p) => p.textContent.includes('will not buy')));
+
+  const allow = await boot(preorderMission({ armed: true, preOrderPolicy: 'allow' }));
+  assert.ok([...allow.doc.querySelectorAll('.pill')].some((p) => p.textContent.includes('will buy pre-orders')));
+});
+
+test('a watching-only pre-order makes no claim about buying', async () => {
+  const h = await boot(preorderMission({ armed: false }));
+  const pills = [...h.doc.querySelectorAll('.pill')].map((p) => p.textContent).join(' ');
+  assert.ok(!pills.includes('will buy'));
+  assert.ok(!pills.includes('will not buy'));
+});
+
+test('an ordinary in-stock item still says IN STOCK', async () => {
+  const h = await boot(preorderMission({ isPreOrder: false, releaseDate: null }));
+  const pills = [...h.doc.querySelectorAll('.pill')].map((p) => p.textContent);
+  assert.ok(pills.includes('IN STOCK'));
+  assert.ok(!pills.includes('PRE-ORDER'));
+});
+
+test('the policy is editable and is sent when saved', async () => {
+  const h = await boot(preorderMission());
+  const panel = $(h, '#tab-missions details');
+  panel.open = true;
+  const form = h.doc.querySelector('#tab-missions form');
+  form.querySelector('[name=preOrderPolicy]').value = 'allow';
+  h.reply('POST /api/missions', { mission: {} });
+
+  submit(form, h.dom.window);
+  await h.settle();
+
+  const call = h.calls.find((c) => c.path === '/api/missions');
+  assert.ok(call, 'saving did nothing');
+  assert.equal(call.body.preOrderPolicy, 'allow');
+});

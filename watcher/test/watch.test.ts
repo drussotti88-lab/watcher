@@ -28,7 +28,7 @@ const mission = (over: Partial<Mission> = {}): Mission => ({
   armed: false,
   ceiling: null,
   quantity: 1,
-  sellerPolicy: 'retailer_only',
+  sellerPolicy: 'retailer_only', preOrderPolicy: 'skip',
   checkEverySeconds: 30,
   state: 'out',
   price: null,
@@ -518,4 +518,62 @@ test('a pending test run is never reported as "nothing due"', () => {
   const pacer = new Pacer(STEADY, () => 0);
   const asked = mission({ lastCheckedAt: new Date(T0 - 1_000).toISOString(), checkNow: true });
   assert.equal(nextUp([asked], pacer, T0)?.id, 1, 'and it is due');
+});
+
+// ── A pre-order is orderable, and it is not stock ────────────────────────────
+//
+// Every reader already knew this and nothing acted on it. schema.org's
+// PreOrder maps to state 'in' — correctly, you can put it in a basket — and
+// Walmart states preOrder.isPreOrder outright. So an armed mission would have
+// paid for something shipping in three months and reported success.
+
+const preordered = (over: Partial<Reading> = {}): Reading =>
+  reading({ state: 'in', preOrder: { isPreOrder: true, releaseDate: '2026-11-14' }, ...over });
+
+test('AN ARMED MISSION DOES NOT BUY A PRE-ORDER BY DEFAULT', () => {
+  const { run } = judge(mission({ armed: true, ceiling: 60 }), preordered());
+  assert.equal(run?.outcome, 'declined');
+  assert.match(run!.reason, /pre-order \(releases 2026-11-14\), and this mission buys stock only/);
+});
+
+test('the pre-order reason beats the price reason', () => {
+  // "This is a pre-order" is a better answer than "it costs too much", and it
+  // is the one you want in the log when you come back to ask what happened.
+  const { run } = judge(
+    mission({ armed: true, ceiling: 10 }),
+    preordered({ price: 99.99 }),
+  );
+  assert.match(run!.reason, /pre-order/);
+  assert.ok(!run!.reason.includes('ceiling'));
+});
+
+test('a mission told to allow pre-orders buys one', () => {
+  const { run } = judge(
+    mission({ armed: true, ceiling: 60, preOrderPolicy: 'allow' }),
+    preordered(),
+  );
+  assert.equal(run?.outcome, 'declined');
+  assert.match(run!.reason, /would have bought/, 'declined only because checkout is unbuilt');
+});
+
+test('a pre-order with no date still says so', () => {
+  // Pokémon Center states PreOrder availability without a date. "Unknown when"
+  // is a reason to decline, not a reason to say nothing.
+  const { run } = judge(
+    mission({ armed: true, ceiling: 60 }),
+    preordered({ preOrder: { isPreOrder: true, releaseDate: null } }),
+  );
+  assert.match(run!.reason, /no release date given/);
+});
+
+test('an ordinary in-stock item is untouched by any of this', () => {
+  const { run } = judge(mission({ armed: true, ceiling: 60 }), reading({ state: 'in' }));
+  assert.match(run!.reason, /would have bought/);
+});
+
+test('a watching-only mission still just reports a pre-order', () => {
+  // The policy is about spending. A mission that cannot spend has no decision
+  // to make and should not start inventing one.
+  const { run } = judge(mission({ armed: false }), preordered());
+  assert.equal(run?.outcome, 'in_stock');
 });

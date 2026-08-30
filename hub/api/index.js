@@ -763,6 +763,7 @@ function toMission(r) {
     ceiling: toPrice(r.ceiling),
     quantity: Number(r.quantity ?? 1),
     sellerPolicy: String(r.seller_policy ?? "retailer_only"),
+    preOrderPolicy: String(r.preorder_policy ?? "skip"),
     checkEverySeconds: Number(r.check_every_s ?? 60),
     checkNow: r.check_now_at !== null && r.check_now_at !== void 0,
     notes: String(r.notes ?? ""),
@@ -838,6 +839,9 @@ function validateMission(m) {
   if (m.armed && (m.ceiling === void 0 || m.ceiling === null)) {
     return "set a price ceiling before arming \u2014 armed with no ceiling is an open cheque";
   }
+  if (m.preOrderPolicy && !["skip", "allow"].includes(m.preOrderPolicy)) {
+    return "preOrderPolicy must be 'skip' or 'allow'";
+  }
   if (m.sellerPolicy && !["retailer_only", "any"].includes(m.sellerPolicy)) {
     return "seller policy must be retailer_only or any";
   }
@@ -857,8 +861,8 @@ async function upsertMission(db2, userId, m) {
   if (!owns.length) throw new Error("that listing does not belong to you");
   const rows = await db2.query(
     `INSERT INTO missions (user_id, listing_id, label, enabled, armed, ceiling, quantity,
-                           seller_policy, check_every_s, notes)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+                           seller_policy, preorder_policy, check_every_s, notes)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
      ON CONFLICT (listing_id) DO UPDATE SET
        label = EXCLUDED.label,
        enabled = EXCLUDED.enabled,
@@ -866,6 +870,7 @@ async function upsertMission(db2, userId, m) {
        ceiling = EXCLUDED.ceiling,
        quantity = EXCLUDED.quantity,
        seller_policy = EXCLUDED.seller_policy,
+       preorder_policy = EXCLUDED.preorder_policy,
        check_every_s = EXCLUDED.check_every_s,
        notes = EXCLUDED.notes
      RETURNING id`,
@@ -878,6 +883,7 @@ async function upsertMission(db2, userId, m) {
       m.ceiling ?? null,
       m.quantity ?? 1,
       m.sellerPolicy ?? "retailer_only",
+      m.preOrderPolicy ?? "skip",
       m.checkEverySeconds ?? 60,
       m.notes ?? ""
     ]
@@ -2353,7 +2359,15 @@ function missionCard(m) {
     const label = m.state === 'in' ? 'IN STOCK'
       : m.state === 'out' ? 'out of stock'
       : m.state === 'unchecked' ? 'never checked' : m.state;
-    flags.appendChild(el('span', 'pill s-' + m.state, label));
+    // A pre-order is orderable, not in stock, and those call for different
+    // decisions \u2014 one is a race, the other is a queue. Saying IN STOCK on a
+    // box that ships in November is the single most misleading thing this
+    // card could say.
+    if (m.isPreOrder && m.state === 'in') {
+      flags.appendChild(el('span', 'pill s-queue', 'PRE-ORDER'));
+    } else {
+      flags.appendChild(el('span', 'pill s-' + m.state, label));
+    }
   }
 
   if (!m.enabled) flags.appendChild(el('span', 'pill s-out', 'paused'));
@@ -2372,9 +2386,15 @@ function missionCard(m) {
   if (m.confidence === 'inferred' && !notReading(m)) {
     flags.appendChild(el('span', 'pill s-unknown', 'inferred read'));
   }
-  if (m.isPreOrder) {
-    flags.appendChild(el('span', 'pill s-queue',
-      'preorder' + (m.releaseDate ? ' \xB7 ' + m.releaseDate : '')));
+  if (m.isPreOrder && m.releaseDate) {
+    flags.appendChild(el('span', 'pill info', 'ships ' + m.releaseDate));
+  }
+  // What an armed mission would actually do about it. Worth saying on the card
+  // rather than only inside the settings panel, because it decides whether
+  // money moves.
+  if (m.isPreOrder && m.armed) {
+    flags.appendChild(el('span', 'pill ' + (m.preOrderPolicy === 'allow' ? 'flag' : 'info'),
+      m.preOrderPolicy === 'allow' ? 'will buy pre-orders' : 'stock only \u2014 will not buy'));
   }
   // The one thing on this card that looks forwards.
   //
@@ -2507,6 +2527,13 @@ function missionPanel(m) {
           <option value="any">Any seller, under the ceiling</option>
         </select>
       </label>
+      <label class="f">Pre-orders
+        <span class="hint">orderable now, ships on release day</span>
+        <select name="preOrderPolicy">
+          <option value="skip">Skip \u2014 buy stock only</option>
+          <option value="allow">Buy pre-orders too</option>
+        </select>
+      </label>
     </div>
     <label class="check"><input type="checkbox" name="enabled"> Watching \u2014 check this listing on schedule</label>
     <label class="check"><input type="checkbox" name="armed"> Armed \u2014 may buy without asking me</label>
@@ -2538,6 +2565,7 @@ function missionPanel(m) {
   q('quantity').value = m.quantity;
   q('checkEverySeconds').value = String(m.checkEverySeconds);
   q('sellerPolicy').value = m.sellerPolicy;
+  q('preOrderPolicy').value = m.preOrderPolicy || 'skip';
   q('enabled').checked = m.enabled;
   q('armed').checked = m.armed;
   const msg = form.querySelector('.msg');
@@ -2566,6 +2594,7 @@ function missionPanel(m) {
           ceiling: num(f.ceiling),
           quantity: Number(f.quantity),
           sellerPolicy: f.sellerPolicy,
+          preOrderPolicy: f.preOrderPolicy,
           checkEverySeconds: Number(f.checkEverySeconds),
         });
         load();

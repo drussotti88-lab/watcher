@@ -538,3 +538,12 @@ ALTER TABLE sources ADD COLUMN IF NOT EXISTS sweep_now_at TIMESTAMPTZ;
 -- straight to the product. No download and no hosting: it is the retailer's own
 -- CDN URL, asked for at thumbnail size.
 ALTER TABLE discoveries ADD COLUMN IF NOT EXISTS image_url TEXT NOT NULL DEFAULT '';
+
+-- Whether a mission may buy a pre-order.
+--
+-- 'skip' by default, and the default is the point. Every reader already knew
+-- an offer was a pre-order — schema.org PreOrder maps to 'in' because you
+-- really can put it in a basket, and Walmart says isPreOrder outright — but
+-- nothing acted on it, so an armed mission would have paid for something
+-- shipping in three months and reported success.
+ALTER TABLE missions ADD COLUMN IF NOT EXISTS preorder_policy TEXT NOT NULL DEFAULT 'skip';

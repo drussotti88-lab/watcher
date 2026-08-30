@@ -163,6 +163,7 @@ const mission = (over: Partial<Mission> = {}): Mission => ({
   id: 1, listingId: 11, productKey: 'mega-evolution-etb', productName: 'Mega Evolution ETB',
   retailer: 'Target', externalId: '1012644666', url: 'https://www.target.com/p/-/A-1012644666',
   enabled: true, armed: false, ceiling: null, quantity: 1, sellerPolicy: 'retailer_only',
+  preOrderPolicy: 'skip',
   checkEverySeconds: 30, state: 'out', price: null, lastCheckedAt: '', ...over,
 });
 
