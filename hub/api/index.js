@@ -4107,7 +4107,8 @@ function createHandler(db2, env2) {
       const known = await knownIds(db2, userId, sourceId);
       const fresh = clean.filter((i) => !known.has(i.externalId));
       const isFirstSweep = !source.seeded;
-      const toAnnounce = await recordDiscoveries(db2, userId, sourceId, fresh, !isFirstSweep);
+      await recordDiscoveries(db2, userId, sourceId, clean, !isFirstSweep);
+      const toAnnounce = isFirstSweep ? [] : fresh;
       for (const item of toAnnounce) {
         await attachIdentity(db2, userId, sourceId, source.retailer, item);
       }

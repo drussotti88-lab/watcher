@@ -748,7 +748,22 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       const known = await store.knownIds(db, userId, sourceId);
       const fresh = clean.filter((i) => !known.has(i.externalId));
       const isFirstSweep = !source.seeded;
-      const toAnnounce = await store.recordDiscoveries(db, userId, sourceId, fresh, !isFirstSweep);
+
+      // Record everything seen, not only what is new.
+      //
+      // This used to pass `fresh`, which meant a product already in the ledger
+      // was never written again — so its price, its stock state and its street
+      // date were frozen at the first sighting, however long ago that was. The
+      // upsert's whole DO UPDATE branch was unreachable in practice, and the
+      // review card was describing last week.
+      //
+      // New and seen-again are still different things; that difference belongs
+      // to *announcing*, below, not to recording.
+      await store.recordDiscoveries(db, userId, sourceId, clean, !isFirstSweep);
+
+      // A first sweep is a baseline: everything is "new" against an empty
+      // memory, so announcing it would be thirty alerts saying nothing.
+      const toAnnounce = isFirstSweep ? [] : fresh;
 
       for (const item of toAnnounce) {
         await store.attachIdentity(db, userId, sourceId, source.retailer, item);

@@ -325,3 +325,68 @@ test('INGEST CAN SAY IT IS NOT THE END OF THE SWEEP', async () => {
   });
   assert.equal((await store.sweepState(db, USER, 'tgt2', 24)).queued, false, 'and now it is done');
 });
+
+test('A SIGHTING OF SOMETHING ALREADY KNOWN STILL UPDATES IT', async () => {
+  // This used to be false, and it was the kind of false that looks like
+  // nothing: `/ingest` recorded only what it had never seen, so a product
+  // already in the ledger kept the price, stock state and street date it had
+  // on the day it was first found — however long ago that was. The upsert's
+  // whole update branch was unreachable, and the review card described last
+  // week while looking perfectly current.
+  const db = await setup();
+  await db.query(
+    `INSERT INTO sources (id, label, retailer, kind, url, via, config, enabled, seeded)
+     VALUES ('tgt', 'Target TCG', 'Target', 'watcher', '', 'watcher',
+             '{"filters":["pokemon"]}'::jsonb, true, false)`,
+  );
+
+  const item = {
+    externalId: '99',
+    name: 'Pokemon 30th Celebration ETB',
+    url: 'u',
+    price: 69.99,
+    retailer: 'Target',
+    state: 'out',
+    isPreOrder: false,
+    releaseDate: '2026-09-16',
+    signal: 'scheduled',
+  };
+  await call(db, 'POST', '/ingest', { token: TOKEN, body: { sourceId: 'tgt', items: [item] } });
+
+  // The same product, later: it has come into stock and is no longer a
+  // pre-order. Both facts have to survive the trip.
+  await call(db, 'POST', '/ingest', {
+    token: TOKEN,
+    body: {
+      sourceId: 'tgt',
+      items: [{ ...item, price: 64.99, state: 'in', signal: 'buyable', releaseDate: '' }],
+    },
+  });
+
+  const rows = await db.query<{
+    price: string; state: string; signal: string; release_date: string; retailer: string;
+  }>(`SELECT price, state, signal, release_date, retailer FROM discoveries
+       WHERE source_id = 'tgt' AND external_id = '99'`);
+  assert.equal(rows.length, 1, 'still one row — updated, not duplicated');
+  assert.equal(Number(rows[0]!.price), 64.99, 'the price is the current one');
+  assert.equal(rows[0]!.state, 'in');
+  assert.equal(rows[0]!.signal, 'buyable');
+  assert.equal(rows[0]!.retailer, 'Target', 'and the retailer is not lost on update');
+});
+
+test('seeing something again does not announce it a second time', async () => {
+  // The other half of the same change. Recording everything must not turn into
+  // alerting about everything, or the feed cries wolf on its second run.
+  const db = await setup();
+  await db.query(
+    `INSERT INTO sources (id, label, retailer, kind, url, via, config, enabled, seeded)
+     VALUES ('tgt2', 'Target TCG', 'Target', 'watcher', '', 'watcher',
+             '{"filters":["pokemon"]}'::jsonb, true, true)`,
+  );
+  const items = [{ externalId: '5', name: 'Pokemon ETB', url: 'u', price: 1 }];
+  const first = await call(db, 'POST', '/ingest', { token: TOKEN, body: { sourceId: 'tgt2', items } });
+  assert.deepEqual(first.body.names, ['Pokemon ETB'], 'announced once');
+  const again = await call(db, 'POST', '/ingest', { token: TOKEN, body: { sourceId: 'tgt2', items } });
+  assert.deepEqual(again.body.names, [], 'and not again');
+  assert.equal(again.body.new, 0);
+});
