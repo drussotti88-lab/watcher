@@ -18,6 +18,33 @@ export interface Discovered {
   foundBy?: string;
   /** The retailer's own product photo, at thumbnail size. */
   imageUrl?: string;
+
+  // ── What it is, beyond a name and a price ──────────────────────────────────
+  //
+  // Keeping or forgetting is a judgement, and the card was asking for one while
+  // withholding most of what the sweep already knew.
+
+  /** Which shop. Denormalised from the source so the review list stays one query. */
+  retailer?: string;
+  /** 'in' | 'out' | 'unknown' at the moment the sweep looked. */
+  state?: string;
+  /**
+   * A pre-order takes the money now and ships whenever the publisher says, so
+   * it is a different decision from a restock, not a variety of one.
+   */
+  isPreOrder?: boolean;
+  /** The publisher's street date, when the retailer publishes one. */
+  releaseDate?: string | null;
+  /** Per-customer cap, when the retailer states it. */
+  orderLimit?: number | null;
+  /**
+   * Why the sweep surfaced it: 'buyable', 'scheduled', 'recent'.
+   *
+   * Distinct from foundBy, which is the *query*. Pokémon Center is walked
+   * rather than searched and has no query, so its rows were writing the signal
+   * into foundBy and the card read `found by "recent"` — true, and useless.
+   */
+  signal?: string;
 }
 
 export type SourceKind = 'sitemap_index' | 'sitemap' | 'json_list' | 'watcher';

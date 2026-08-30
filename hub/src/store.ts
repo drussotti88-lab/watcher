@@ -159,8 +159,9 @@ export async function recordDiscoveries(
     // already labelled is never relabelled by a query that guessed worse.
     text: `INSERT INTO discoveries
              (user_id, source_id, external_id, url, name, price, announced, kind, confidence,
-              found_by, image_url)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+              found_by, image_url, retailer, state, is_pre_order, release_date, order_limit,
+              signal)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
            ON CONFLICT (user_id, source_id, external_id) DO UPDATE SET
              found_by = CASE
                WHEN EXCLUDED.found_by = '' THEN discoveries.found_by
@@ -181,6 +182,20 @@ export async function recordDiscoveries(
              image_url = CASE
                WHEN discoveries.image_url = '' THEN EXCLUDED.image_url
                ELSE discoveries.image_url
+             END,
+             -- These four are the opposite case from image_url and kind: they
+             -- describe the offer *right now*, so the newest sighting wins.
+             -- A find that has come back into stock, or had its street date
+             -- moved, must say so rather than keep the first thing we saw.
+             state = EXCLUDED.state,
+             is_pre_order = EXCLUDED.is_pre_order,
+             release_date = EXCLUDED.release_date,
+             signal = EXCLUDED.signal,
+             price = COALESCE(EXCLUDED.price, discoveries.price),
+             order_limit = COALESCE(EXCLUDED.order_limit, discoveries.order_limit),
+             retailer = CASE
+               WHEN discoveries.retailer = '' THEN EXCLUDED.retailer
+               ELSE discoveries.retailer
              END`,
     params: [
       userId,
@@ -194,6 +209,12 @@ export async function recordDiscoveries(
       item.confidence ?? '',
       item.foundBy ?? '',
       (item.imageUrl ?? '').slice(0, 500),
+      item.retailer ?? '',
+      item.state ?? '',
+      item.isPreOrder === true,
+      item.releaseDate ?? '',
+      item.orderLimit ?? null,
+      item.signal ?? '',
     ],
   }));
   await db.batch(statements);
@@ -1822,6 +1843,15 @@ export interface DiscoveryRow {
   firstSeenAt: string;
   /** True when a product with this name already exists — usually already yours. */
   alreadyHave: boolean;
+  /** Which shop. Blank only for rows found before this was recorded. */
+  retailer: string;
+  /** 'in' | 'out' | 'unknown' as at the last sweep that saw it. */
+  state: string;
+  isPreOrder: boolean;
+  releaseDate: string;
+  orderLimit: number | null;
+  /** 'buyable' | 'scheduled' | 'recent' — why it was surfaced. */
+  signal: string;
 }
 
 function toDiscovery(r: Record<string, unknown>): DiscoveryRow {
@@ -1839,6 +1869,12 @@ function toDiscovery(r: Record<string, unknown>): DiscoveryRow {
     status: String(r.status ?? 'new'),
     firstSeenAt: r.first_seen_at ? new Date(String(r.first_seen_at)).toISOString() : '',
     alreadyHave: Boolean(r.already_have),
+    retailer: String(r.retailer ?? ''),
+    state: String(r.state ?? ''),
+    isPreOrder: Boolean(r.is_pre_order),
+    releaseDate: String(r.release_date ?? ''),
+    orderLimit: r.order_limit === null || r.order_limit === undefined ? null : Number(r.order_limit),
+    signal: String(r.signal ?? ''),
   };
 }
 

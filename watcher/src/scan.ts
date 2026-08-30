@@ -207,6 +207,12 @@ export interface Candidate {
   tcg: TcgClassification;
   /** The query that turned it up. Blank when a scan was run without one. */
   foundBy: string;
+  /** Which shop. The review card's most-missed fact by a distance. */
+  retailer: string;
+  /** A pre-order is a different decision from a restock, not a variety of one. */
+  isPreOrder: boolean;
+  /** Why it was surfaced: 'buyable', 'scheduled', 'recent'. May be blank. */
+  signal: string;
 }
 
 /**
@@ -232,9 +238,25 @@ export function candidates(verdicts: ScanVerdict[], foundBy = ''): Candidate[] {
     // 'unsure' is included on purpose. Showing you a poster collection costs
     // two seconds; dropping a real drop costs the drop.
     if (tcg.verdict === 'no') continue;
-    out.push({ row: v.row, tcg, foundBy });
+    out.push({
+      row: v.row,
+      tcg,
+      foundBy,
+      retailer: 'Target',
+      // Target publishes no pre-order flag; a street date in the future on
+      // something buyable is the only tell there is.
+      isPreOrder: v.row.state === 'in' && isFuture(v.row.releaseDate),
+      signal: v.signal,
+    });
   }
   return out;
+}
+
+/** Is this date still ahead of us? Blank and malformed both mean no. */
+function isFuture(date: string | null, now = Date.now()): boolean {
+  if (!date) return false;
+  const t = Date.parse(`${date}T00:00:00Z`);
+  return Number.isFinite(t) && t > now;
 }
 
 /** What the Hub needs to be told about one candidate. */
@@ -247,6 +269,12 @@ export function toDiscovered(c: Candidate): {
   confidence: string;
   foundBy: string;
   imageUrl: string;
+  retailer: string;
+  state: string;
+  isPreOrder: boolean;
+  releaseDate: string | null;
+  orderLimit: number | null;
+  signal: string;
 } {
   return {
     externalId: c.row.tcin,
@@ -259,6 +287,14 @@ export function toDiscovered(c: Candidate): {
     kind: c.tcg.kind,
     confidence: c.tcg.verdict,
     foundBy: c.foundBy,
+    // And these so that keeping or forgetting is a decision made on what the
+    // sweep actually saw, rather than on a name and a price.
+    retailer: c.retailer,
+    state: c.row.state,
+    isPreOrder: c.isPreOrder,
+    releaseDate: c.row.releaseDate,
+    orderLimit: c.row.orderLimit,
+    signal: c.signal,
   };
 }
 
@@ -449,7 +485,15 @@ export function pcCandidates(verdicts: PcVerdict[], foundBy = ''): Candidate[] {
       imageUrl: v.row.imageUrl,
     },
     tcg: classifyTcg(v.row.name),
-    foundBy: foundBy || v.signal,
+    // The category, not the signal. Writing the signal in here is what made
+    // the review card say `found by "recent"`.
+    foundBy,
+    retailer: 'Pokemon Center',
+    // Pokémon Center says PreOrder in its own markup on the product page; on a
+    // category page the tell is the same as Target's — a future street date on
+    // something that is not simply out of stock.
+    isPreOrder: v.signal === 'scheduled',
+    signal: v.signal,
   }));
 }
 
@@ -563,6 +607,10 @@ export function walmartCandidates(rows: WalmartRow[], foundBy = ''): Candidate[]
     const tcg = classifyTcg(row.name);
     if (tcg.verdict === 'no') continue;
     out.push({
+      retailer: 'Walmart',
+      // The one retailer of the three that states it outright.
+      isPreOrder: row.isPreOrder,
+      signal: row.isPreOrder ? 'scheduled' : row.state === 'in' ? 'buyable' : 'recent',
       row: {
         tcin: row.usItemId,
         name: row.name,

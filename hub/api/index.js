@@ -382,8 +382,9 @@ async function recordDiscoveries(db2, userId, sourceId, items, announce2) {
     // already labelled is never relabelled by a query that guessed worse.
     text: `INSERT INTO discoveries
              (user_id, source_id, external_id, url, name, price, announced, kind, confidence,
-              found_by, image_url)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+              found_by, image_url, retailer, state, is_pre_order, release_date, order_limit,
+              signal)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
            ON CONFLICT (user_id, source_id, external_id) DO UPDATE SET
              found_by = CASE
                WHEN EXCLUDED.found_by = '' THEN discoveries.found_by
@@ -404,6 +405,20 @@ async function recordDiscoveries(db2, userId, sourceId, items, announce2) {
              image_url = CASE
                WHEN discoveries.image_url = '' THEN EXCLUDED.image_url
                ELSE discoveries.image_url
+             END,
+             -- These four are the opposite case from image_url and kind: they
+             -- describe the offer *right now*, so the newest sighting wins.
+             -- A find that has come back into stock, or had its street date
+             -- moved, must say so rather than keep the first thing we saw.
+             state = EXCLUDED.state,
+             is_pre_order = EXCLUDED.is_pre_order,
+             release_date = EXCLUDED.release_date,
+             signal = EXCLUDED.signal,
+             price = COALESCE(EXCLUDED.price, discoveries.price),
+             order_limit = COALESCE(EXCLUDED.order_limit, discoveries.order_limit),
+             retailer = CASE
+               WHEN discoveries.retailer = '' THEN EXCLUDED.retailer
+               ELSE discoveries.retailer
              END`,
     params: [
       userId,
@@ -416,7 +431,13 @@ async function recordDiscoveries(db2, userId, sourceId, items, announce2) {
       item.kind ?? "",
       item.confidence ?? "",
       item.foundBy ?? "",
-      (item.imageUrl ?? "").slice(0, 500)
+      (item.imageUrl ?? "").slice(0, 500),
+      item.retailer ?? "",
+      item.state ?? "",
+      item.isPreOrder === true,
+      item.releaseDate ?? "",
+      item.orderLimit ?? null,
+      item.signal ?? ""
     ]
   }));
   await db2.batch(statements);
@@ -1259,7 +1280,13 @@ function toDiscovery(r) {
     imageUrl: String(r.image_url ?? ""),
     status: String(r.status ?? "new"),
     firstSeenAt: r.first_seen_at ? new Date(String(r.first_seen_at)).toISOString() : "",
-    alreadyHave: Boolean(r.already_have)
+    alreadyHave: Boolean(r.already_have),
+    retailer: String(r.retailer ?? ""),
+    state: String(r.state ?? ""),
+    isPreOrder: Boolean(r.is_pre_order),
+    releaseDate: String(r.release_date ?? ""),
+    orderLimit: r.order_limit === null || r.order_limit === void 0 ? null : Number(r.order_limit),
+    signal: String(r.signal ?? "")
   };
 }
 async function discoveriesToReview(db2, userId, limit = 200) {
@@ -1851,11 +1878,16 @@ button.small { padding: 4px 10px; font-size: 12px; border-radius: var(--r-sm); }
 .flag { background: var(--alert-bg); color: var(--alert); }
 .info { background: var(--accent-soft); color: var(--accent); }
 .stale { color: var(--alert); font-weight: 600; }
+/* The "why you are seeing this" line. Quieter than the facts above it, because
+   it explains rather than informs. */
+.meta.dim { color: var(--dim); margin-top: 6px; }
 
 .thumb { width: 60px; height: 60px; border-radius: var(--r-ctl); object-fit: contain;
          background: var(--panel-2); border: 1px solid var(--line); flex: 0 0 auto; }
 .thumb.ph { display: flex; align-items: center; justify-content: center;
             color: var(--dim); font-size: 20px; }
+/* Refused by the retailer, as opposed to never fetched. Different problem. */
+.thumb.broken { color: var(--warn); border-color: var(--warn); }
 .thumb.lg { width: 88px; height: 88px; }
 
 form.stack { display: grid; gap: 11px; }
@@ -2397,8 +2429,14 @@ function thumb(url, alt, big) {
   img.src = url;
   img.alt = alt || '';
   img.loading = 'lazy';
-  // A dead CDN URL should degrade to the placeholder, not a broken-image icon.
-  img.addEventListener('error', () => img.replaceWith(thumb('', alt, big)));
+  // A dead CDN URL should degrade to a placeholder, not a broken-image icon.
+  // But a *distinguishable* one: "the retailer refused the picture" and "we
+  // never had one" look identical otherwise, and only one of them is a bug.
+  img.addEventListener('error', () => {
+    const ph = el('div', cls + ' ph broken', '\u2298');
+    ph.title = 'the retailer would not serve this image to the app';
+    img.replaceWith(ph);
+  });
   return img;
 }
 
@@ -3114,6 +3152,27 @@ function render() {
  * showing you a poster collection costs two seconds and dropping a real drop
  * costs the drop, so the uncertain ones are shown, just not shown first.
  */
+/** Whole days from today to a plain yyyy-mm-dd. Null when it is not one. */
+function daysUntil(date) {
+  const t = Date.parse(date + 'T00:00:00Z');
+  if (!isFinite(t)) return null;
+  const now = new Date();
+  const today = Date.parse(
+    now.getUTCFullYear() + '-' +
+    String(now.getUTCMonth() + 1).padStart(2, '0') + '-' +
+    String(now.getUTCDate()).padStart(2, '0') + 'T00:00:00Z');
+  return Math.round((t - today) / 86400000);
+}
+
+/** One sentence on why this is worth a look. Blank when there is nothing to add. */
+function findReason(d) {
+  if (d.signal === 'buyable') return 'buyable right now';
+  if (d.signal === 'scheduled') return 'scheduled \u2014 the shop has published a date';
+  if (d.signal === 'recent') return 'released recently and sold out \u2014 the restock candidate';
+  if (d.foundBy) return 'found by "' + d.foundBy + '"';
+  return '';
+}
+
 function renderFinds() {
   const list = document.getElementById('finds-list');
   list.textContent = '';
@@ -3142,13 +3201,39 @@ function renderFinds() {
     const left = el('div', 'grow');
 
     left.appendChild(el('div', 'name', d.name || 'unnamed'));
+
+    // The retailer leads. Keeping or forgetting turns on which shop it is
+    // before it turns on anything else: the same box at Pok\xE9mon Center and at
+    // a Walmart reseller are not the same decision.
     const facts = [];
+    if (d.retailer) facts.push(d.retailer);
     if (d.kind) facts.push(d.kind);
     if (d.price) facts.push(money(d.price));
-    if (d.foundBy) facts.push('found by "' + d.foundBy + '"');
+    if (d.orderLimit) facts.push('limit ' + d.orderLimit + ' per order');
     left.appendChild(el('div', 'meta', facts.join(' \xB7 ')));
 
     const tags = el('div', 'tags');
+
+    // What it is, before what we guessed about it. A pre-order takes the money
+    // now and ships whenever the publisher says, so it is a different decision
+    // from a restock rather than a variety of one.
+    if (d.isPreOrder) {
+      tags.appendChild(el('span', 'pill s-queue', 'PRE-ORDER'));
+    } else if (d.state === 'in') {
+      tags.appendChild(el('span', 'pill s-in', 'in stock'));
+    } else if (d.state === 'out') {
+      tags.appendChild(el('span', 'pill s-out', 'out of stock'));
+    }
+
+    if (d.releaseDate) {
+      const days = daysUntil(d.releaseDate);
+      tags.appendChild(el('span', 'pill info',
+        days === null ? 'releases ' + d.releaseDate
+          : days > 0 ? 'releases ' + d.releaseDate + ' \xB7 ' + days + 'd'
+          : days === 0 ? 'releases today'
+          : 'released ' + d.releaseDate));
+    }
+
     if (d.confidence === 'unsure') {
       tags.appendChild(el('span', 'pill s-unknown', 'not sure \u2014 your call'));
     }
@@ -3156,6 +3241,13 @@ function renderFinds() {
       tags.appendChild(el('span', 'pill info', 'already on your list'));
     }
     if (tags.children.length) left.appendChild(tags);
+
+    // Why the sweep put this in front of you, said in words rather than in a
+    // status code. Only Pok\xE9mon Center's walk produces these; a Target keyword
+    // sweep says which keyword instead, which is the more useful of the two
+    // when there is a keyword to name.
+    const why = findReason(d);
+    if (why) left.appendChild(el('div', 'meta dim', why));
 
     if (d.url) {
       const link = document.createElement('a');

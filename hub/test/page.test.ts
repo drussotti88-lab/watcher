@@ -1531,3 +1531,111 @@ test('the header badge stays empty rather than guessing at a name', async () => 
   const h = await boot(DASHBOARD);
   assert.equal(h.doc.getElementById('who')?.textContent, '');
 });
+
+// ── A find card has to carry a decision ──────────────────────────────────────
+
+const RICH_FIND = {
+  id: 21, sourceId: 'pc-new-releases', externalId: '10-10447-111',
+  name: 'Pokémon TCG: 30th Celebration Pokémon Center Elite Trainer Box',
+  url: 'https://www.pokemoncenter.com/product/10-10447-111',
+  price: 59.99, kind: 'elite trainer box', confidence: 'sealed', foundBy: '',
+  imageUrl: 'https://www.pokemoncenter.com/images/DAMRoot/Thumbnail/x.jpg',
+  status: 'new', firstSeenAt: new Date().toISOString(), alreadyHave: false,
+  retailer: 'Pokemon Center', state: 'out', isPreOrder: false,
+  releaseDate: '2026-07-15', orderLimit: null, signal: 'recent',
+};
+
+const findPills = (h: Harness): string[] =>
+  [...h.doc.querySelectorAll('#finds-list .pill')].map((p) => p.textContent ?? '');
+
+test('A FIND SAYS WHICH SHOP IT IS AT', async () => {
+  // The most-missed fact by a distance. The same box at Pokémon Center and at a
+  // Walmart reseller are not the same decision.
+  const h = await boot(withFinds([RICH_FIND]));
+  const meta = h.doc.querySelector('#finds-list .meta')?.textContent ?? '';
+  assert.match(meta, /Pokemon Center/);
+  assert.match(meta, /elite trainer box/);
+  assert.match(meta, /\$59\.99/);
+});
+
+test('A PRE-ORDER SAYS SO ON THE CARD', async () => {
+  // It takes the money now and ships whenever the publisher says. That is a
+  // different decision from a restock, not a variety of one.
+  const h = await boot(withFinds([{ ...RICH_FIND, isPreOrder: true, state: 'in' }]));
+  assert.ok(findPills(h).includes('PRE-ORDER'), 'no pre-order pill');
+  assert.ok(!findPills(h).includes('in stock'), 'pre-order must not also read as in stock');
+});
+
+test('stock state is on the card when it is not a pre-order', async () => {
+  const inStock = await boot(withFinds([{ ...RICH_FIND, state: 'in' }]));
+  assert.ok(findPills(inStock).includes('in stock'));
+  const outOfStock = await boot(withFinds([{ ...RICH_FIND, state: 'out' }]));
+  assert.ok(findPills(outOfStock).includes('out of stock'));
+  const unknown = await boot(withFinds([{ ...RICH_FIND, state: '' }]));
+  assert.ok(!findPills(unknown).some((p) => /in stock|out of stock/.test(p)),
+    'an unknown state must claim neither');
+});
+
+test('a release date is shown, with how far away it is', async () => {
+  const soon = new Date(Date.now() + 17 * 86400000).toISOString().slice(0, 10);
+  const h = await boot(withFinds([{ ...RICH_FIND, releaseDate: soon }]));
+  assert.ok(findPills(h).some((p) => p.includes(soon) && p.includes('17d')),
+    `expected a countdown pill, got ${findPills(h).join(' | ')}`);
+});
+
+test('a date already passed is not counted down to', async () => {
+  const h = await boot(withFinds([{ ...RICH_FIND, releaseDate: '2026-07-15' }]));
+  assert.ok(findPills(h).some((p) => p.startsWith('released 2026-07-15')),
+    `expected a past-tense pill, got ${findPills(h).join(' | ')}`);
+});
+
+test('THE CARD SAYS WHY IT IS IN FRONT OF YOU', async () => {
+  // Pokémon Center is walked rather than searched, so it has no keyword to
+  // name. It was writing its signal into foundBy and the card read
+  // `found by "recent"` — true, and useless.
+  const recent = await boot(withFinds([{ ...RICH_FIND, signal: 'recent' }]));
+  assert.match($(recent, '#finds-list').textContent, /released recently and sold out/);
+  assert.ok(!$(recent, '#finds-list').textContent.includes('found by "recent"'),
+    'the signal must never masquerade as a keyword');
+
+  const scheduled = await boot(withFinds([{ ...RICH_FIND, signal: 'scheduled' }]));
+  assert.match($(scheduled, '#finds-list').textContent, /the shop has published a date/);
+});
+
+test('a keyword find still names its keyword', async () => {
+  // Target has a query to name, and naming it is how a keyword that only
+  // returns rubbish earns its way out of the sweep.
+  const h = await boot(withFinds([
+    { ...RICH_FIND, retailer: 'Target', signal: '', foundBy: 'pokemon booster box' },
+  ]));
+  assert.match($(h, '#finds-list').textContent, /found by "pokemon booster box"/);
+});
+
+test('an order limit is shown when the shop states one', async () => {
+  const h = await boot(withFinds([{ ...RICH_FIND, orderLimit: 2 }]));
+  assert.match(h.doc.querySelector('#finds-list .meta')?.textContent ?? '', /limit 2 per order/);
+});
+
+test('a find recorded before any of this still renders', async () => {
+  // Eleven rows predate these columns. A review list that throws on them is
+  // worse than one that says a little less about them.
+  const bare = {
+    id: 3, sourceId: 'target-tcg', externalId: '1', name: 'An older find',
+    url: '', price: null, kind: '', confidence: '', foundBy: '', imageUrl: '',
+    status: 'new', firstSeenAt: new Date().toISOString(), alreadyHave: false,
+  };
+  const h = await boot(withFinds([bare]));
+  assert.match($(h, '#finds-list').textContent, /An older find/);
+  assert.equal(findPills(h).length, 0, 'nothing is claimed about it');
+});
+
+test('an image the retailer refuses looks different from one we never had', async () => {
+  // Only one of the two is a bug, and they were indistinguishable.
+  const h = await boot(withFinds([{ ...RICH_FIND, imageUrl: 'https://example.test/x.jpg' }]));
+  const img = h.doc.querySelector('#finds-list img.thumb') as HTMLImageElement;
+  assert.ok(img, 'the image is attempted');
+  img.dispatchEvent(new h.dom.window.Event('error'));
+  const ph = h.doc.querySelector('#finds-list .thumb.broken');
+  assert.ok(ph, 'a refused image gets its own marker');
+  assert.match(ph.getAttribute('title') ?? '', /would not serve/);
+});

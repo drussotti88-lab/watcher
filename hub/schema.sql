@@ -598,3 +598,32 @@ UPDATE sources
    SET url = 'https://www.walmart.com/search?q=pokemon+trading+cards&facet=retailer_type%3AWalmart',
        label = 'Walmart — sealed TCG'
  WHERE url = 'https://www.walmart.com/browse/toys/trading-cards/4171_4187_1229163';
+
+-- What a find actually is, beyond its name and price.
+--
+-- The review card asked you to decide between keeping and forgetting while
+-- telling you almost nothing: a name, a price, and the keyword that turned it
+-- up. Not which shop it was at, not whether it was buyable, not whether it was
+-- a pre-order — which is the difference between "watch this" and "this takes
+-- your money now and ships in October".
+--
+-- Denormalised rather than joined. A discovery's retailer never changes, and
+-- the review list is the one query that must stay cheap enough to poll.
+ALTER TABLE discoveries ADD COLUMN IF NOT EXISTS retailer TEXT NOT NULL DEFAULT '';
+ALTER TABLE discoveries ADD COLUMN IF NOT EXISTS state TEXT NOT NULL DEFAULT '';
+ALTER TABLE discoveries ADD COLUMN IF NOT EXISTS is_pre_order BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE discoveries ADD COLUMN IF NOT EXISTS release_date TEXT NOT NULL DEFAULT '';
+ALTER TABLE discoveries ADD COLUMN IF NOT EXISTS order_limit INTEGER;
+
+-- Why the sweep thought this was worth showing you.
+--
+-- Separate from found_by, which is the query that turned it up. Pokémon Center
+-- has no queries — it is walked, not searched — so its rows were writing the
+-- signal into found_by and the card read: found by "recent". True, and useless.
+ALTER TABLE discoveries ADD COLUMN IF NOT EXISTS signal TEXT NOT NULL DEFAULT '';
+
+-- Backfill the retailer for everything already found, from its source.
+UPDATE discoveries d
+   SET retailer = s.retailer
+  FROM sources s
+ WHERE s.user_id = d.user_id AND s.id = d.source_id AND d.retailer = '';
