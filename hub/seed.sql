@@ -26,10 +26,14 @@ INSERT INTO sources (id, label, retailer, kind, url, via, config, enabled)
 VALUES
   (
     'pc-new-releases',
-    'Pokémon Center — new releases',
+    'Pokémon Center — sealed TCG',
     'Pokemon Center',
     'watcher',
-    'https://www.pokemoncenter.com/category/new-releases',
+    -- /category/tcg-cards, not /category/new-releases. New releases is the whole
+    -- shop -- Crocs, plush, string lights -- while tcg-cards is 591 products and
+    -- every one of them is sealed cards. It also carries the Pokemon Center
+    -- exclusives, which no amount of sweeping Target would ever turn up.
+    'https://www.pokemoncenter.com/category/tcg-cards',
     'watcher',
     '{"filters":[]}'::jsonb,
     true

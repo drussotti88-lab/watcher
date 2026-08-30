@@ -1366,7 +1366,7 @@ test('a dashboard with no sweep block still renders the bar', async () => {
   delete base.sweep;
   const h = await boot(base);
   assert.equal($(h, '#sweep-now').disabled, false);
-  assert.equal($(h, '#sweep-now').textContent, 'Run Target sweep');
+  assert.equal($(h, '#sweep-now').textContent, 'Run catalogue sweep');
 });
 
 test('A FIND SHOWS ITS PICTURE, NOT JUST ITS NAME', async () => {
@@ -1440,7 +1440,7 @@ test('before it starts it still says queued', async () => {
 
 test('and when it is over it offers another', async () => {
   const h = await boot(withSweep({ queued: false, lastStatus: 'watcher: 2 new' }));
-  assert.equal($(h, '#sweep-now').textContent, 'Run Target sweep');
+  assert.equal($(h, '#sweep-now').textContent, 'Run catalogue sweep');
   assert.equal($(h, '#sweep-now').disabled, false);
 });
 

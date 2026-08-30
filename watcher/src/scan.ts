@@ -27,6 +27,14 @@ import {
   type ScanVerdict,
 } from './readers/target-search.ts';
 import { classifyTcg, type TcgClassification } from './tcg.ts';
+import {
+  nextData,
+  readPokemonCenterCategory,
+  pokemonCenterMeta,
+  rankPokemonCenter,
+  worthReviewing,
+  type PcVerdict,
+} from './readers/pokemoncenter-search.ts';
 
 export interface ScanResult {
   url: string;
@@ -317,4 +325,123 @@ export function renderDiscover(report: DiscoverReport): string {
 
   lines.push('');
   return lines.join('\n');
+}
+
+
+// ── Pokémon Center ───────────────────────────────────────────────────────────
+
+export interface PcScanResult {
+  url: string;
+  verdicts: PcVerdict[];
+  challenged: boolean;
+  challengeReason: string;
+  ms: number;
+  note: string;
+  total: number | null;
+  startIndex: number | null;
+}
+
+/**
+ * Read a whole Pokémon Center category.
+ *
+ * No response listening here, unlike Target: the category page ships its entire
+ * result set in a __NEXT_DATA__ script tag, so the HTML *is* the API. One
+ * navigation, thirty-two products, already parsed.
+ */
+export async function scanPokemonCenterCategory(
+  browser: Browser,
+  url: string,
+  today: string,
+): Promise<PcScanResult> {
+  const started = Date.now();
+  const page = await browser.page();
+
+  try {
+    await page.goto(url, { waitUntil: 'domcontentloaded' });
+    const read = await readWhenReady(page, { minText: 600, settleForMs: 1500, timeoutMs: 40_000 });
+
+    const challenge = detectChallenge(read.title, read.text);
+    if (challenge.challenged) {
+      return {
+        url,
+        verdicts: [],
+        challenged: true,
+        challengeReason: challenge.reason,
+        ms: Date.now() - started,
+        note: `challenged: ${challenge.reason}`,
+        total: null,
+        startIndex: null,
+      };
+    }
+
+    // The blob is in the served HTML rather than anything rendered, so this
+    // reads content() rather than the settled text.
+    const html = await page.content();
+    const data = nextData(html);
+    const rows = readPokemonCenterCategory(data);
+    const meta = pokemonCenterMeta(data);
+
+    return {
+      url,
+      verdicts: rankPokemonCenter(rows, today),
+      challenged: false,
+      challengeReason: '',
+      ms: Date.now() - started,
+      total: meta.total,
+      startIndex: meta.startIndex,
+      note:
+        rows.length === 0
+          ? data === null
+            ? 'no __NEXT_DATA__ in the page — it may have redirected, or the shape has moved'
+            : 'the page had __NEXT_DATA__ but no products in it'
+          : '',
+    };
+  } catch (err) {
+    return {
+      url,
+      verdicts: [],
+      challenged: false,
+      challengeReason: '',
+      ms: Date.now() - started,
+      note: `could not read the page: ${(err as Error).message}`,
+      total: null,
+      startIndex: null,
+    };
+  }
+}
+
+/**
+ * What a Pokémon Center scan found that is worth remembering.
+ *
+ * Two filters, and they are not the same two as Target's. There is no
+ * marketplace here — everything on pokemoncenter.com is sold by Pokémon Center,
+ * which is the whole reason this source is worth having. What replaces it is
+ * the age filter: their catalogue runs back to 2020 and most of it has been out
+ * of stock for years, so `worthReviewing` keeps what is buyable, scheduled, or
+ * recent enough to plausibly restock.
+ *
+ * The name classifier still runs, but as a second opinion rather than the
+ * gate — their own category crumb has already said whether this is sealed
+ * cards, and a retailer's own taxonomy beats our guess at one.
+ */
+export function pcCandidates(verdicts: PcVerdict[], foundBy = ''): Candidate[] {
+  return worthReviewing(verdicts).map((v) => ({
+    row: {
+      tcin: v.row.code,
+      name: v.row.name,
+      url: v.row.url,
+      price: v.row.price,
+      seller: { kind: 'retailer' as const, name: 'Pokemon Center' },
+      state: (v.row.outOfStock ? 'out' : 'in') as 'in' | 'out',
+      availableQuantity: null,
+      orderLimit: null,
+      releaseDate: v.row.releaseDate,
+      outOfStockInAllStores: null,
+      storeQuantity: null,
+      preOrderStoreQuantity: null,
+      imageUrl: v.row.imageUrl,
+    },
+    tcg: classifyTcg(v.row.name),
+    foundBy: foundBy || v.signal,
+  }));
 }

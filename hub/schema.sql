@@ -567,3 +567,19 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT NOT NULL DEFAULT '
 
 -- Names are typed by humans at a login box, so match them without case.
 CREATE UNIQUE INDEX IF NOT EXISTS users_handle_lower ON users (lower(handle));
+
+-- Point Pokémon Center at the category that actually holds sealed cards.
+--
+-- The source was seeded as /category/new-releases, which is everything the shop
+-- has just put out: Crocs, plush, string lights, and somewhere among them the
+-- cards. /category/tcg-cards is 591 products and every one of them is sealed
+-- TCG — and it is where the Pokémon Center exclusives live, the 30th
+-- Celebration ETB and Booster Bundle and Mini Tins that Target will never
+-- stock at any price.
+--
+-- Guarded on the old URL so it changes a row that was seeded and never one
+-- somebody has since pointed somewhere deliberate.
+UPDATE sources
+   SET url = 'https://www.pokemoncenter.com/category/tcg-cards',
+       label = 'Pokémon Center — sealed TCG'
+ WHERE url = 'https://www.pokemoncenter.com/category/new-releases';

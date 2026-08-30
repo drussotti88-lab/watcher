@@ -2036,7 +2036,7 @@ ${FONTS}<style>${STYLE}</style></head>
 
   <div class="bar">
     <button id="add-open" class="primary">Add product</button>
-    <button id="sweep-now">Run Target sweep</button>
+    <button id="sweep-now">Run catalogue sweep</button>
     <button id="watcher-toggle">Turn watcher off</button>
     <button id="refresh">Refresh</button>
     <label class="check sub"><input type="checkbox" id="auto" checked> auto every 30s</label>
@@ -3092,7 +3092,7 @@ function render() {
   const running = String(sweep.lastStatus || '').indexOf('sweeping') === 0;
   sweepBtn.disabled = !!sweep.queued;
   sweepBtn.textContent = !sweep.queued
-    ? 'Run Target sweep'
+    ? 'Run catalogue sweep'
     : running
       ? sweep.lastStatus
       : 'sweep queued';

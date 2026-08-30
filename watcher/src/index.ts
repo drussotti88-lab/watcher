@@ -20,8 +20,12 @@ import {
   candidates,
   toDiscovered,
   renderDiscover,
+  scanPokemonCenterCategory,
+  pcCandidates,
 } from './scan.ts';
 import { searchUrl } from './readers/target-search.ts';
+import { categoryUrl, pageCount } from './readers/pokemoncenter-search.ts';
+import { interleave, todayLocal, type SweepStep } from './plan.ts';
 import { Activity } from './activity.ts';
 import { runSetup } from './setup.ts';
 
@@ -72,6 +76,33 @@ const MAX_PAGES = 3;
 
 /** Results per page, as Target's own request declares it. */
 const PAGE_SIZE = 24;
+
+/**
+ * Pokémon Center, and why it is a category rather than a list of queries.
+ *
+ * Target has no first-party sealed-TCG category worth the name, so it has to be
+ * searched thirteen different ways. Pokémon Center has exactly the category we
+ * want — /category/tcg-cards is 591 products and every one of them is sealed
+ * cards — so the right way to read it is to walk it, not to guess at keywords.
+ *
+ * It is also the only source that carries the Pokémon Center exclusives. The
+ * 30th Celebration Pokémon Center Elite Trainer Box, the Booster Bundle and the
+ * Mini Tins ten-pack are not sold at Target or Walmart at any price, so no
+ * amount of sweeping those two harder would ever have turned them up.
+ */
+const PC_RETAILER = 'Pokemon Center';
+const PC_SOURCE = 'pc-new-releases';
+const PC_CATEGORY = 'tcg-cards';
+
+/**
+ * How deep to walk Pokémon Center per sweep.
+ *
+ * 591 products is 19 pages. Reading all of them every sweep would spend the
+ * retailer's patience re-reading a back catalogue that has not changed since
+ * 2021 — so the walk is capped, and it starts from the front where the
+ * catalogue puts the things that are actually moving.
+ */
+const PC_MAX_PAGES = 6;
 
 /**
  * Whose budget a sweep spends.
@@ -196,8 +227,16 @@ async function runPasses(once: boolean): Promise<void> {
   console.log(`  Browser profile: ${browser.profileDir} (signed out, deliberately)`);
   if (!once) console.log(`  Ctrl+C to stop.\n`);
 
-  /** Pages still to fetch in the current sweep. Empty means none in progress. */
-  let sweepPlan: { query: string; offset: number }[] = [];
+  /**
+   * Pages still to fetch in the current sweep. Empty means none in progress.
+   *
+   * Two shapes, because the two retailers are read completely differently:
+   * Target by keyword search, Pokémon Center by walking a category. They share
+   * one plan so that a Target cooldown does not stop Pokémon Center being read
+   * — pacing is per-retailer, and before this the sweep only ever looked at the
+   * head of the queue, so one slow retailer stalled the other.
+   */
+  let sweepPlan: SweepStep[] = [];
   /** Alternates while a sweep is planned, so watching and sweeping share the budget. */
   let sweepTurn = false;
 
@@ -224,21 +263,102 @@ async function runPasses(once: boolean): Promise<void> {
    * Target's budget on a check and the sweep never got a look in. Alternating
    * splits the one budget evenly between watching and looking for new things.
    */
+  /** One page of a Pokémon Center category. */
+  const sweepPokemonCenter = async (step: {
+    category: string;
+    page: number;
+  }): Promise<void> => {
+    const label = `pc/${step.category}${step.page > 1 ? ` p${step.page}` : ''}`;
+    const scan = await scanPokemonCenterCategory(
+      browser,
+      categoryUrl(step.category, step.page),
+      todayLocal(),
+    );
+
+    if (scan.challenged) {
+      const until = pacer.challenged(PC_RETAILER, Date.now());
+      const mins = Math.round((until - Date.now()) / 60000);
+      // Drop this retailer's remaining steps only. Target's are unaffected —
+      // that is the point of the plan carrying a retailer per step.
+      sweepPlan = sweepPlan.filter((s) => s.retailer !== PC_RETAILER);
+      console.log(`  ${timestamp()}  sweep ${label} challenged — standing down ${mins}m`);
+      activity.record({
+        kind: 'sweep',
+        level: 'warn',
+        retailer: PC_RETAILER,
+        message: `challenged during sweep — standing down ${mins}m, ${PC_RETAILER} steps dropped`,
+      });
+      return;
+    }
+
+    if (scan.note) {
+      console.log(`  ${timestamp()}  sweep ${label}: ${scan.note}`);
+      activity.record({
+        kind: 'sweep',
+        level: 'error',
+        retailer: PC_RETAILER,
+        ms: scan.ms,
+        message: `sweep ${label} failed: ${scan.note}`,
+      });
+      return;
+    }
+
+    const found = pcCandidates(scan.verdicts);
+    let line = `sweep ${label}: ${scan.verdicts.length} products, ${found.length} worth a look`;
+
+    // Do not walk past the end of a category that is shorter than the cap.
+    const pages = pageCount(scan.total);
+    if (scan.total !== null) line += ` · ${scan.total} in category`;
+    if (step.page >= Math.min(pages, PC_MAX_PAGES)) {
+      sweepPlan = sweepPlan.filter(
+        (s) => !(s.retailer === PC_RETAILER && s.kind === 'pc' && s.page > step.page),
+      );
+    }
+
+    if (found.length > 0) {
+      const last = !sweepPlan.some((s) => s.retailer === PC_RETAILER);
+      const result = await hub.ingest(PC_SOURCE, found.map(toDiscovered), last, sweepPlan.length);
+      const fresh = result.names ?? [];
+      if (result.seeded) line += ' (baseline)';
+      else if (fresh.length) line += ` — NEW: ${fresh.join(', ')}`;
+    }
+    if (sweepPlan.length) line += ` · ${sweepPlan.length} pages left`;
+
+    console.log(`  ${timestamp()}  ${line}`);
+    activity.record({ kind: 'sweep', retailer: PC_RETAILER, ms: scan.ms, message: line });
+  };
+
   const sweepOnce = async (): Promise<void> => {
-    if (sweepPlan.length > 0 && pacer.waitMs(SWEEP_RETAILER, Date.now()) <= 0) {
-      const { query, offset } = sweepPlan.shift() as { query: string; offset: number };
+    if (sweepPlan.length === 0) return;
+
+    // The first step whose retailer will have us, not simply the first step.
+    // Looking only at the head meant a Target cooldown stalled the whole plan,
+    // including the Pokémon Center pages that Target has no say over.
+    const ready = sweepPlan.findIndex((s) => pacer.waitMs(s.retailer, Date.now()) <= 0);
+    if (ready === -1) return;
+    const step = sweepPlan.splice(ready, 1)[0]!;
+    pacer.record(step.retailer, Date.now());
+
+    if (step.kind === 'pc') {
+      await sweepPokemonCenter(step);
+      return;
+    }
+
+    {
+      const { query, offset } = step;
       const page = Math.floor(offset / PAGE_SIZE) + 1;
       const label = page === 1 ? `"${query}"` : `"${query}" p${page}`;
-      pacer.record(SWEEP_RETAILER, Date.now());
       const scan = await scanTargetSearch(browser, searchUrl(query, offset));
 
       if (scan.challenged) {
-        // Standing down is about the retailer, not about this query. Drop
-        // the rest of the plan rather than walking into the same wall
-        // thirteen times.
+        // Standing down is about the retailer, not about this query. Drop the
+        // rest of *Target's* plan rather than walking into the same wall
+        // thirteen times — and only Target's. Before the plan carried a
+        // retailer per step this cleared everything, which would now mean one
+        // shop's challenge silently cancelling the other shop's sweep.
         const until = pacer.challenged(SWEEP_RETAILER, Date.now());
         const mins = Math.round((until - Date.now()) / 60000);
-        sweepPlan = [];
+        sweepPlan = sweepPlan.filter((s) => s.retailer !== SWEEP_RETAILER);
         console.log(`  ${timestamp()}  sweep challenged — standing down ${mins}m`);
         activity.record({
           kind: 'sweep',
@@ -275,7 +395,7 @@ async function runPasses(once: boolean): Promise<void> {
         // Paging deeper spends the retailer's patience on party napkins.
         const more = scan.total !== null && offset + PAGE_SIZE < scan.total;
         if (more && page < MAX_PAGES && found.length > 0) {
-          sweepPlan.unshift({ query, offset: offset + PAGE_SIZE });
+          sweepPlan.unshift({ retailer: SWEEP_RETAILER, kind: 'target', query, offset: offset + PAGE_SIZE });
           line += ` · ${scan.total} total, fetching p${page + 1}`;
         } else if (scan.total !== null) {
           line += ` · ${scan.total} total`;
@@ -283,14 +403,19 @@ async function runPasses(once: boolean): Promise<void> {
           else if (more) line += `, stopping at p${MAX_PAGES}`;
         }
         if (found.length > 0) {
-          // shift() has already run, so an empty plan means this was the last
-          // query. Only that one finishes the sweep; the others must not, or a
-          // restart part-way through loses the rest and nothing is due again
-          // until tomorrow.
+          // The step has already been removed, so "no Target steps left" means
+          // this was the last Target page. Only that one finishes Target's
+          // sweep; the others must not, or a restart part-way through loses the
+          // rest and nothing is due again until tomorrow.
+          //
+          // Per retailer, not per plan. The plan now holds both shops, and
+          // Target finishing while Pokémon Center still has pages to read must
+          // still mark Target done — `last_swept_at` is a column on a source.
+          const lastForTarget = !sweepPlan.some((s) => s.retailer === SWEEP_RETAILER);
           const result = await hub.ingest(
             'target-tcg',
             found.map(toDiscovered),
-            sweepPlan.length === 0,
+            lastForTarget,
             sweepPlan.length,
           );
           const fresh = result.names ?? [];
@@ -368,7 +493,24 @@ async function runPasses(once: boolean): Promise<void> {
       // remaining queries to the next window rather than resuming — a mild
       // cost, and the alternative is another piece of state to keep honest.
       if (sweepPlan.length === 0 && hub.sweepDue) {
-        sweepPlan = DEFAULT_QUERIES.map((query) => ({ query, offset: 0 }));
+        // Both retailers, interleaved rather than one after the other. The
+        // pacer holds each retailer separately, so alternating means a Pokémon
+        // Center page can be read during Target's cooldown and vice versa —
+        // the sweep gets through roughly twice as much wall-clock work, and
+        // neither shop is asked for anything faster than it was before.
+        const targetSteps: SweepStep[] = DEFAULT_QUERIES.map((query) => ({
+          retailer: SWEEP_RETAILER,
+          kind: 'target' as const,
+          query,
+          offset: 0,
+        }));
+        const pcSteps: SweepStep[] = Array.from({ length: PC_MAX_PAGES }, (_, i) => ({
+          retailer: PC_RETAILER,
+          kind: 'pc' as const,
+          category: PC_CATEGORY,
+          page: i + 1,
+        }));
+        sweepPlan = interleave(targetSteps, pcSteps);
         // Pressed by hand means somebody is looking at the button. Take the
         // next turn rather than waiting for one — the alternation exists to
         // stop a background sweep starving the watching, not to make a person
@@ -442,6 +584,9 @@ async function runPasses(once: boolean): Promise<void> {
     await browser.close();
   }
 }
+
+
+
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
