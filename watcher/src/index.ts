@@ -5,6 +5,7 @@
  * otherwise be guesses: can this machine see these sites at all, and what does
  * a given product page actually contain.
  */
+import { existsSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { loadConfig, CONFIG_PATH } from './config.ts';
 import { Browser } from './browser.ts';
 import { probeAll, renderProbe, PROBE_TARGETS } from './probe.ts';
@@ -60,6 +61,20 @@ const DEFAULT_QUERIES = [
 const SWEEP_RETAILER = 'Target';
 
 /**
+ * How to stop the Watcher without killing it.
+ *
+ * Ctrl+C works when you are sitting at the window. Nothing did when you were
+ * not — and on Windows there is no polite way to send an interrupt to another
+ * process — so every remote restart was a hard kill. That skipped the shutdown
+ * path twice over: buffered log lines died with the process, and Chrome was
+ * never closed, which is why the profile came back saying "Restore pages?
+ * Chrome didn't shut down correctly".
+ *
+ * A file is the least clever thing that works from anywhere.
+ */
+const STOP_FILE = 'logs/.stop';
+
+/**
  * Target's own facet id for "Sold by: Target".
  *
  * Read off the search response rather than guessed: `d_sellers_all` lists
@@ -91,6 +106,7 @@ const searchUrl = (query: string, offset = 0): string => {
 
 const COMMANDS = [
   'watch',
+  'stop',
   'once',
   'scan',
   'discover',
@@ -110,6 +126,10 @@ function help(): void {
                      whatever is due, and reports what it saw. Ctrl+C to stop.
 
   npm run once       One pass, then exit. Use this first.
+
+  npm run stop       Ask a running Watcher to stop cleanly, from anywhere.
+                     It closes Chrome and flushes its log first; killing it
+                     does neither.
 
   npm run scan "<target search url>"
                      Reads a whole Target category in one request and sorts it
@@ -203,6 +223,14 @@ async function runPasses(once: boolean): Promise<void> {
     stopped = true;
     console.log('\n  stopping…\n');
   });
+
+  // A stop file left over from last time would stop this run before it began.
+  try {
+    mkdirSync('logs', { recursive: true });
+    if (existsSync(STOP_FILE)) rmSync(STOP_FILE);
+  } catch {
+    /* a logs directory we cannot manage is reported by Activity, not here */
+  }
 
   /**
    * Run at most one sweep query, if one is planned and the retailer will have us.
@@ -302,6 +330,20 @@ async function runPasses(once: boolean): Promise<void> {
       // Fail open on watching. A Hub that is briefly cold must not stop us
       // looking at pages — we keep watching the last list it gave us, and the
       // readings buffer until it comes back.
+      // Asked to stop? Do it here rather than mid-check, so the browser closes
+      // properly and the log queue is flushed.
+      try {
+        if (existsSync(STOP_FILE)) {
+          rmSync(STOP_FILE);
+          stopped = true;
+          console.log(`  ${timestamp()}  stop file seen — shutting down cleanly`);
+          activity.record({ kind: 'startup', message: 'asked to stop, shutting down cleanly' });
+          break;
+        }
+      } catch {
+        /* an unreadable stop file is not a reason to stop */
+      }
+
       const { missions, stale, reason } = await hub.missionsOrCached();
       if (stale) {
         const said = reason || 'the Hub did not answer';
@@ -419,6 +461,23 @@ async function main(): Promise<void> {
 
   if (command === 'help' || !COMMANDS.includes(command)) {
     help();
+    return;
+  }
+
+  if (command === 'stop') {
+    try {
+      mkdirSync('logs', { recursive: true });
+      writeFileSync(STOP_FILE, new Date().toISOString());
+      console.log(`
+  Asked the Watcher to stop. It finishes the pass it is on, closes Chrome and
+  sends anything still queued — usually within a pass. Kill it instead and you
+  lose the queued lines and Chrome comes back saying it did not shut down
+  correctly.
+`);
+    } catch (err) {
+      console.error(`\n  could not write the stop file: ${(err as Error).message}\n`);
+      process.exitCode = 1;
+    }
     return;
   }
 

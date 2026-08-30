@@ -70,7 +70,31 @@ export class Browser {
         : {}),
       headless: !this.config.browser.headed,
       viewport: { width: 1366, height: 900 },
-      args: ['--disable-blink-features=AutomationControlled'],
+      // ── The sandbox stays on ──────────────────────────────────────────────
+      //
+      // Playwright turns it off by default for a persistent context, and
+      // Chrome says so in a yellow bar: "you are using an unsupported
+      // command-line flag: --no-sandbox. Stability and security will suffer."
+      //
+      // This browser visits real retailer pages on a real desktop, and the
+      // sibling profile holds payment details. Trading the renderer sandbox
+      // for a slightly easier launch is the wrong way round.
+      chromiumSandbox: true,
+      args: [
+        '--disable-blink-features=AutomationControlled',
+        // "Restore pages? Chrome didn't shut down correctly."
+        //
+        // It appears because the profile was not closed cleanly, which for a
+        // long time meant *I* had killed the process rather than asking it to
+        // stop. The bubble is browser UI rather than page content, so it does
+        // not block automation — input goes to the renderer — but it sits over
+        // the page, it is in the way when you drive the browser by hand, and
+        // it is a standing signal that something exited badly. Suppressed
+        // here; the cause is fixed by the stop file in index.ts.
+        '--hide-crash-restore-bubble',
+        '--no-first-run',
+        '--no-default-browser-check',
+      ],
     });
   }
 

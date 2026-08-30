@@ -14,6 +14,7 @@
  * in the caching, not in Playwright.
  */
 import { test } from 'node:test';
+import { readFile } from 'node:fs/promises';
 import assert from 'node:assert/strict';
 import { Browser } from '../src/browser.ts';
 import { DEFAULTS } from '../src/config.ts';
@@ -111,4 +112,27 @@ test('an error that is not about a closed browser is not retried away', async ()
   };
 
   await assert.rejects(() => b.page(), /ERR_NAME_NOT_RESOLVED/);
+});
+
+// ── Launch flags ─────────────────────────────────────────────────────────────
+
+test('THE RENDERER SANDBOX IS NOT TRADED AWAY', async () => {
+  // Playwright disables it by default for a persistent context and Chrome says
+  // so in a yellow bar. This browser visits real retailer pages on a real
+  // desktop, and the sibling profile holds payment details.
+  const src = await readFile(new URL('../src/browser.ts', import.meta.url), 'utf8');
+  assert.match(src, /chromiumSandbox:\s*true/);
+  // Quoted, so this matches the flag as an argument and not the sentence in
+  // the comment above it explaining why we do not pass it.
+  assert.ok(
+    !/['"`]--no-sandbox['"`]/.test(src),
+    'nothing here should be passing --no-sandbox as an argument',
+  );
+});
+
+test('the crash-restore bubble is suppressed', async () => {
+  // It does not block automation, but it sits over the page and it is a
+  // standing signal that something exited badly.
+  const src = await readFile(new URL('../src/browser.ts', import.meta.url), 'utf8');
+  assert.match(src, /--hide-crash-restore-bubble/);
 });

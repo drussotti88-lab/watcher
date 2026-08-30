@@ -9,6 +9,7 @@
   },
   "scripts": {
     "watch": "node --experimental-strip-types src/index.ts watch",
+    "stop": "node --experimental-strip-types src/index.ts stop",
     "once": "node --experimental-strip-types src/index.ts once",
     "scan": "node --experimental-strip-types src/index.ts scan",
     "discover": "node --experimental-strip-types src/index.ts discover",
