@@ -1383,3 +1383,42 @@ test('a find with no picture gets the placeholder, not a broken image', async ()
   assert.equal(h.doc.querySelector('#finds-list img.thumb'), null);
   assert.ok(h.doc.querySelector('#finds-list .thumb.ph'), 'the placeholder should stand in');
 });
+
+// ── What "available" actually means ──────────────────────────────────────────
+
+test('A CAPPED QUANTITY IS SHOWN AS A FLOOR, NOT A COUNT', async () => {
+  // Target's available_to_promise never exceeds 20 across every reading taken,
+  // and 10 and 20 recur far too often to be real counts. Printing "10
+  // available" states as fact something the retailer only bounded.
+  const h = await boot(withRelease({ state: 'in', availableQuantity: 10, orderLimit: 2 }));
+  const text = h.doc.body.querySelector('#tab-missions').textContent;
+  assert.match(text, /10\+ available/);
+  assert.match(text, /at least 10/);
+});
+
+test('a number below the ceiling is reported plainly', async () => {
+  // Nine means nine. This is the range where the figure is worth trusting.
+  const h = await boot(withRelease({ state: 'in', availableQuantity: 9, orderLimit: 2 }));
+  const text = h.doc.querySelector('#tab-missions').textContent;
+  assert.match(text, /9 available/);
+  assert.ok(!text.includes('9+ available'));
+});
+
+test('THE PER-ORDER LIMIT IS SHOWN NEXT TO IT', async () => {
+  // A limit of 2 against 10 available is two. Burying that in the note line
+  // while the headline says 10 is the wrong way round.
+  const h = await boot(withRelease({ state: 'in', availableQuantity: 10, orderLimit: 2 }));
+  assert.match(h.doc.querySelector('#tab-missions').textContent, /limit 2 per order/);
+});
+
+test('no stated limit means no line about it', async () => {
+  const h = await boot(withRelease({ state: 'in', availableQuantity: 9, orderLimit: null }));
+  assert.ok(!h.doc.querySelector('#tab-missions').textContent.includes('per order'));
+});
+
+test('zero available is still shown, and is not a floor', async () => {
+  const h = await boot(withRelease({ state: 'out', availableQuantity: 0 }));
+  const text = h.doc.querySelector('#tab-missions').textContent;
+  assert.match(text, /0 available/);
+  assert.ok(!text.includes('0+ available'));
+});

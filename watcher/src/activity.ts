@@ -61,6 +61,15 @@ export interface ActivityOptions {
   /** Post once the queue reaches this. Small enough to be current, big enough
    *  not to make a request per check. */
   batchSize?: number;
+  /**
+   * Send anyway once the oldest line has waited this long.
+   *
+   * Batching alone means up to `batchSize` lines sit in memory indefinitely on
+   * a quiet watchlist — and they are lost outright if the process is killed
+   * rather than asked to stop, which is how nearly an hour of checks went
+   * missing from the Hub while the local file had them all.
+   */
+  flushAfterMs?: number;
   /** Stop buffering past this, and say so, rather than eating the heap. */
   maxQueue?: number;
   now?: () => number;
@@ -72,10 +81,13 @@ export class Activity {
   private readonly dir: string;
   private readonly keepDays: number;
   private readonly batchSize: number;
+  private readonly flushAfterMs: number;
   private readonly maxQueue: number;
   private readonly now: () => number;
 
   private queue: ActivityLine[] = [];
+  /** When the oldest unsent line was queued. Zero when the queue is empty. */
+  private queuedSince = 0;
   private dropped = 0;
   private lastFileError = '';
 
@@ -85,6 +97,7 @@ export class Activity {
     this.dir = opts.dir ?? '';
     this.keepDays = opts.keepDays ?? 7;
     this.batchSize = Math.max(1, opts.batchSize ?? 25);
+    this.flushAfterMs = Math.max(1000, opts.flushAfterMs ?? 120_000);
     this.maxQueue = Math.max(this.batchSize, opts.maxQueue ?? 2000);
     this.now = opts.now ?? Date.now;
     if (this.dir) {
@@ -139,6 +152,7 @@ export class Activity {
       this.queue.shift();
       this.dropped += 1;
     }
+    if (this.queue.length === 0) this.queuedSince = this.now();
     this.queue.push(clean);
     return clean;
   }
@@ -146,16 +160,20 @@ export class Activity {
   /** Send what is queued. Never throws; a failure leaves the queue intact. */
   async flush(force = false): Promise<{ sent: number; queued: number }> {
     if (!this.sink) return { sent: 0, queued: this.queue.length };
-    if (!force && this.queue.length < this.batchSize) {
+    if (this.queue.length === 0) return { sent: 0, queued: 0 };
+    // Full enough, old enough, or asked. Age is what stops a quiet watchlist
+    // holding a dozen lines in memory until something kills the process.
+    const waited = this.now() - this.queuedSince;
+    if (!force && this.queue.length < this.batchSize && waited < this.flushAfterMs) {
       return { sent: 0, queued: this.queue.length };
     }
-    if (this.queue.length === 0) return { sent: 0, queued: 0 };
 
     const batch = this.queue.slice(0, 200);
     try {
       const ok = await this.sink.recordActivity(batch);
       if (!ok) return { sent: 0, queued: this.queue.length };
       this.queue.splice(0, batch.length);
+      this.queuedSince = this.queue.length ? this.now() : 0;
       return { sent: batch.length, queued: this.queue.length };
     } catch {
       // Deliberately silent. The Hub being unreachable is already reported by

@@ -839,8 +839,32 @@ function missionCard(m) {
   // count was actually read, and a listing where we read zero is not the same
   // as one where the retailer never said. Absence is the only thing that means
   // nothing was stated, so absence has to be reserved for it.
+  //
+  // ── Why the number sometimes wears a plus ────────────────────────────────
+  //
+  // Target's available_to_promise_quantity is a real figure below a ceiling and
+  // a ceiling above it. Across every reading taken so far the values are 0, 8,
+  // 9, 10, 14, 18 and 20 — never anything above 20, and 10 and 20 recur far
+  // too often to be coincidence. So "20" means *at least* twenty and possibly
+  // a pallet, while "9" means nine.
+  //
+  // Which makes it precise exactly when it matters: as a drop is eaten the
+  // number falls under the ceiling and starts telling the truth.
   if (m.availableQuantity !== null && m.availableQuantity !== undefined) {
-    right.appendChild(el('div', 'meta', m.availableQuantity + ' available'));
+    const q = m.availableQuantity;
+    const capped = q === 10 || q === 20;
+    right.appendChild(el('div', 'meta', (capped ? q + '+ available' : q + ' available')));
+    if (capped) {
+      const hint = el('div', 'meta', 'Target caps this figure — it means at least ' + q);
+      hint.style.opacity = '.7';
+      right.appendChild(hint);
+    }
+  }
+  // The number you can actually walk away with, which is not the one above.
+  // A limit of 2 against 10 available is two, and burying that in the note
+  // line while the headline says 10 is the wrong way round.
+  if (m.orderLimit !== null && m.orderLimit !== undefined && m.orderLimit > 0) {
+    right.appendChild(el('div', 'meta', 'limit ' + m.orderLimit + ' per order'));
   }
 
   row.append(left, right);

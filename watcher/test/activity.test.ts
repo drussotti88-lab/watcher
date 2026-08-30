@@ -272,3 +272,58 @@ test('a pass with no activity attached behaves exactly as before', async () => {
   });
   assert.equal(result.checked, 1);
 });
+
+// ── Lines must not die with the process ──────────────────────────────────────
+
+test('AN OLD LINE IS SENT EVEN WHEN THE BATCH IS NOT FULL', async () => {
+  // Batching alone means up to batchSize lines sit in memory indefinitely on a
+  // quiet watchlist, and they are lost outright if the process is killed rather
+  // than asked to stop. That is how nearly an hour of checks went missing from
+  // the Hub while the local file had every one of them.
+  const s = sink();
+  let now = 1_000_000;
+  const log = new Activity({
+    sink: s.sink,
+    batchSize: 25,
+    flushAfterMs: 120_000,
+    now: () => now,
+  });
+
+  log.record({ kind: 'check', message: 'lonely' });
+  assert.equal((await log.flush()).sent, 0, 'too new and too few');
+
+  now += 121_000;
+  assert.equal((await log.flush()).sent, 1, 'old enough now');
+  assert.equal(s.got[0]!.message, 'lonely');
+});
+
+test('the clock restarts from the oldest line still waiting', async () => {
+  const s = sink();
+  let now = 1_000_000;
+  const log = new Activity({ sink: s.sink, batchSize: 25, flushAfterMs: 60_000, now: () => now });
+
+  log.record({ kind: 'check', message: 'first' });
+  now += 61_000;
+  await log.flush();
+  assert.equal(s.got.length, 1);
+
+  // A fresh line starts a fresh wait rather than inheriting the old one.
+  log.record({ kind: 'check', message: 'second' });
+  assert.equal((await log.flush()).sent, 0, 'the new line is not old yet');
+  now += 61_000;
+  assert.equal((await log.flush()).sent, 1);
+});
+
+test('a full batch still goes immediately, however new', async () => {
+  const s = sink();
+  const log = new Activity({ sink: s.sink, batchSize: 3, flushAfterMs: 999_999 });
+  for (let i = 0; i < 3; i += 1) log.record({ kind: 'check', message: `n${i}` });
+  assert.equal((await log.flush()).sent, 3);
+});
+
+test('an empty queue is never a request', async () => {
+  const s = sink();
+  const log = new Activity({ sink: s.sink, batchSize: 1, flushAfterMs: 1000 });
+  assert.deepEqual(await log.flush(true), { sent: 0, queued: 0 });
+  assert.equal(s.got.length, 0);
+});
