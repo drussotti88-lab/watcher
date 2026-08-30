@@ -1518,3 +1518,16 @@ test('the policy is editable and is sent when saved', async () => {
   assert.ok(call, 'saving did nothing');
   assert.equal(call.body.preOrderPolicy, 'allow');
 });
+
+test('the header names the account you are signed in as', async () => {
+  // The bug this whole change closes was invisible: two people, one dashboard,
+  // no way to tell which. A badge that is present when the API says who you
+  // are, and absent when it does not, is what makes the fix legible.
+  const h = await boot({ ...DASHBOARD, you: 'tester' });
+  assert.equal(h.doc.getElementById('who')?.textContent, 'tester');
+});
+
+test('the header badge stays empty rather than guessing at a name', async () => {
+  const h = await boot(DASHBOARD);
+  assert.equal(h.doc.getElementById('who')?.textContent, '');
+});

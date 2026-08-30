@@ -6,12 +6,16 @@
  *   the Watcher   a bearer token, set once in its config file
  *   the browser   a password, exchanged for a signed cookie
  *
- * Kept as simple as it can be while still being real. There are no accounts
- * because there is one user. There is no password database because there is one
- * password. But the cookie is signed with HMAC and carries an expiry, because
- * the alternative — a cookie that just says `loggedin=true` — is a page anyone
- * can walk into by typing eight characters into their dev tools, and this page
- * will eventually show what has been bought and be able to buy more.
+ * There are accounts now. There were not, and the gap was the whole problem:
+ * every query underneath already filtered by user_id and every Watcher already
+ * carried its own token, but the browser door had one password and always
+ * answered as user 1. Handing a second person the link did not create a second
+ * account — it handed them the first one, with the delete buttons attached.
+ *
+ * The cookie is signed with HMAC and carries both an expiry and the user it
+ * belongs to, because the alternative — a cookie that says `user=2` in plain
+ * text — is another account anyone can walk into by typing five characters
+ * into their dev tools, and this page will eventually be able to spend money.
  */
 
 const SESSION_COOKIE = 'hub_session';
@@ -47,28 +51,63 @@ export function safeEqual(a: string, b: string): boolean {
   return diff === 0;
 }
 
-export async function mintSession(secret: string, now = Date.now()): Promise<string> {
+/**
+ * A signed cookie value saying who, until when.
+ *
+ * The payload is `<userId>:<expires>`. Older cookies carry a bare expiry with
+ * no colon and are read as user 1 — see `readSession`. That is not politeness
+ * to old data, it is so that deploying this does not sign Roberto out of a
+ * dashboard whose Watcher is mid-pass.
+ */
+export async function mintSession(
+  secret: string,
+  userId = 1,
+  now = Date.now(),
+): Promise<string> {
   const expires = now + SESSION_HOURS * 3600 * 1000;
-  const payload = String(expires);
+  const payload = `${userId}:${expires}`;
   return `${payload}.${await hmac(secret, payload)}`;
 }
 
+/**
+ * Whose session is this, and is it still good? Returns 0 for neither.
+ *
+ * Signature first, always. The user id is inside the signed payload, so it can
+ * be trusted only after the MAC has been checked — reading it first and
+ * checking later is how a cookie becomes a user-id parameter.
+ */
+export async function readSession(
+  secret: string,
+  token: string | null,
+  now = Date.now(),
+): Promise<number> {
+  if (!token) return 0;
+  const dot = token.lastIndexOf('.');
+  if (dot < 1) return 0;
+  const payload = token.slice(0, dot);
+  const signature = token.slice(dot + 1);
+
+  const expected = await hmac(secret, payload);
+  if (!safeEqual(signature, expected)) return 0;
+
+  // Old format: the payload is the expiry alone, and it belonged to user 1
+  // because user 1 was the only user there was.
+  const colon = payload.indexOf(':');
+  const userId = colon === -1 ? 1 : Number(payload.slice(0, colon));
+  const expires = Number(colon === -1 ? payload : payload.slice(colon + 1));
+
+  if (!Number.isInteger(userId) || userId < 1) return 0;
+  if (!Number.isFinite(expires) || expires <= now) return 0;
+  return userId;
+}
+
+/** Is this session good at all? `readSession` when you need to know whose. */
 export async function sessionValid(
   secret: string,
   token: string | null,
   now = Date.now(),
 ): Promise<boolean> {
-  if (!token) return false;
-  const dot = token.lastIndexOf('.');
-  if (dot < 1) return false;
-  const payload = token.slice(0, dot);
-  const signature = token.slice(dot + 1);
-
-  const expected = await hmac(secret, payload);
-  if (!safeEqual(signature, expected)) return false;
-
-  const expires = Number(payload);
-  return Number.isFinite(expires) && expires > now;
+  return (await readSession(secret, token, now)) > 0;
 }
 
 export function readCookie(request: Request, name: string): string | null {
@@ -107,6 +146,21 @@ export const COOKIE_NAME = SESSION_COOKIE;
 export interface AuthEnv {
   INGEST_TOKEN?: string;
   APP_PASSWORD?: string;
+  /**
+   * What session cookies are signed with.
+   *
+   * Optional, and falls back to APP_PASSWORD so that accounts could ship
+   * without a new environment variable having to be set first — a deploy that
+   * needs a secret typed into a dashboard before it works is a deploy that is
+   * broken for however long that takes. Set it, and changing the owner
+   * password stops signing everybody out.
+   */
+  SESSION_SECRET?: string;
+}
+
+/** The key sessions are signed with. Empty means the browser door is shut. */
+export function sessionSecret(env: AuthEnv): string {
+  return env.SESSION_SECRET || env.APP_PASSWORD || '';
 }
 
 export type CallerKind = 'watcher' | 'browser' | 'none';
@@ -174,11 +228,13 @@ export async function identify(
     }
   }
 
-  if (env.APP_PASSWORD) {
+  const secret = sessionSecret(env);
+  if (secret) {
     const cookie = readCookie(request, SESSION_COOKIE);
-    // One shared password still means one user. Real accounts are Phase 2;
-    // this is the seam they will arrive through.
-    if (await sessionValid(env.APP_PASSWORD, cookie)) return { kind: 'browser', userId: 1 };
+    // Whose session, not whether there is one. This used to return a constant
+    // 1 no matter who signed in, which made every account below it decorative.
+    const userId = await readSession(secret, cookie);
+    if (userId) return { kind: 'browser', userId };
   }
 
   return NOBODY;
@@ -186,3 +242,128 @@ export async function identify(
 
 /** Given a token hash, whose Watcher is it? Returns 0 for nobody. */
 export type TokenLookup = (tokenHash: string) => Promise<number>;
+
+// ── Passwords ────────────────────────────────────────────────────────────────
+
+/**
+ * PBKDF2-HMAC-SHA256. Chosen because it is the only password KDF Web Crypto
+ * offers, and Web Crypto is the only thing guaranteed to exist both in Node
+ * and on Vercel's runtime. Argon2 or scrypt would be better; neither is here
+ * without a native dependency, and a native dependency in the deploy path is
+ * its own kind of outage.
+ *
+ * The iteration count lives in the stored string rather than in a constant, so
+ * raising it later re-hashes on next login instead of locking everybody out.
+ */
+const PBKDF2_ITERATIONS = 210_000;
+const PBKDF2_KEY_BYTES = 32;
+const PBKDF2_SALT_BYTES = 16;
+
+async function pbkdf2(
+  password: string,
+  salt: Uint8Array,
+  iterations: number,
+): Promise<Uint8Array> {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(password),
+    'PBKDF2',
+    false,
+    ['deriveBits'],
+  );
+  const bits = await crypto.subtle.deriveBits(
+    { name: 'PBKDF2', salt: salt as BufferSource, iterations, hash: 'SHA-256' },
+    key,
+    PBKDF2_KEY_BYTES * 8,
+  );
+  return new Uint8Array(bits);
+}
+
+/** Hash a password for storage. Never logged, never returned to a browser. */
+export async function hashPassword(
+  password: string,
+  iterations = PBKDF2_ITERATIONS,
+): Promise<string> {
+  const salt = crypto.getRandomValues(new Uint8Array(PBKDF2_SALT_BYTES));
+  const derived = await pbkdf2(password, salt, iterations);
+  return `pbkdf2$sha256$${iterations}$${b64url(salt)}$${b64url(derived)}`;
+}
+
+/**
+ * Does this password match that stored hash?
+ *
+ * False for a malformed or empty stored hash rather than throwing, because the
+ * empty string is a real and expected value: a user row that owns a Watcher
+ * token but has no browser login at all stores exactly that, and it must mean
+ * "cannot sign in", never "signs in with anything".
+ */
+export async function verifyPassword(password: string, stored: string): Promise<boolean> {
+  const parts = String(stored ?? '').split('$');
+  if (parts.length !== 5) return false;
+  // Destructuring off a length-checked array still types as possibly-undefined
+  // under noUncheckedIndexedAccess, and defaulting is cheaper than asserting.
+  const [scheme = '', hash = '', iterText = '', saltText = '', expected = ''] = parts;
+  if (scheme !== 'pbkdf2' || hash !== 'sha256') return false;
+
+  const iterations = Number(iterText);
+  // An attacker who could write the hash column could otherwise set the
+  // iteration count to a billion and turn every login attempt into an outage.
+  if (!Number.isInteger(iterations) || iterations < 1000 || iterations > 5_000_000) return false;
+
+  let salt: Uint8Array;
+  try {
+    salt = new Uint8Array(Buffer.from(saltText, 'base64url'));
+  } catch {
+    return false;
+  }
+  if (salt.length === 0) return false;
+
+  const derived = await pbkdf2(password, salt, iterations);
+  return safeEqual(b64url(derived), expected);
+}
+
+// ── Signing in ───────────────────────────────────────────────────────────────
+
+/** Given a name, the id and stored hash to check against. Null for nobody. */
+export type PasswordLookup = (
+  handle: string,
+) => Promise<{ id: number; passwordHash: string } | null>;
+
+/**
+ * A hash of nothing anybody knows, used to spend the same time on a name that
+ * does not exist as on one that does.
+ *
+ * Without it, a wrong password takes ~200ms of PBKDF2 and an unknown name
+ * returns instantly, and the difference tells anyone who cares which of the two
+ * they got — which is how you enumerate the accounts on a system before you
+ * start guessing at their passwords.
+ */
+const DECOY_HASH =
+  'pbkdf2$sha256$210000$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+
+/**
+ * Who is signing in, or 0.
+ *
+ * Two doors, and the empty handle is the older one. A blank name with the
+ * deployment's APP_PASSWORD is the owner — kept working exactly as it did,
+ * because the alternative was a deploy that locks Roberto out of his own
+ * dashboard until he creates an account he cannot create without signing in.
+ */
+export async function signIn(
+  env: AuthEnv,
+  handle: string,
+  password: string,
+  lookup: PasswordLookup,
+): Promise<number> {
+  const name = String(handle ?? '').trim();
+  if (!password) return 0;
+
+  if (!name) {
+    if (env.APP_PASSWORD && safeEqual(password, env.APP_PASSWORD)) return 1;
+    return 0;
+  }
+
+  const found = await lookup(name);
+  const ok = await verifyPassword(password, found ? found.passwordHash : DECOY_HASH);
+  return ok && found ? found.id : 0;
+}

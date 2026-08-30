@@ -571,7 +571,11 @@ async function upsertProduct(db2, userId, p) {
   return toProduct(rows[0]);
 }
 async function deleteProduct(db2, userId, key) {
-  await db2.query("DELETE FROM products WHERE user_id = $1 AND key = $2", [userId, key]);
+  const rows = await db2.query(
+    "DELETE FROM products WHERE user_id = $1 AND key = $2 RETURNING key",
+    [userId, key]
+  );
+  return rows.length > 0;
 }
 function toListing(r) {
   return {
@@ -623,7 +627,11 @@ async function addListing(db2, userId, l) {
   return toListing(full);
 }
 async function deleteListing(db2, userId, id) {
-  await db2.query("DELETE FROM listings WHERE user_id = $1 AND id = $2", [userId, id]);
+  const rows = await db2.query(
+    "DELETE FROM listings WHERE user_id = $1 AND id = $2 RETURNING id",
+    [userId, id]
+  );
+  return rows.length > 0;
 }
 async function countUsers(db2) {
   const rows = await db2.query("SELECT count(*)::int AS n FROM users");
@@ -636,6 +644,23 @@ async function userByTokenHash(db2, tokenHash) {
     [tokenHash]
   );
   return Number(rows[0]?.id ?? 0);
+}
+async function userForLogin(db2, handle) {
+  const name = String(handle ?? "").trim();
+  if (!name) return null;
+  const rows = await db2.query(
+    `SELECT id, password_hash FROM users
+      WHERE enabled = true AND password_hash <> '' AND lower(handle) = lower($1)`,
+    [name]
+  );
+  const row = rows[0];
+  return row ? { id: Number(row.id), passwordHash: row.password_hash } : null;
+}
+async function userHandle(db2, userId) {
+  const rows = await db2.query("SELECT handle FROM users WHERE id = $1", [
+    userId
+  ]);
+  return String(rows[0]?.handle ?? "");
 }
 var DEFAULT_SETTINGS = {
   taxRate: 0,
@@ -893,7 +918,11 @@ async function upsertMission(db2, userId, m) {
   return mission;
 }
 async function deleteMission(db2, userId, id) {
-  await db2.query("DELETE FROM missions WHERE user_id = $1 AND id = $2", [userId, id]);
+  const rows = await db2.query(
+    "DELETE FROM missions WHERE user_id = $1 AND id = $2 RETURNING id",
+    [userId, id]
+  );
+  return rows.length > 0;
 }
 async function startRun(db2, userId, missionId) {
   const owns = await db2.query(
@@ -1517,21 +1546,25 @@ function safeEqual(a, b) {
   for (let i = 0; i < a.length; i += 1) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
   return diff === 0;
 }
-async function mintSession(secret, now = Date.now()) {
+async function mintSession(secret, userId = 1, now = Date.now()) {
   const expires = now + SESSION_HOURS * 3600 * 1e3;
-  const payload = String(expires);
+  const payload = `${userId}:${expires}`;
   return `${payload}.${await hmac(secret, payload)}`;
 }
-async function sessionValid(secret, token, now = Date.now()) {
-  if (!token) return false;
+async function readSession(secret, token, now = Date.now()) {
+  if (!token) return 0;
   const dot = token.lastIndexOf(".");
-  if (dot < 1) return false;
+  if (dot < 1) return 0;
   const payload = token.slice(0, dot);
   const signature = token.slice(dot + 1);
   const expected = await hmac(secret, payload);
-  if (!safeEqual(signature, expected)) return false;
-  const expires = Number(payload);
-  return Number.isFinite(expires) && expires > now;
+  if (!safeEqual(signature, expected)) return 0;
+  const colon = payload.indexOf(":");
+  const userId = colon === -1 ? 1 : Number(payload.slice(0, colon));
+  const expires = Number(colon === -1 ? payload : payload.slice(colon + 1));
+  if (!Number.isInteger(userId) || userId < 1) return 0;
+  if (!Number.isFinite(expires) || expires <= now) return 0;
+  return userId;
 }
 function readCookie(request, name) {
   const header = request.headers.get("cookie") ?? "";
@@ -1561,6 +1594,9 @@ function clearCookie(secure) {
   if (secure) bits.push("Secure");
   return bits.join("; ");
 }
+function sessionSecret(env2) {
+  return env2.SESSION_SECRET || env2.APP_PASSWORD || "";
+}
 var NOBODY = { kind: "none", userId: 0 };
 async function hashToken(token) {
   const bytes = new TextEncoder().encode(token);
@@ -1579,11 +1615,58 @@ async function identify(request, env2, lookup) {
       return { kind: "watcher", userId: 1 };
     }
   }
-  if (env2.APP_PASSWORD) {
+  const secret = sessionSecret(env2);
+  if (secret) {
     const cookie = readCookie(request, SESSION_COOKIE);
-    if (await sessionValid(env2.APP_PASSWORD, cookie)) return { kind: "browser", userId: 1 };
+    const userId = await readSession(secret, cookie);
+    if (userId) return { kind: "browser", userId };
   }
   return NOBODY;
+}
+var PBKDF2_KEY_BYTES = 32;
+async function pbkdf2(password, salt, iterations) {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(password),
+    "PBKDF2",
+    false,
+    ["deriveBits"]
+  );
+  const bits = await crypto.subtle.deriveBits(
+    { name: "PBKDF2", salt, iterations, hash: "SHA-256" },
+    key,
+    PBKDF2_KEY_BYTES * 8
+  );
+  return new Uint8Array(bits);
+}
+async function verifyPassword(password, stored) {
+  const parts = String(stored ?? "").split("$");
+  if (parts.length !== 5) return false;
+  const [scheme = "", hash = "", iterText = "", saltText = "", expected = ""] = parts;
+  if (scheme !== "pbkdf2" || hash !== "sha256") return false;
+  const iterations = Number(iterText);
+  if (!Number.isInteger(iterations) || iterations < 1e3 || iterations > 5e6) return false;
+  let salt;
+  try {
+    salt = new Uint8Array(Buffer.from(saltText, "base64url"));
+  } catch {
+    return false;
+  }
+  if (salt.length === 0) return false;
+  const derived = await pbkdf2(password, salt, iterations);
+  return safeEqual(b64url(derived), expected);
+}
+var DECOY_HASH = "pbkdf2$sha256$210000$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+async function signIn(env2, handle, password, lookup) {
+  const name = String(handle ?? "").trim();
+  if (!password) return 0;
+  if (!name) {
+    if (env2.APP_PASSWORD && safeEqual(password, env2.APP_PASSWORD)) return 1;
+    return 0;
+  }
+  const found = await lookup(name);
+  const ok = await verifyPassword(password, found ? found.passwordHash : DECOY_HASH);
+  return ok && found ? found.id : 0;
 }
 
 // src/scrub.ts
@@ -1835,6 +1918,14 @@ tr:first-child td { border-top: none; }
 .o-in_stock { color: var(--in); }
 
 details { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 12px; }
+/* Whose dashboard this is. Small and quiet, but always present: the browser
+   door used to hand every visitor the owner's account, and the fix is only
+   trustworthy if you can see which one you are in. */
+.who { font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
+       color: var(--muted); border: 1px solid var(--line); border-radius: 999px;
+       padding: 2px 8px; vertical-align: middle; margin-left: 8px; }
+.who:empty { display: none; }
+
 details > summary { cursor: pointer; color: var(--muted); font-size: 13px; list-style: none;
                     font-weight: 500; }
 details > summary::-webkit-details-marker { display: none; }
@@ -1863,7 +1954,7 @@ dialog .card { margin: 0; max-height: 86vh; overflow-y: auto; }
 .login .card { padding: 26px 24px; }
 .err { color: var(--alert); font-size: 13px; min-height: 20px; }
 `;
-function loginPage(message = "") {
+function loginPage(message = "", handle = "") {
   return `<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -1871,9 +1962,15 @@ function loginPage(message = "") {
 <body><main class="login">
   <div class="card">
     <h1>Hub</h1>
-    <p class="sub" style="margin:6px 0 0">Sign in to see what's being watched.</p>
-    <form method="POST" action="/login" style="margin-top:20px">
-      <input type="password" name="password" placeholder="Password" autofocus required
+    <p class="sub" style="margin:6px 0 0">Sign in to see what you're watching.</p>
+    <form method="POST" action="/login" style="margin-top:20px" class="stack">
+      <!-- Blank name means the owner and the deployment password, which is how
+           this page worked before there were accounts and how it still works
+           for Roberto. Everyone else types the name they were given. -->
+      <input type="text" name="handle" placeholder="Name (leave blank if it's yours)"
+             value="${esc(handle)}" autocomplete="username" autocapitalize="off"
+             autocorrect="off" spellcheck="false">
+      <input type="password" name="password" placeholder="Password" required
              autocomplete="current-password">
       <div class="err" style="margin:9px 0">${esc(message)}</div>
       <button type="submit" class="primary" style="width:100%">Sign in</button>
@@ -1899,7 +1996,7 @@ ${FONTS}<style>${STYLE}</style></head>
 <body><main>
   <header>
     <div>
-      <h1>Hub</h1>
+      <h1>Hub <span class="who" id="who"></span></h1>
       <span class="sub" id="summary">loading\u2026</span>
     </div>
     <button id="install" class="small" hidden>Install</button>
@@ -2941,6 +3038,7 @@ function render() {
   if (never) parts.push(never + ' never checked');
   document.getElementById('summary').textContent =
     parts.length ? parts.join(' \xB7 ') : 'nothing in stock';
+  document.getElementById('who').textContent = DATA.you || '';
 
   const st = DATA.settings || { taxRate: 0, shippingAllowance: 0 };
   const sf = document.getElementById('settings-form');
@@ -3515,16 +3613,19 @@ function createHandler(db2, env2) {
     if (path === "/login") {
       if (request.method === "GET") return html(loginPage());
       const form = await request.formData().catch(() => null);
+      const handle2 = String(form?.get("handle") ?? "").trim();
       const given = String(form?.get("password") ?? "");
-      if (!env2.APP_PASSWORD) {
+      const secret = sessionSecret(env2);
+      if (!secret) {
         return html(loginPage("No password is set on this deployment."), 500);
       }
-      if (!safeEqual(given, env2.APP_PASSWORD)) {
+      const userId2 = await signIn(env2, handle2, given, (name) => userForLogin(db2, name));
+      if (!userId2) {
         await new Promise((r) => setTimeout(r, 400));
-        return html(loginPage("That is not the password."), 401);
+        return html(loginPage("That name and password do not go together.", handle2), 401);
       }
       return redirect("/", {
-        "Set-Cookie": sessionCookie(await mintSession(env2.APP_PASSWORD), secure)
+        "Set-Cookie": sessionCookie(await mintSession(secret, userId2), secure)
       });
     }
     if (path === "/logout") {
@@ -3551,6 +3652,7 @@ function createHandler(db2, env2) {
         discoveriesToReview(db2, userId)
       ]);
       const sweep = await sweepState(db2, userId, SWEEP_SOURCE, settings.sweepEveryHours);
+      const you = await userHandle(db2, userId);
       return json({
         missions,
         runs,
@@ -3560,7 +3662,8 @@ function createHandler(db2, env2) {
         settings,
         discoveries,
         sweep,
-        now
+        now,
+        you
       });
     }
     if (request.method === "GET" && path.startsWith("/api/missions/") && path.endsWith("/runs")) {
@@ -3583,7 +3686,7 @@ function createHandler(db2, env2) {
     if (request.method === "DELETE" && path.startsWith("/api/products/")) {
       const key = decodeURIComponent(path.slice("/api/products/".length));
       if (!key) return json({ error: "no product key" }, 400);
-      await deleteProduct(db2, userId, key);
+      if (!await deleteProduct(db2, userId, key)) return json({ error: "no such product" }, 404);
       return json({ deleted: key });
     }
     if (request.method === "POST" && path === "/api/listings") {
@@ -3661,7 +3764,7 @@ function createHandler(db2, env2) {
     if (request.method === "DELETE" && path.startsWith("/api/listings/")) {
       const id = Number(path.slice("/api/listings/".length));
       if (!Number.isInteger(id)) return json({ error: "bad listing id" }, 400);
-      await deleteListing(db2, userId, id);
+      if (!await deleteListing(db2, userId, id)) return json({ error: "no such listing" }, 404);
       return json({ deleted: id });
     }
     if (request.method === "POST" && path === "/api/missions") {
@@ -3682,7 +3785,7 @@ function createHandler(db2, env2) {
     if (request.method === "DELETE" && path.startsWith("/api/missions/")) {
       const id = Number(path.slice("/api/missions/".length));
       if (!Number.isInteger(id)) return json({ error: "bad mission id" }, 400);
-      await deleteMission(db2, userId, id);
+      if (!await deleteMission(db2, userId, id)) return json({ error: "no such mission" }, 404);
       return json({ deleted: id });
     }
     if (request.method === "GET" && path === "/api/settings") {

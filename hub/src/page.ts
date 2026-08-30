@@ -243,6 +243,14 @@ tr:first-child td { border-top: none; }
 .o-in_stock { color: var(--in); }
 
 details { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 12px; }
+/* Whose dashboard this is. Small and quiet, but always present: the browser
+   door used to hand every visitor the owner's account, and the fix is only
+   trustworthy if you can see which one you are in. */
+.who { font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
+       color: var(--muted); border: 1px solid var(--line); border-radius: 999px;
+       padding: 2px 8px; vertical-align: middle; margin-left: 8px; }
+.who:empty { display: none; }
+
 details > summary { cursor: pointer; color: var(--muted); font-size: 13px; list-style: none;
                     font-weight: 500; }
 details > summary::-webkit-details-marker { display: none; }
@@ -272,7 +280,7 @@ dialog .card { margin: 0; max-height: 86vh; overflow-y: auto; }
 .err { color: var(--alert); font-size: 13px; min-height: 20px; }
 `;
 
-export function loginPage(message = ''): string {
+export function loginPage(message = '', handle = ''): string {
   return `<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -280,9 +288,15 @@ export function loginPage(message = ''): string {
 <body><main class="login">
   <div class="card">
     <h1>Hub</h1>
-    <p class="sub" style="margin:6px 0 0">Sign in to see what's being watched.</p>
-    <form method="POST" action="/login" style="margin-top:20px">
-      <input type="password" name="password" placeholder="Password" autofocus required
+    <p class="sub" style="margin:6px 0 0">Sign in to see what you're watching.</p>
+    <form method="POST" action="/login" style="margin-top:20px" class="stack">
+      <!-- Blank name means the owner and the deployment password, which is how
+           this page worked before there were accounts and how it still works
+           for Roberto. Everyone else types the name they were given. -->
+      <input type="text" name="handle" placeholder="Name (leave blank if it's yours)"
+             value="${esc(handle)}" autocomplete="username" autocapitalize="off"
+             autocorrect="off" spellcheck="false">
+      <input type="password" name="password" placeholder="Password" required
              autocomplete="current-password">
       <div class="err" style="margin:9px 0">${esc(message)}</div>
       <button type="submit" class="primary" style="width:100%">Sign in</button>
@@ -309,7 +323,7 @@ ${FONTS}<style>${STYLE}</style></head>
 <body><main>
   <header>
     <div>
-      <h1>Hub</h1>
+      <h1>Hub <span class="who" id="who"></span></h1>
       <span class="sub" id="summary">loading…</span>
     </div>
     <button id="install" class="small" hidden>Install</button>
@@ -1351,6 +1365,7 @@ function render() {
   if (never) parts.push(never + ' never checked');
   document.getElementById('summary').textContent =
     parts.length ? parts.join(' · ') : 'nothing in stock';
+  document.getElementById('who').textContent = DATA.you || '';
 
   const st = DATA.settings || { taxRate: 0, shippingAllowance: 0 };
   const sf = document.getElementById('settings-form');

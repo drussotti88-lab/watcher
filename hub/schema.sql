@@ -547,3 +547,23 @@ ALTER TABLE discoveries ADD COLUMN IF NOT EXISTS image_url TEXT NOT NULL DEFAULT
 -- nothing acted on it, so an armed mission would have paid for something
 -- shipping in three months and reported success.
 ALTER TABLE missions ADD COLUMN IF NOT EXISTS preorder_policy TEXT NOT NULL DEFAULT 'skip';
+
+-- A password of one's own.
+--
+-- The browser door used to be a single shared password that always answered
+-- as user 1, while every query underneath already filtered by user_id and the
+-- Watcher already carried a per-user token. So the storage was multi-user and
+-- the front door was not: a second person handed the link and the password was
+-- not a second account, they were the first one — able to delete his missions,
+-- move his ceilings and switch his Watcher off.
+--
+-- PBKDF2-HMAC-SHA256, salted per user, iterations recorded in the string so
+-- raising them later does not invalidate the passwords already set. Format:
+--   pbkdf2$sha256$<iterations>$<salt b64url>$<derived key b64url>
+--
+-- Empty means this user has no browser login at all — which is the right
+-- default for a row that exists only to own a Watcher token.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT NOT NULL DEFAULT '';
+
+-- Names are typed by humans at a login box, so match them without case.
+CREATE UNIQUE INDEX IF NOT EXISTS users_handle_lower ON users (lower(handle));

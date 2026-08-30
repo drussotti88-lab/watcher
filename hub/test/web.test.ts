@@ -19,6 +19,11 @@ import * as store from '../src/store.ts';
 import {
   mintSession,
   sessionValid,
+  readSession,
+  hashPassword,
+  verifyPassword,
+  signIn,
+  type PasswordLookup,
   safeEqual,
   identify,
   hashToken,
@@ -180,7 +185,7 @@ test('a forged session cookie is refused', async () => {
 });
 
 test('an expired session is refused even though it is correctly signed', async () => {
-  const expired = await mintSession(PASSWORD, Date.now() - 40 * 24 * 3600 * 1000);
+  const expired = await mintSession(PASSWORD, 1, Date.now() - 40 * 24 * 3600 * 1000);
   assert.equal(await sessionValid(PASSWORD, expired), false);
   assert.equal(await sessionValid(PASSWORD, await mintSession(PASSWORD)), true);
 });
@@ -438,4 +443,184 @@ test('the same token always hashes the same way, and different ones do not colli
   assert.equal(await hashToken('abc'), await hashToken('abc'));
   assert.notEqual(await hashToken('abc'), await hashToken('abd'));
   assert.match(await hashToken('abc'), /^[0-9a-f]{64}$/);
+});
+
+// ── Accounts ─────────────────────────────────────────────────────────────────
+//
+/** The old cookie signature, rebuilt here rather than exported from auth.ts. */
+async function hmacFor(secret: string, message: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(message));
+  return Buffer.from(new Uint8Array(sig)).toString('base64url');
+}
+
+//
+// The browser door used to hand out userId 1 to anyone who knew the one
+// password, while every query underneath filtered by user_id and every Watcher
+// carried its own token. These are the tests for closing that.
+
+test('a session says who it belongs to, and the signature is what makes that true', async () => {
+  const mine = await mintSession(PASSWORD, 7);
+  assert.equal(await readSession(PASSWORD, mine), 7);
+
+  // The user id is inside the signed payload, so editing it invalidates it
+  // rather than switching account.
+  const tampered = mine.replace(/^7:/, '1:');
+  assert.equal(await readSession(PASSWORD, tampered), 0, 'a rewritten id must not be honoured');
+});
+
+test('a cookie minted before accounts existed still signs its owner in', async () => {
+  // The old payload was a bare expiry. Deploying accounts must not sign
+  // Roberto out of a dashboard whose Watcher is mid-pass.
+  const expires = Date.now() + 3600_000;
+  const legacy = `${expires}.${await hmacFor(PASSWORD, String(expires))}`;
+  assert.equal(await readSession(PASSWORD, legacy), 1);
+});
+
+test('a password verifies against its own hash and nothing else', async () => {
+  const stored = await hashPassword('correct horse battery staple');
+  assert.ok(await verifyPassword('correct horse battery staple', stored));
+  assert.equal(await verifyPassword('correct horse battery stapl', stored), false);
+  assert.equal(await verifyPassword('', stored), false);
+});
+
+test('two identical passwords do not produce the same hash', async () => {
+  // Per-user salt. Without it, one leaked table tells you which accounts share
+  // a password, and one cracked hash opens all of them.
+  const a = await hashPassword('the same password');
+  const b = await hashPassword('the same password');
+  assert.notEqual(a, b);
+  assert.ok(await verifyPassword('the same password', a));
+  assert.ok(await verifyPassword('the same password', b));
+});
+
+test('an empty stored hash means cannot sign in, never signs in with anything', async () => {
+  // A user row that owns a Watcher token but has no browser login stores
+  // exactly this, so getting it wrong would open every such account.
+  assert.equal(await verifyPassword('', ''), false);
+  assert.equal(await verifyPassword('anything at all', ''), false);
+  assert.equal(await verifyPassword('anything at all', 'not-a-hash'), false);
+  assert.equal(await verifyPassword('x', 'pbkdf2$sha256$210000$$'), false);
+});
+
+test('a hash asking for absurd work is refused rather than performed', async () => {
+  // Otherwise anyone who could write the column could turn every login attempt
+  // into a hung request.
+  const real = await hashPassword('a real password here');
+  const greedy = real.replace('$210000$', '$999999999$');
+  assert.equal(await verifyPassword('a real password here', greedy), false);
+});
+
+test('a blank name with the deployment password is still the owner', async () => {
+  const never: PasswordLookup = async () => null;
+  assert.equal(await signIn({ APP_PASSWORD: PASSWORD }, '', PASSWORD, never), 1);
+  assert.equal(await signIn({ APP_PASSWORD: PASSWORD }, '', 'wrong', never), 0);
+  assert.equal(await signIn({ APP_PASSWORD: PASSWORD }, '', '', never), 0);
+  assert.equal(await signIn({}, '', PASSWORD, never), 0, 'no password set means no door');
+});
+
+test('a named account signs in as itself, not as user 1', async () => {
+  const stored = await hashPassword('the testers password');
+  const lookup: PasswordLookup = async (handle) =>
+    handle === 'tester' ? { id: 4, passwordHash: stored } : null;
+
+  assert.equal(await signIn({ APP_PASSWORD: PASSWORD }, 'tester', 'the testers password', lookup), 4);
+  assert.equal(await signIn({ APP_PASSWORD: PASSWORD }, 'tester', 'wrong', lookup), 0);
+  assert.equal(await signIn({ APP_PASSWORD: PASSWORD }, 'nobody', 'the testers password', lookup), 0);
+});
+
+test('the owner password does not open a named account', async () => {
+  // The two doors must not be one door. Otherwise every account Roberto
+  // creates is one he can also walk into by typing his own password, which is
+  // the bug this whole change exists to remove.
+  const stored = await hashPassword('the testers password');
+  const lookup: PasswordLookup = async () => ({ id: 4, passwordHash: stored });
+  assert.equal(await signIn({ APP_PASSWORD: PASSWORD }, 'tester', PASSWORD, lookup), 0);
+});
+
+test('an unknown name costs about as much time as a known one', async () => {
+  // A fast "no such user" and a slow "wrong password" is an account
+  // enumeration oracle. Generous bounds — this asserts the decoy hash is being
+  // computed at all, not a precise timing property a shared CI box cannot give.
+  const stored = await hashPassword('the testers password');
+  const lookup: PasswordLookup = async (h) => (h === 'real' ? { id: 4, passwordHash: stored } : null);
+
+  const t0 = Date.now();
+  await signIn({}, 'real', 'wrong', lookup);
+  const known = Date.now() - t0;
+
+  const t1 = Date.now();
+  await signIn({}, 'ghost', 'wrong', lookup);
+  const unknown = Date.now() - t1;
+
+  assert.ok(unknown > known / 4, `unknown ${unknown}ms vs known ${known}ms — no decoy work done`);
+});
+
+test('a second person signed in sees their own dashboard, not the first person’s', async () => {
+  // This is the test for the bug the whole change exists to fix. The browser
+  // door used to return userId 1 whoever walked through it, so a tester handed
+  // the link did not get an empty dashboard — they got Roberto's, with the
+  // delete buttons live.
+  const { db } = await setup();
+  await db.query(
+    `INSERT INTO users (id, handle, password_hash) VALUES (2, 'tester', $1)`,
+    [await hashPassword('a password for the tester')],
+  );
+
+  const mine = await call(db, 'GET', '/api/dashboard', { cookie: await mintSession(PASSWORD, 1) });
+  const theirs = await call(db, 'GET', '/api/dashboard', { cookie: await mintSession(PASSWORD, 2) });
+
+  assert.equal(mine.status, 200);
+  assert.equal(theirs.status, 200);
+  assert.ok(mine.body.missions.length > 0, 'the owner still sees his own two missions');
+  assert.deepEqual(theirs.body.missions, [], 'and the tester sees none of them');
+});
+
+test('a second person cannot delete the first person’s mission', async () => {
+  // Reading someone else's data is the embarrassing failure. Writing to it is
+  // the expensive one: these routes move ceilings and switch Watchers off.
+  const { db, etbMission } = await setup();
+  await db.query(`INSERT INTO users (id, handle, password_hash) VALUES (2, 'tester', '')`);
+
+  const res = await call(db, 'DELETE', `/api/missions/${etbMission}`, {
+    cookie: await mintSession(PASSWORD, 2),
+  });
+  assert.ok(res.status === 404 || res.status === 403, `expected a refusal, got ${res.status}`);
+
+  const still = await store.getMission(db, USER, etbMission);
+  assert.ok(still, 'the mission is still there');
+});
+
+test('the login form signs in a named account and hands back a cookie for that account', async () => {
+  const { db } = await setup();
+  await db.query(
+    `INSERT INTO users (id, handle, password_hash) VALUES (2, 'tester', $1)`,
+    [await hashPassword('a password for the tester')],
+  );
+
+  const res = await call(db, 'POST', '/login', {
+    form: 'handle=tester&password=a+password+for+the+tester',
+  });
+  assert.equal(res.status, 303);
+
+  const cookie = /hub_session=([^;]+)/.exec(res.headers.get('set-cookie') ?? '')?.[1] ?? '';
+  assert.equal(await readSession(PASSWORD, decodeURIComponent(cookie)), 2);
+});
+
+test('a disabled account cannot sign in even with the right password', async () => {
+  const { db } = await setup();
+  await db.query(
+    `INSERT INTO users (id, handle, password_hash, enabled) VALUES (2, 'tester', $1, false)`,
+    [await hashPassword('a password for the tester')],
+  );
+  const res = await call(db, 'POST', '/login', {
+    form: 'handle=tester&password=a+password+for+the+tester',
+  });
+  assert.equal(res.status, 401);
 });

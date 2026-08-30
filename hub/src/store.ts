@@ -499,9 +499,18 @@ export async function setProductImage(
   );
 }
 
-export async function deleteProduct(db: Sql, userId: number, key: string): Promise<void> {
+export async function deleteProduct(db: Sql, userId: number, key: string): Promise<boolean> {
   // Listings, missions, runs and observations all cascade from here.
-  await db.query('DELETE FROM products WHERE user_id = $1 AND key = $2', [userId, key]);
+  //
+  // Returns whether a row was actually removed, which is not pedantry: the
+  // user_id in the WHERE clause means another account's delete matches nothing
+  // and removes nothing — correctly — and without this the route would answer
+  // 200 "deleted" to a request that did not delete anything.
+  const rows = await db.query<{ key: string }>(
+    'DELETE FROM products WHERE user_id = $1 AND key = $2 RETURNING key',
+    [userId, key],
+  );
+  return rows.length > 0;
 }
 
 // ─── Listings ────────────────────────────────────────────────────────────────
@@ -587,8 +596,12 @@ export async function addListing(
   return toListing(full!);
 }
 
-export async function deleteListing(db: Sql, userId: number, id: number): Promise<void> {
-  await db.query('DELETE FROM listings WHERE user_id = $1 AND id = $2', [userId, id]);
+export async function deleteListing(db: Sql, userId: number, id: number): Promise<boolean> {
+  const rows = await db.query<{ id: number }>(
+    'DELETE FROM listings WHERE user_id = $1 AND id = $2 RETURNING id',
+    [userId, id],
+  );
+  return rows.length > 0;
 }
 
 // ─── Missions ────────────────────────────────────────────────────────────────
@@ -640,6 +653,111 @@ export async function userByTokenHash(db: Sql, tokenHash: string): Promise<numbe
     [tokenHash],
   );
   return Number(rows[0]?.id ?? 0);
+}
+
+/** A person who can sign in. Never carries the password hash out of here. */
+export interface UserRow {
+  id: number;
+  handle: string;
+  enabled: boolean;
+  hasPassword: boolean;
+  hasToken: boolean;
+  createdAt: string;
+}
+
+/**
+ * Find a user by the name they typed, with their stored hash.
+ *
+ * Returns the hash because the caller has to verify it, and returns it from
+ * exactly one function so there is exactly one place to check that it never
+ * goes anywhere else. Disabled users are not found at all: switching somebody
+ * off should not leave a door that answers "wrong password".
+ */
+export async function userForLogin(
+  db: Sql,
+  handle: string,
+): Promise<{ id: number; passwordHash: string } | null> {
+  const name = String(handle ?? '').trim();
+  if (!name) return null;
+  const rows = await db.query<{ id: number; password_hash: string }>(
+    `SELECT id, password_hash FROM users
+      WHERE enabled = true AND password_hash <> '' AND lower(handle) = lower($1)`,
+    [name],
+  );
+  const row = rows[0];
+  return row ? { id: Number(row.id), passwordHash: row.password_hash } : null;
+}
+
+/** The name to show in the header, so it is obvious whose dashboard this is. */
+export async function userHandle(db: Sql, userId: number): Promise<string> {
+  const rows = await db.query<{ handle: string }>('SELECT handle FROM users WHERE id = $1', [
+    userId,
+  ]);
+  return String(rows[0]?.handle ?? '');
+}
+
+/** Everyone with an account, for the admin CLI. No secrets in the result. */
+export async function listUsers(db: Sql): Promise<UserRow[]> {
+  const rows = await db.query<{
+    id: number;
+    handle: string;
+    enabled: boolean;
+    has_password: boolean;
+    has_token: boolean;
+    created_at: string;
+  }>(
+    `SELECT id, handle, enabled,
+            password_hash <> '' AS has_password,
+            token_hash <> ''    AS has_token,
+            created_at
+       FROM users ORDER BY id`,
+  );
+  return rows.map((r) => ({
+    id: Number(r.id),
+    handle: r.handle,
+    enabled: Boolean(r.enabled),
+    hasPassword: Boolean(r.has_password),
+    hasToken: Boolean(r.has_token),
+    createdAt: String(r.created_at),
+  }));
+}
+
+/** Look one up by name whatever their state, so the CLI can say what exists. */
+export async function findUser(db: Sql, handle: string): Promise<UserRow | null> {
+  const all = await listUsers(db);
+  return all.find((u) => u.handle.toLowerCase() === String(handle ?? '').trim().toLowerCase()) ?? null;
+}
+
+/**
+ * Create a person, or set the password of one who already exists.
+ *
+ * Takes a hash, never a password: the hashing happens in the caller so that
+ * this module never holds a plaintext password even briefly, and so the CLI
+ * that reads one off a terminal is the only thing that ever has.
+ */
+export async function upsertUser(
+  db: Sql,
+  handle: string,
+  passwordHash: string,
+): Promise<number> {
+  const name = String(handle ?? '').trim();
+  if (!name) throw new Error('a user needs a handle');
+  const rows = await db.query<{ id: number }>(
+    `INSERT INTO users (handle, password_hash) VALUES ($1, $2)
+     ON CONFLICT (handle) DO UPDATE SET password_hash = EXCLUDED.password_hash
+     RETURNING id`,
+    [name, passwordHash],
+  );
+  return Number(rows[0]?.id ?? 0);
+}
+
+/** Switch an account on or off. Their data stays; their way in does not. */
+export async function setUserEnabled(db: Sql, handle: string, enabled: boolean): Promise<boolean> {
+  const rows = await db.query<{ id: number }>(
+    'UPDATE users SET enabled = $2 WHERE lower(handle) = lower($1) RETURNING id',
+    [String(handle ?? '').trim(), enabled],
+  );
+  return rows.length > 0;
 }
 
 // ── Account settings ─────────────────────────────────────────────────────────
@@ -1068,8 +1186,12 @@ export async function upsertMission(
   return mission;
 }
 
-export async function deleteMission(db: Sql, userId: number, id: number): Promise<void> {
-  await db.query('DELETE FROM missions WHERE user_id = $1 AND id = $2', [userId, id]);
+export async function deleteMission(db: Sql, userId: number, id: number): Promise<boolean> {
+  const rows = await db.query<{ id: number }>(
+    'DELETE FROM missions WHERE user_id = $1 AND id = $2 RETURNING id',
+    [userId, id],
+  );
+  return rows.length > 0;
 }
 
 // ─── Mission runs ────────────────────────────────────────────────────────────

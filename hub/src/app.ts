@@ -27,7 +27,14 @@ import * as store from './store.ts';
 import { announce, reportOps } from './notify.ts';
 import { applyFilters, dedupe } from './filter.ts';
 import { probeUrl } from './fetcher.ts';
-import { identify, mintSession, safeEqual, sessionCookie, clearCookie } from './auth.ts';
+import {
+  identify,
+  mintSession,
+  sessionCookie,
+  clearCookie,
+  sessionSecret,
+  signIn,
+} from './auth.ts';
 import { scrub, looksSensitive } from './scrub.ts';
 import { loginPage, dashboardPage } from './page.ts';
 import { identifyListing } from './parsers/identify.ts';
@@ -144,18 +151,23 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
     if (path === '/login') {
       if (request.method === 'GET') return html(loginPage());
       const form = await request.formData().catch(() => null);
+      const handle = String(form?.get('handle') ?? '').trim();
       const given = String(form?.get('password') ?? '');
-      if (!env.APP_PASSWORD) {
+
+      const secret = sessionSecret(env);
+      if (!secret) {
         return html(loginPage('No password is set on this deployment.'), 500);
       }
-      if (!safeEqual(given, env.APP_PASSWORD)) {
+
+      const userId = await signIn(env, handle, given, (name) => store.userForLogin(db, name));
+      if (!userId) {
         // Deliberately vague and deliberately slow-ish: no hint about length,
-        // no distinction between empty and wrong.
+        // and no distinction between a name that exists and one that does not.
         await new Promise((r) => setTimeout(r, 400));
-        return html(loginPage('That is not the password.'), 401);
+        return html(loginPage('That name and password do not go together.', handle), 401);
       }
       return redirect('/', {
-        'Set-Cookie': sessionCookie(await mintSession(env.APP_PASSWORD), secure),
+        'Set-Cookie': sessionCookie(await mintSession(secret, userId), secure),
       });
     }
 
@@ -196,8 +208,12 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
           store.discoveriesToReview(db, userId),
         ]);
       const sweep = await store.sweepState(db, userId, SWEEP_SOURCE, settings.sweepEveryHours);
+      // Whose dashboard this is. Sent on every load rather than stored in the
+      // page, because "which account am I looking at" is exactly the question
+      // you need answered correctly when the answer is surprising.
+      const you = await store.userHandle(db, userId);
       return json({
-        missions, runs, changes, products, listings, settings, discoveries, sweep, now,
+        missions, runs, changes, products, listings, settings, discoveries, sweep, now, you,
       });
     }
 
@@ -233,7 +249,10 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
     if (request.method === 'DELETE' && path.startsWith('/api/products/')) {
       const key = decodeURIComponent(path.slice('/api/products/'.length));
       if (!key) return json({ error: 'no product key' }, 400);
-      await store.deleteProduct(db, userId, key);
+      // 404 rather than a cheerful 200 when nothing matched. The store filters
+      // by user_id, so "nothing matched" is also what another account's delete
+      // looks like, and it should not be told it succeeded.
+      if (!(await store.deleteProduct(db, userId, key))) return json({ error: 'no such product' }, 404);
       return json({ deleted: key });
     }
 
@@ -360,7 +379,7 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
     if (request.method === 'DELETE' && path.startsWith('/api/listings/')) {
       const id = Number(path.slice('/api/listings/'.length));
       if (!Number.isInteger(id)) return json({ error: 'bad listing id' }, 400);
-      await store.deleteListing(db, userId, id);
+      if (!(await store.deleteListing(db, userId, id))) return json({ error: 'no such listing' }, 404);
       return json({ deleted: id });
     }
 
@@ -392,7 +411,7 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
     if (request.method === 'DELETE' && path.startsWith('/api/missions/')) {
       const id = Number(path.slice('/api/missions/'.length));
       if (!Number.isInteger(id)) return json({ error: 'bad mission id' }, 400);
-      await store.deleteMission(db, userId, id);
+      if (!(await store.deleteMission(db, userId, id))) return json({ error: 'no such mission' }, 404);
       return json({ deleted: id });
     }
 
