@@ -219,7 +219,15 @@ async function runPasses(once: boolean): Promise<void> {
         const found = candidates(scan.verdicts, query);
         let line = `sweep "${query}": ${scan.verdicts.length} results, ${found.length} kept`;
         if (found.length > 0) {
-          const result = await hub.ingest('target-tcg', found.map(toDiscovered));
+          // shift() has already run, so an empty plan means this was the last
+          // query. Only that one finishes the sweep; the others must not, or a
+          // restart part-way through loses the rest and nothing is due again
+          // until tomorrow.
+          const result = await hub.ingest(
+            'target-tcg',
+            found.map(toDiscovered),
+            sweepPlan.length === 0,
+          );
           const fresh = result.names ?? [];
           if (result.seeded) line += ' (baseline)';
           else if (fresh.length) line += ` — NEW: ${fresh.join(', ')}`;
@@ -471,7 +479,8 @@ async function main(): Promise<void> {
       let error = '';
       if (found.length > 0) {
         try {
-          const result = await hub.ingest('target-tcg', found.map(toDiscovered));
+          // The CLI accumulates every query and posts once, so this is final.
+          const result = await hub.ingest('target-tcg', found.map(toDiscovered), true);
           fresh = result.names ?? [];
           received = result.received;
           seeded = result.seeded;

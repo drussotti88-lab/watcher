@@ -363,10 +363,41 @@ async function knownIds(db2, userId, sourceId) {
 async function recordDiscoveries(db2, userId, sourceId, items, announce2) {
   if (items.length === 0) return [];
   const statements = items.map((item) => ({
+    // ── Why this is DO UPDATE and not DO NOTHING ──────────────────────────
+    //
+    // It was DO NOTHING, and that made `found_by` a lie. The same TCIN comes
+    // back for half a dozen different queries, so the first query to run
+    // claimed every product and the twelve after it appeared to have found
+    // nothing — which looks exactly like a sweep that is not working, and
+    // makes the field useless for the one job the schema says it has: telling
+    // you which keyword is earning its place.
+    //
+    // So a repeat sighting appends its query instead of being discarded. The
+    // comparison is against a comma-delimited list rather than a bare
+    // substring, or "pokemon tin" would match inside "pokemon tin bundle" and
+    // silently stop recording it.
+    //
+    // kind and confidence fill in only when blank, so a row added before the
+    // classifier existed gets labelled the next time it is seen, and a row
+    // already labelled is never relabelled by a query that guessed worse.
     text: `INSERT INTO discoveries
              (user_id, source_id, external_id, url, name, price, announced, kind, confidence, found_by)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-           ON CONFLICT (user_id, source_id, external_id) DO NOTHING`,
+           ON CONFLICT (user_id, source_id, external_id) DO UPDATE SET
+             found_by = CASE
+               WHEN EXCLUDED.found_by = '' THEN discoveries.found_by
+               WHEN discoveries.found_by = '' THEN EXCLUDED.found_by
+               WHEN position(', ' || EXCLUDED.found_by || ', '
+                             IN ', ' || discoveries.found_by || ', ') > 0
+                 THEN discoveries.found_by
+               WHEN length(discoveries.found_by) > 400 THEN discoveries.found_by
+               ELSE discoveries.found_by || ', ' || EXCLUDED.found_by
+             END,
+             kind = CASE WHEN discoveries.kind = '' THEN EXCLUDED.kind ELSE discoveries.kind END,
+             confidence = CASE
+               WHEN discoveries.confidence = '' THEN EXCLUDED.confidence
+               ELSE discoveries.confidence
+             END`,
     params: [
       userId,
       sourceId,
@@ -419,7 +450,15 @@ async function attachIdentity(db2, userId, sourceId, retailer, item) {
   ]);
   return key;
 }
-async function finishSweep(db2, userId, sourceId, status, count, seeded, cursor = 0) {
+async function finishSweep(db2, userId, sourceId, status, count, seeded, cursor = 0, complete = true) {
+  if (!complete) {
+    await db2.query(
+      `UPDATE sources SET last_status = $1, last_count = $2, seeded = $3
+        WHERE user_id = $4 AND id = $5`,
+      [status.slice(0, 300), count, seeded, userId, sourceId]
+    );
+    return;
+  }
   await db2.query(
     `UPDATE sources
         SET last_swept_at = now(), last_status = $1, last_count = $2,
@@ -3780,13 +3819,16 @@ function createHandler(db2, env2) {
       for (const item of toAnnounce) {
         await attachIdentity(db2, userId, sourceId, source.retailer, item);
       }
+      const complete = body2.final !== false;
       await finishSweep(
         db2,
         userId,
         sourceId,
         isFirstSweep ? `seeded ${fresh.length} via watcher` : `watcher: ${fresh.length} new`,
         clean.length,
-        true
+        true,
+        0,
+        complete
       );
       if (toAnnounce.length > 0) {
         await announce(env2.DISCORD_WEBHOOK_URL, source.label, source.retailer, toAnnounce, now);

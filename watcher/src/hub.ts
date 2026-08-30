@@ -407,6 +407,8 @@ export class Hub {
   async ingest(
     sourceId: string,
     items: { externalId: string; name: string; url: string; price: number | null }[],
+    /** False while more queries of the same sweep are still to come. */
+    final = true,
   ): Promise<{
     received: number;
     new: number;
@@ -414,7 +416,7 @@ export class Hub {
     seeded: boolean;
     names?: string[];
   }> {
-    return this.call('POST', '/ingest', { sourceId, items });
+    return this.call('POST', '/ingest', { sourceId, items, final });
   }
 
   /**

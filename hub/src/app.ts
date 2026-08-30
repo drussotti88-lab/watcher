@@ -695,7 +695,7 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
      * { "sourceId": "target-tcg", "items": [{ externalId, name, url, price }] }
      */
     if (request.method === 'POST' && path === '/ingest') {
-      let body: { sourceId?: string; items?: Discovered[] };
+      let body: { sourceId?: string; items?: Discovered[]; final?: boolean };
       try {
         body = (await request.json()) as typeof body;
       } catch {
@@ -724,6 +724,10 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       for (const item of toAnnounce) {
         await store.attachIdentity(db, userId, sourceId, source.retailer, item);
       }
+      // A Watcher-side sweep arrives as many posts, one per query. Only the
+      // last one finishes it — see the note on finishSweep. Absent means true,
+      // so a caller that posts once (the CLI, a curl by hand) still completes.
+      const complete = body.final !== false;
       await store.finishSweep(
         db,
         userId,
@@ -731,6 +735,8 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
         isFirstSweep ? `seeded ${fresh.length} via watcher` : `watcher: ${fresh.length} new`,
         clean.length,
         true,
+        0,
+        complete,
       );
 
       if (toAnnounce.length > 0) {

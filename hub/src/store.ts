@@ -140,10 +140,41 @@ export async function recordDiscoveries(
   if (items.length === 0) return [];
 
   const statements: Statement[] = items.map((item) => ({
+    // ── Why this is DO UPDATE and not DO NOTHING ──────────────────────────
+    //
+    // It was DO NOTHING, and that made `found_by` a lie. The same TCIN comes
+    // back for half a dozen different queries, so the first query to run
+    // claimed every product and the twelve after it appeared to have found
+    // nothing — which looks exactly like a sweep that is not working, and
+    // makes the field useless for the one job the schema says it has: telling
+    // you which keyword is earning its place.
+    //
+    // So a repeat sighting appends its query instead of being discarded. The
+    // comparison is against a comma-delimited list rather than a bare
+    // substring, or "pokemon tin" would match inside "pokemon tin bundle" and
+    // silently stop recording it.
+    //
+    // kind and confidence fill in only when blank, so a row added before the
+    // classifier existed gets labelled the next time it is seen, and a row
+    // already labelled is never relabelled by a query that guessed worse.
     text: `INSERT INTO discoveries
              (user_id, source_id, external_id, url, name, price, announced, kind, confidence, found_by)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-           ON CONFLICT (user_id, source_id, external_id) DO NOTHING`,
+           ON CONFLICT (user_id, source_id, external_id) DO UPDATE SET
+             found_by = CASE
+               WHEN EXCLUDED.found_by = '' THEN discoveries.found_by
+               WHEN discoveries.found_by = '' THEN EXCLUDED.found_by
+               WHEN position(', ' || EXCLUDED.found_by || ', '
+                             IN ', ' || discoveries.found_by || ', ') > 0
+                 THEN discoveries.found_by
+               WHEN length(discoveries.found_by) > 400 THEN discoveries.found_by
+               ELSE discoveries.found_by || ', ' || EXCLUDED.found_by
+             END,
+             kind = CASE WHEN discoveries.kind = '' THEN EXCLUDED.kind ELSE discoveries.kind END,
+             confidence = CASE
+               WHEN discoveries.confidence = '' THEN EXCLUDED.confidence
+               ELSE discoveries.confidence
+             END`,
     params: [
       userId,
       sourceId,
@@ -244,7 +275,25 @@ export async function finishSweep(
   count: number,
   seeded: boolean,
   cursor = 0,
+  /**
+   * Is the sweep actually over?
+   *
+   * A Watcher-side sweep is thirteen queries reported one at a time, and every
+   * one of them used to stamp last_swept_at and clear the manual request. So a
+   * sweep marked itself finished after its first query: a restart part-way
+   * through lost the remaining twelve *and* left nothing due for another day.
+   * Only the last query completes a sweep.
+   */
+  complete = true,
 ): Promise<void> {
+  if (!complete) {
+    await db.query(
+      `UPDATE sources SET last_status = $1, last_count = $2, seeded = $3
+        WHERE user_id = $4 AND id = $5`,
+      [status.slice(0, 300), count, seeded, userId, sourceId],
+    );
+    return;
+  }
   await db.query(
     `UPDATE sources
         SET last_swept_at = now(), last_status = $1, last_count = $2,

@@ -291,3 +291,37 @@ test('a run where nothing appeared names nothing, and says so with an empty list
   assert.equal(again.body.new, 0);
   assert.deepEqual(again.body.names, []);
 });
+
+test('INGEST CAN SAY IT IS NOT THE END OF THE SWEEP', async () => {
+  // The Watcher reports one query at a time. Only the last one may finish the
+  // sweep, or a restart part-way through loses the remaining queries and
+  // nothing is due again until tomorrow.
+  const db = await setup();
+  await db.query(
+    `INSERT INTO sources (id, label, retailer, kind, url, via, config, enabled, seeded)
+     VALUES ('tgt2', 'Target', 'Target', 'watcher', '', 'watcher',
+             '{"filters":["pokemon"]}'::jsonb, true, true)`,
+  );
+  await store.requestSweep(db, USER, 'tgt2');
+
+  const mid = await call(db, 'POST', '/ingest', {
+    token: TOKEN,
+    body: {
+      sourceId: 'tgt2',
+      items: [{ externalId: '1', name: 'Pokemon ETB', url: 'u', price: 1 }],
+      final: false,
+    },
+  });
+  assert.equal(mid.status, 200);
+  assert.equal((await store.sweepState(db, USER, 'tgt2', 24)).queued, true, 'still sweeping');
+
+  await call(db, 'POST', '/ingest', {
+    token: TOKEN,
+    body: {
+      sourceId: 'tgt2',
+      items: [{ externalId: '2', name: 'Pokemon Booster Box', url: 'u2', price: 2 }],
+      final: true,
+    },
+  });
+  assert.equal((await store.sweepState(db, USER, 'tgt2', 24)).queued, false, 'and now it is done');
+});

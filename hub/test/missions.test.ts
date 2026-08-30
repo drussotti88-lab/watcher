@@ -817,3 +817,133 @@ test('MY SWEEP REQUEST IS NOT YOURS', async () => {
   assert.equal(await store.requestSweep(db, 2, 'target-tcg'), false);
   assert.equal(await store.sweepDue(db, 2, 'target-tcg', 24), false);
 });
+
+
+// ── found_by has to name every query, not just the first ─────────────────────
+//
+// It named only the first, and that made a working sweep look broken: the same
+// TCIN comes back for half a dozen queries, so query one claimed every product
+// and the twelve after it appeared to find nothing.
+
+async function withTargetSource(): Promise<TestDb> {
+  const db = await TestDb.create();
+  await db.query(
+    `INSERT INTO sources (id, label, retailer, kind, url, via, config, enabled, seeded)
+     VALUES ('target-tcg', 'Target TCG', 'Target', 'watcher', '', 'watcher',
+             '{"filters":["pokemon"]}'::jsonb, true, true)`,
+  );
+  return db;
+}
+
+const sighting = (over: Record<string, unknown> = {}) => ({
+  externalId: '1010892076',
+  name: 'Pokemon 30th Celebration Elite Trainer Box',
+  url: 'https://www.target.com/p/-/A-1010892076',
+  price: 69.99,
+  kind: 'elite trainer box',
+  confidence: 'sealed',
+  foundBy: 'pokemon elite trainer box',
+  ...over,
+});
+
+test('A SECOND QUERY THAT FINDS THE SAME THING IS RECORDED, NOT DISCARDED', async () => {
+  const db = await withTargetSource();
+  await store.recordDiscoveries(db, USER, 'target-tcg', [sighting()], true);
+  await store.recordDiscoveries(db, USER, 'target-tcg', [sighting({ foundBy: 'pokemon ex box' })], true);
+
+  const [found] = await store.discoveriesToReview(db, USER);
+  assert.equal(found!.foundBy, 'pokemon elite trainer box, pokemon ex box');
+});
+
+test('the same query twice does not repeat itself', async () => {
+  const db = await withTargetSource();
+  for (let i = 0; i < 3; i += 1) {
+    await store.recordDiscoveries(db, USER, 'target-tcg', [sighting()], true);
+  }
+  const [found] = await store.discoveriesToReview(db, USER);
+  assert.equal(found!.foundBy, 'pokemon elite trainer box');
+});
+
+test('A QUERY THAT IS A PREFIX OF ANOTHER IS STILL RECORDED', async () => {
+  // The reason the check is against a comma-delimited list and not a bare
+  // substring: "pokemon tin" sits inside "pokemon tin bundle", so a substring
+  // test would decide it was already there and quietly drop it.
+  const db = await withTargetSource();
+  await store.recordDiscoveries(db, USER, 'target-tcg', [sighting({ foundBy: 'pokemon tin bundle' })], true);
+  await store.recordDiscoveries(db, USER, 'target-tcg', [sighting({ foundBy: 'pokemon tin' })], true);
+
+  const [found] = await store.discoveriesToReview(db, USER);
+  assert.equal(found!.foundBy, 'pokemon tin bundle, pokemon tin');
+});
+
+test('the list of queries cannot grow without limit', async () => {
+  const db = await withTargetSource();
+  for (let i = 0; i < 60; i += 1) {
+    await store.recordDiscoveries(db, USER, 'target-tcg', [sighting({ foundBy: `query number ${i}` })], true);
+  }
+  const [found] = await store.discoveriesToReview(db, USER);
+  assert.ok(found!.foundBy.length < 500, `found_by grew to ${found!.foundBy.length}`);
+});
+
+test('a label fills in when it was blank, and is never overwritten once set', async () => {
+  // Rows added before the classifier existed get labelled the next time they
+  // are seen. A row already labelled is not relabelled by a query that guessed
+  // worse.
+  const db = await withTargetSource();
+  await store.recordDiscoveries(db, USER, 'target-tcg', [sighting({ kind: '', confidence: '' })], true);
+  await store.recordDiscoveries(db, USER, 'target-tcg', [sighting()], true);
+  let [found] = await store.discoveriesToReview(db, USER);
+  assert.equal(found!.kind, 'elite trainer box');
+  assert.equal(found!.confidence, 'sealed');
+
+  await store.recordDiscoveries(db, USER, 'target-tcg', [sighting({ kind: 'tin', confidence: 'unsure' })], true);
+  [found] = await store.discoveriesToReview(db, USER);
+  assert.equal(found!.kind, 'elite trainer box', 'the first confident answer stands');
+});
+
+test('a repeat sighting does not resurrect something already decided', async () => {
+  // Forget has to mean forget. Otherwise every sweep re-offers what was
+  // rejected, which is the whole reason the status column exists.
+  const db = await withTargetSource();
+  await store.recordDiscoveries(db, USER, 'target-tcg', [sighting()], true);
+  const [found] = await store.discoveriesToReview(db, USER);
+  await store.forgetDiscovery(db, USER, found!.id);
+
+  await store.recordDiscoveries(db, USER, 'target-tcg', [sighting({ foundBy: 'pokemon ex box' })], true);
+  assert.equal((await store.discoveriesToReview(db, USER)).length, 0);
+});
+
+// ── A sweep is not finished until its last query ─────────────────────────────
+
+test('A MID-SWEEP REPORT DOES NOT MARK THE SWEEP DONE', async () => {
+  // Every query used to stamp last_swept_at and clear the manual request, so a
+  // sweep declared itself finished after its first of thirteen queries — and a
+  // restart part-way through lost the rest with nothing due again for a day.
+  const db = await withTargetSource();
+  await store.requestSweep(db, USER, 'target-tcg');
+
+  await store.finishSweep(db, USER, 'target-tcg', 'watcher: 1 new', 24, true, 0, false);
+
+  const state = await store.sweepState(db, USER, 'target-tcg', 24);
+  assert.equal(state.queued, true, 'the request must survive until the sweep really ends');
+  assert.equal(state.lastSweptAt, null, 'and nothing has been swept yet');
+  assert.equal(state.lastStatus, 'watcher: 1 new', 'but progress is still reported');
+});
+
+test('the last query does finish it', async () => {
+  const db = await withTargetSource();
+  await store.requestSweep(db, USER, 'target-tcg');
+  await store.finishSweep(db, USER, 'target-tcg', 'watcher: 1 new', 24, true, 0, false);
+  await store.finishSweep(db, USER, 'target-tcg', 'watcher: 3 new', 24, true, 0, true);
+
+  const state = await store.sweepState(db, USER, 'target-tcg', 24);
+  assert.equal(state.queued, false);
+  assert.ok(state.lastSweptAt, 'and the clock starts for the next one');
+});
+
+test('a caller that says nothing is treated as finishing, so the CLI still works', async () => {
+  const db = await withTargetSource();
+  await store.requestSweep(db, USER, 'target-tcg');
+  await store.finishSweep(db, USER, 'target-tcg', 'ok', 24, true);
+  assert.equal((await store.sweepState(db, USER, 'target-tcg', 24)).queued, false);
+});
