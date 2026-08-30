@@ -1835,6 +1835,29 @@ button.danger { color: var(--alert); border-color: rgba(240,131,107,.35); }
 button.danger:hover:not(:disabled) { background: var(--alert-bg); border-color: var(--alert); }
 button.small { padding: 4px 10px; font-size: 12px; border-radius: var(--r-sm); }
 
+/* The filter bar.
+   Ninety-eight finds is a wall, and the answer is not to throw any of them
+   away \u2014 Walmart publishes no date to judge age by, so a filter that hid the
+   old would hide real ones too. It is to let you narrow, and to say what you
+   are looking at. */
+.filters { display: grid; gap: 9px; margin-bottom: 14px; }
+.filters input[type=search] { width: 100%; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  font: 500 12px/1 var(--sans); letter-spacing: .01em;
+  padding: 6px 11px; border-radius: 999px; cursor: pointer;
+  background: var(--panel-2); border: 1px solid var(--line); color: var(--muted);
+  white-space: nowrap;
+}
+.chip:hover { border-color: var(--accent); color: var(--ink); }
+.chip[aria-pressed="true"] {
+  background: var(--accent-soft); border-color: var(--accent); color: var(--accent);
+  font-weight: 600;
+}
+.chip .n { opacity: .6; margin-left: 5px; font-variant-numeric: tabular-nums; }
+.chip:disabled { opacity: .35; cursor: default; }
+.chip:disabled:hover { border-color: var(--line); color: var(--muted); }
+
 .card { background: var(--panel); border: 1px solid var(--line);
         border-radius: var(--r-card); padding: 16px 18px; margin-bottom: 12px;
         box-shadow: var(--shadow); }
@@ -2104,6 +2127,13 @@ ${FONTS}<style>${STYLE}</style></head>
       <strong>Forget</strong> means never offer this again, and is remembered,
       so the next sweep will not re-suggest it.
     </p>
+    <div class="filters" id="finds-filters">
+      <input type="search" id="find-q" placeholder="Search these finds"
+             autocomplete="off" autocapitalize="off" spellcheck="false">
+      <div class="chips" id="find-shops"></div>
+      <div class="chips" id="find-states"></div>
+      <div class="sub" id="find-count"></div>
+    </div>
     <div id="finds-list"></div>
   </section>
 
@@ -3173,6 +3203,113 @@ function findReason(d) {
   return '';
 }
 
+/**
+ * What the finds list is currently narrowed to.
+ *
+ * Module state rather than the URL or storage: the page reloads its data every
+ * thirty seconds and re-renders, and a filter that reset each time would be
+ * unusable. A hard refresh clearing it is the right amount of memory for
+ * something you set while looking at a list.
+ */
+const FIND_FILTER = { shop: '', state: '', q: '', showDormant: false };
+
+/** Which band a find is in. Lower is more worth your attention. */
+function findRank(d) {
+  if (d.isPreOrder) return 0;              // takes money now \u2014 decide deliberately
+  if (d.state === 'in') return 1;          // buyable this minute
+  if (d.releaseDate && daysUntil(d.releaseDate) > 0) return 2;  // dated, ahead
+  if (d.signal === 'recent') return 3;     // sold out recently, may come back
+  if (d.confidence === 'unsure') return 5; // needs a person, but not urgently
+  return 4;
+}
+
+/** Everything below this band is back-catalogue: real, remembered, not news. */
+const DORMANT_FROM = 4;
+
+function findMatches(d) {
+  const f = FIND_FILTER;
+  if (f.shop && d.retailer !== f.shop) return false;
+  if (f.state === 'pre' && !d.isPreOrder) return false;
+  if (f.state === 'in' && (d.isPreOrder || d.state !== 'in')) return false;
+  if (f.state === 'out' && (d.isPreOrder || d.state !== 'out')) return false;
+  if (f.q) {
+    const hay = ((d.name || '') + ' ' + (d.kind || '') + ' ' + (d.retailer || '')).toLowerCase();
+    // Every word, in any order. Typing two words should narrow, not fail.
+    for (const word of f.q.toLowerCase().split(' ')) {
+      if (word && hay.indexOf(word) === -1) return false;
+    }
+  }
+  return true;
+}
+
+function renderFindFilters(all) {
+  const shops = document.getElementById('find-shops');
+  const states = document.getElementById('find-states');
+  if (!shops || !states) return;
+  shops.textContent = '';
+  states.textContent = '';
+
+  const chip = (label, n, active, onClick, disabled) => {
+    const b = el('button', 'chip', label);
+    b.type = 'button';
+    b.setAttribute('aria-pressed', active ? 'true' : 'false');
+    if (n !== null) b.appendChild(el('span', 'n', String(n)));
+    if (disabled) b.disabled = true;
+    else b.addEventListener('click', onClick);
+    return b;
+  };
+
+  // Counts are of what the *other* filters allow, so a chip always tells the
+  // truth about what pressing it would give you.
+  const forShop = (shop) => all.filter((d) => {
+    const was = FIND_FILTER.shop;
+    FIND_FILTER.shop = shop;
+    const ok = findMatches(d);
+    FIND_FILTER.shop = was;
+    return ok;
+  }).length;
+
+  shops.appendChild(chip('All shops', forShop(''), !FIND_FILTER.shop, () => {
+    FIND_FILTER.shop = '';
+    renderFinds();
+  }));
+  const names = [];
+  for (const d of all) {
+    if (d.retailer && names.indexOf(d.retailer) === -1) names.push(d.retailer);
+  }
+  names.sort();
+  for (const name of names) {
+    const n = forShop(name);
+    shops.appendChild(chip(name, n, FIND_FILTER.shop === name, () => {
+      FIND_FILTER.shop = FIND_FILTER.shop === name ? '' : name;
+      renderFinds();
+    }, n === 0 && FIND_FILTER.shop !== name));
+  }
+
+  const forState = (state) => all.filter((d) => {
+    const was = FIND_FILTER.state;
+    FIND_FILTER.state = state;
+    const ok = findMatches(d);
+    FIND_FILTER.state = was;
+    return ok;
+  }).length;
+
+  const pick = (key, label) => {
+    const n = forState(key);
+    return chip(label, n, FIND_FILTER.state === key, () => {
+      FIND_FILTER.state = FIND_FILTER.state === key ? '' : key;
+      renderFinds();
+    }, n === 0 && FIND_FILTER.state !== key);
+  };
+  states.appendChild(chip('Any status', forState(''), !FIND_FILTER.state, () => {
+    FIND_FILTER.state = '';
+    renderFinds();
+  }));
+  states.appendChild(pick('pre', 'Pre-order'));
+  states.appendChild(pick('in', 'In stock'));
+  states.appendChild(pick('out', 'Out of stock'));
+}
+
 function renderFinds() {
   const list = document.getElementById('finds-list');
   list.textContent = '';
@@ -3184,23 +3321,34 @@ function renderFinds() {
   // Sorting costs nothing and throws away nothing: the buyable and the
   // scheduled come first, the dormant back-catalogue sinks, and a long list
   // stops being a wall.
-  const rank = (d) => {
-    if (d.isPreOrder) return 0;              // takes money now \u2014 decide deliberately
-    if (d.state === 'in') return 1;          // buyable this minute
-    if (d.releaseDate && daysUntil(d.releaseDate) > 0) return 2;  // dated, ahead
-    if (d.signal === 'recent') return 3;     // sold out recently, may come back
-    if (d.confidence === 'unsure') return 5; // needs a person, but not urgently
-    return 4;
-  };
-  const finds = (DATA.discoveries || []).slice().sort((a, b) => {
-    if (rank(a) !== rank(b)) return rank(a) - rank(b);
+  const all = DATA.discoveries || [];
+  renderFindFilters(all);
+
+  const matched = all.filter(findMatches).sort((a, b) => {
+    if (findRank(a) !== findRank(b)) return findRank(a) - findRank(b);
     // Within a band, newest first: a find that appeared today is the news.
     const seen = String(b.firstSeenAt || '').localeCompare(String(a.firstSeenAt || ''));
     if (seen !== 0) return seen;
     return String(a.name).localeCompare(String(b.name));
   });
 
-  if (finds.length === 0) {
+  // The back catalogue is folded away rather than filtered out. Walmart alone
+  // contributes sixty-odd boxes from years ago that will most likely never
+  // restock \u2014 but "most likely" is not "never", and dropping them would be a
+  // decision made on your behalf. Behind one click, with the count on it, is
+  // the honest version.
+  const live = matched.filter((d) => findRank(d) < DORMANT_FROM);
+  const dormant = matched.filter((d) => findRank(d) >= DORMANT_FROM);
+  const shown = FIND_FILTER.showDormant || live.length === 0 ? matched : live;
+
+  const count = document.getElementById('find-count');
+  if (count) {
+    count.textContent = all.length === 0 ? ''
+      : shown.length === all.length ? 'All ' + all.length + ' waiting on you'
+      : 'Showing ' + shown.length + ' of ' + all.length;
+  }
+
+  if (all.length === 0) {
     const empty = el('div', 'card');
     empty.appendChild(el('div', 'name', 'Nothing waiting'));
     empty.appendChild(el('div', 'meta',
@@ -3209,7 +3357,29 @@ function renderFinds() {
     return;
   }
 
-  for (const d of finds) {
+  if (matched.length === 0) {
+    const none = el('div', 'card');
+    none.appendChild(el('div', 'name', 'Nothing matches those filters'));
+    none.appendChild(el('div', 'meta',
+      String(all.length) + ' finds are waiting \u2014 widen the search to see them.'));
+    const clear = el('button', 'small', 'Clear filters');
+    clear.addEventListener('click', () => {
+      FIND_FILTER.shop = '';
+      FIND_FILTER.state = '';
+      FIND_FILTER.q = '';
+      const box = document.getElementById('find-q');
+      if (box) box.value = '';
+      renderFinds();
+    });
+    const acts = el('div', 'actions');
+    acts.style.marginTop = '10px';
+    acts.appendChild(clear);
+    none.appendChild(acts);
+    list.appendChild(none);
+    return;
+  }
+
+  for (const d of shown) {
     const card = el('div', 'card');
     const row = el('div', 'row');
     // The picture comes with the find, straight from Target's own response.
@@ -3307,6 +3477,34 @@ function renderFinds() {
     row.appendChild(left);
     card.appendChild(row);
     list.appendChild(card);
+  }
+
+  // The tail, and what it would cost you to look at it.
+  if (dormant.length > 0 && !FIND_FILTER.showDormant && live.length > 0) {
+    const more = el('div', 'card');
+    more.appendChild(el('div', 'name',
+      dormant.length + ' more from the back catalogue'));
+    more.appendChild(el('div', 'meta',
+      'Out of stock with no date, so most will not come back \u2014 but nothing is ' +
+      'hidden from you permanently.'));
+    const btn = el('button', 'small', 'Show them');
+    btn.addEventListener('click', () => { FIND_FILTER.showDormant = true; renderFinds(); });
+    const acts = el('div', 'actions');
+    acts.style.marginTop = '10px';
+    acts.appendChild(btn);
+    more.appendChild(acts);
+    list.appendChild(more);
+  } else if (FIND_FILTER.showDormant && dormant.length > 0 && live.length > 0) {
+    const fold = el('div', 'card');
+    fold.appendChild(el('div', 'meta',
+      'Showing the back catalogue as well.'));
+    const btn = el('button', 'small', 'Hide the back catalogue');
+    btn.addEventListener('click', () => { FIND_FILTER.showDormant = false; renderFinds(); });
+    const acts = el('div', 'actions');
+    acts.style.marginTop = '8px';
+    acts.appendChild(btn);
+    fold.appendChild(acts);
+    list.appendChild(fold);
   }
 }
 
@@ -3480,6 +3678,13 @@ document.getElementById('hours-form').addEventListener('submit', async (e) => {
 
 document.getElementById('refresh').addEventListener('click', (e) =>
   withButton(e.target, 'Refreshing\u2026', null, load));
+
+// Searching the finds. Re-renders from data already in the page, so it filters
+// as you type without asking the Hub anything.
+document.getElementById('find-q').addEventListener('input', (e) => {
+  FIND_FILTER.q = String(e.target.value || '').trim();
+  renderFinds();
+});
 
 // \u2500\u2500 Installing, and quick adds \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 

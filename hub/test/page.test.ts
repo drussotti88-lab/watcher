@@ -1653,13 +1653,16 @@ test('THE FINDS LIST LEADS WITH WHAT YOU CAN ACT ON', async () => {
     { ...RICH_FIND, id: 5, name: 'A pre-order', state: 'in', isPreOrder: true, releaseDate: '', firstSeenAt: at(1) },
   ]));
   const names = [...h.doc.querySelectorAll('#finds-list .name')].map((n) => n.textContent);
-  assert.deepEqual(names, [
+  // The dormant one is not in this list — it is behind the fold, with a count
+  // on it. Order is about the ones you might act on.
+  assert.deepEqual(names.slice(0, 4), [
     'A pre-order',
     'Buyable now',
     'Dated and ahead',
     'Sold out recently',
-    'Dormant back-catalogue',
   ]);
+  assert.ok(!names.includes('Dormant back-catalogue'));
+  assert.match($(h, '#finds-list').textContent, /1 more from the back catalogue/);
 });
 
 test('within a band, the newest find comes first', async () => {
@@ -1670,4 +1673,147 @@ test('within a band, the newest find comes first', async () => {
   ]));
   const names = [...h.doc.querySelectorAll('#finds-list .name')].map((n) => n.textContent);
   assert.deepEqual(names, ['Found today', 'Found last week']);
+});
+
+// ── Filtering ninety-eight finds down to a decision ──────────────────────────
+
+const findNames = (h: Harness): string[] =>
+  [...h.doc.querySelectorAll('#finds-list .name')].map((n) => n.textContent ?? '');
+const chips = (h: Harness, id: string): string[] =>
+  [...h.doc.querySelectorAll('#' + id + ' .chip')].map((c) => c.textContent ?? '');
+const pressChip = (h: Harness, id: string, startsWith: string): void => {
+  const c = [...h.doc.querySelectorAll('#' + id + ' .chip')]
+    .find((b) => (b.textContent ?? '').startsWith(startsWith));
+  assert.ok(c, 'no chip starting ' + startsWith + ' in ' + chips(h, id).join(' | '));
+  (c as HTMLButtonElement).click();
+};
+
+const MIXED = [
+  { ...RICH_FIND, id: 1, name: 'PC pre-order', retailer: 'Pokemon Center',
+    isPreOrder: true, state: 'in', signal: 'scheduled', releaseDate: '' },
+  { ...RICH_FIND, id: 2, name: 'Target in stock', retailer: 'Target',
+    isPreOrder: false, state: 'in', signal: 'buyable', releaseDate: '' },
+  { ...RICH_FIND, id: 3, name: 'Walmart recent', retailer: 'Walmart',
+    isPreOrder: false, state: 'out', signal: 'recent', releaseDate: '' },
+  { ...RICH_FIND, id: 4, name: 'Walmart Boltund V Box', retailer: 'Walmart',
+    isPreOrder: false, state: 'out', signal: '', releaseDate: '', confidence: 'sealed' },
+  { ...RICH_FIND, id: 5, name: 'Walmart Infernape V Box', retailer: 'Walmart',
+    isPreOrder: false, state: 'out', signal: '', releaseDate: '', confidence: 'sealed' },
+];
+
+test('THE BACK CATALOGUE IS FOLDED AWAY, NOT THROWN AWAY', async () => {
+  // Walmart publishes no date on a search result, so old and new cannot be
+  // told apart — a filter that hid the old would hide real finds with them.
+  // One click, with the count on it, is the honest version.
+  const h = await boot(withFinds(MIXED));
+  const names = findNames(h);
+  assert.ok(names.includes('PC pre-order'));
+  assert.ok(names.includes('Walmart recent'));
+  assert.ok(!names.includes('Walmart Boltund V Box'), 'dormant is folded away');
+  assert.match($(h, '#finds-list').textContent, /2 more from the back catalogue/);
+
+  const show = [...h.doc.querySelectorAll('#finds-list button')]
+    .find((b) => b.textContent === 'Show them');
+  assert.ok(show, 'and there is a way to see it');
+  (show as HTMLButtonElement).click();
+  assert.ok(findNames(h).includes('Walmart Boltund V Box'), 'nothing is hidden permanently');
+});
+
+test('filtering by shop narrows the list', async () => {
+  const h = await boot(withFinds(MIXED));
+  pressChip(h, 'find-shops', 'Walmart');
+  const names = findNames(h);
+  assert.ok(names.includes('Walmart recent'));
+  assert.ok(!names.includes('Target in stock'));
+  assert.ok(!names.includes('PC pre-order'));
+});
+
+test('pressing the same shop again clears it', async () => {
+  const h = await boot(withFinds(MIXED));
+  pressChip(h, 'find-shops', 'Target');
+  assert.equal(findNames(h).length, 1);
+  pressChip(h, 'find-shops', 'Target');
+  assert.ok(findNames(h).includes('PC pre-order'), 'back to everything');
+});
+
+test('a chip says how many pressing it would give you', async () => {
+  const h = await boot(withFinds(MIXED));
+  const walmart = chips(h, 'find-shops').find((c) => c.startsWith('Walmart'));
+  assert.equal(walmart, 'Walmart3', 'three Walmart finds, dormant ones included');
+  const pre = chips(h, 'find-states').find((c) => c.startsWith('Pre-order'));
+  assert.equal(pre, 'Pre-order1');
+});
+
+test('COUNTS RESPECT THE OTHER FILTERS', async () => {
+  // Otherwise a chip promises nine and delivers none, which is worse than no
+  // count at all.
+  const h = await boot(withFinds(MIXED));
+  pressChip(h, 'find-shops', 'Walmart');
+  const pre = chips(h, 'find-states').find((c) => c.startsWith('Pre-order'));
+  assert.equal(pre, 'Pre-order0', 'no Walmart pre-orders, and it says so');
+  const anyStatus = chips(h, 'find-states').find((c) => c.startsWith('Any status'));
+  assert.equal(anyStatus, 'Any status3');
+});
+
+test('a status filter finds pre-orders without also matching in-stock', async () => {
+  const h = await boot(withFinds(MIXED));
+  pressChip(h, 'find-states', 'Pre-order');
+  assert.deepEqual(findNames(h), ['PC pre-order']);
+
+  const h2 = await boot(withFinds(MIXED));
+  pressChip(h2, 'find-states', 'In stock');
+  // The pre-order is state 'in' too, and must not answer to "in stock".
+  assert.deepEqual(findNames(h2), ['Target in stock']);
+});
+
+test('searching matches every word, in any order', async () => {
+  const h = await boot(withFinds(MIXED));
+  const box = h.doc.getElementById('find-q') as HTMLInputElement;
+  box.value = 'box boltund';
+  box.dispatchEvent(new h.dom.window.Event('input'));
+  assert.deepEqual(findNames(h), ['Walmart Boltund V Box']);
+});
+
+test('the search reaches the retailer and the kind, not only the name', async () => {
+  const h = await boot(withFinds(MIXED));
+  const box = h.doc.getElementById('find-q') as HTMLInputElement;
+  box.value = 'pokemon center';
+  box.dispatchEvent(new h.dom.window.Event('input'));
+  assert.deepEqual(findNames(h), ['PC pre-order']);
+});
+
+test('filters that match nothing say so, and offer a way back', async () => {
+  const h = await boot(withFinds(MIXED));
+  const box = h.doc.getElementById('find-q') as HTMLInputElement;
+  box.value = 'charizard';
+  box.dispatchEvent(new h.dom.window.Event('input'));
+  assert.match($(h, '#finds-list').textContent, /Nothing matches those filters/);
+  assert.match($(h, '#finds-list').textContent, /5 finds are waiting/);
+
+  const clear = [...h.doc.querySelectorAll('#finds-list button')]
+    .find((b) => b.textContent === 'Clear filters');
+  assert.ok(clear);
+  (clear as HTMLButtonElement).click();
+  assert.ok(findNames(h).includes('PC pre-order'));
+  assert.equal(box.value, '', 'and the box is emptied with them');
+});
+
+test('the count line says what you are looking at', async () => {
+  const h = await boot(withFinds(MIXED));
+  assert.match($(h, '#find-count').textContent, /Showing 3 of 5/);
+  pressChip(h, 'find-shops', 'Target');
+  assert.match($(h, '#find-count').textContent, /Showing 1 of 5/);
+});
+
+test('a list with no dormant tail shows everything and says so', async () => {
+  const h = await boot(withFinds([MIXED[0]!, MIXED[1]!]));
+  assert.match($(h, '#find-count').textContent, /All 2 waiting on you/);
+  assert.ok(!$(h, '#finds-list').textContent.includes('back catalogue'));
+});
+
+test('a list that is ALL back catalogue is not an empty page', async () => {
+  // Folding away every single row would read as "nothing found", which is a
+  // confident wrong answer.
+  const h = await boot(withFinds([MIXED[3]!, MIXED[4]!]));
+  assert.equal(findNames(h).length, 2);
 });
