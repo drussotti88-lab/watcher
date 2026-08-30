@@ -1856,3 +1856,54 @@ test('a find with no offer count claims nothing about resellers', async () => {
   ]));
   assert.ok(!findPills(h).some((p) => p.includes('buy box')));
 });
+
+// ── Is this price sane? ──────────────────────────────────────────────────────
+
+test('A FIND SAYS WHAT THAT KIND OF THING USUALLY COSTS', async () => {
+  // Looking at "Walmart · tin · $15.95" and wondering whether that is a good
+  // price is the whole reason to open the page. Answer it on the card.
+  const h = await boot(withFinds([
+    { ...RICH_FIND, kind: 'mini tin', price: 15.95, retailer: 'Walmart',
+      state: 'out', releaseDate: '', otherOffers: null },
+  ]));
+  const meta = h.doc.querySelector('#finds-list .meta')?.textContent ?? '';
+  assert.match(meta, /\$15\.95/);
+  assert.match(meta, /usually \$12\.99/);
+});
+
+test('a price well above the usual one is flagged with the multiple', async () => {
+  const h = await boot(withFinds([
+    { ...RICH_FIND, kind: 'booster box', price: 3999.99, retailer: 'Walmart',
+      state: 'in', releaseDate: '', otherOffers: null },
+  ]));
+  assert.ok(findPills(h).some((p) => p.includes('× the usual price')), findPills(h).join(' | '));
+  assert.ok(findPills(h).some((p) => p.startsWith('24.')), 'and says how far above');
+});
+
+test('AN ORDINARY FIRST-PARTY PRICE IS NOT FLAGGED', async () => {
+  // $9.99 at Pokémon Center against $11.99 at Target — both honest. A flag
+  // that fires here is one nobody reads by the time it matters.
+  const h = await boot(withFinds([
+    { ...RICH_FIND, kind: 'collection box', price: 11.99, retailer: 'Target',
+      state: 'in', releaseDate: '', otherOffers: null },
+  ]));
+  assert.ok(!findPills(h).some((p) => p.includes('usual price')), findPills(h).join(' | '));
+});
+
+test('a kind with no typical price says nothing rather than guessing', async () => {
+  const h = await boot(withFinds([
+    { ...RICH_FIND, kind: '', price: 49.99, releaseDate: '', otherOffers: null },
+  ]));
+  const meta = h.doc.querySelector('#finds-list .meta')?.textContent ?? '';
+  assert.ok(!meta.includes('usually'), meta);
+  assert.ok(!findPills(h).some((p) => p.includes('usual price')));
+});
+
+test('a find with no price is not compared to anything', async () => {
+  const h = await boot(withFinds([
+    { ...RICH_FIND, kind: 'tin', price: null, releaseDate: '', otherOffers: null },
+  ]));
+  assert.ok(!findPills(h).some((p) => p.includes('usual price')));
+  // The reference is still worth showing — it is about the kind, not the price.
+  assert.match(h.doc.querySelector('#finds-list .meta')?.textContent ?? '', /usually \$24\.99/);
+});

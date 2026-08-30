@@ -198,3 +198,12 @@ test('an abbreviation does not override an accessory', () => {
   // — but then a genuine "Pokemon UPC" whose title happened to say "binder"
   // in a bundle description would be lost, which is the more expensive error.
 });
+
+test('a mini tin is its own kind, not a tin', () => {
+  // They are about half the money, and the app quotes a typical price per
+  // kind — folding them together made one of the two quotes wrong every time.
+  assert.equal(classifyTcg('Pokemon Lumiose City Mini Tin (1 Tin at Random)').kind, 'mini tin');
+  assert.equal(classifyTcg('Pokémon TCG: 30th Celebration Mini Tins (10-Pack)').kind, 'mini tin');
+  assert.equal(classifyTcg('Pokemon TCG: Fire Stacking Tin').kind, 'tin');
+  assert.equal(classifyTcg('Pokemon TCG: V Heroes Tin (Espeon V)').kind, 'tin');
+});

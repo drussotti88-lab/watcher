@@ -42,6 +42,8 @@ function esc(s: string): string {
  * Dark only, because the site is dark only. A light mode here would be a second
  * design nobody asked for and nothing to check it against.
  */
+import { TYPICAL_PRICE, FLAG_ABOVE } from './msrp.ts';
+
 const FONTS =
   '<link rel="preconnect" href="https://fonts.googleapis.com">' +
   '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>' +
@@ -1513,6 +1515,21 @@ function findReason(d) {
  */
 const FIND_FILTER = { shop: '', state: '', q: '', showDormant: false };
 
+/**
+ * What each kind of sealed product usually costs at a shop that is not
+ * reselling it. Shipped with the page rather than fetched: it is a constant,
+ * and a price sanity check that arrives late is no use next to a price.
+ */
+const TYPICAL_PRICE = ${JSON.stringify(TYPICAL_PRICE)};
+const FLAG_ABOVE = ${FLAG_ABOVE};
+
+/** How far above the usual price this sits. Null when there is no comparison. */
+function overTypical(kind, price) {
+  const typical = TYPICAL_PRICE[String(kind || '').toLowerCase()];
+  if (!typical || !price || !(price > 0)) return null;
+  return Math.round((price / typical) * 100) / 100;
+}
+
 /** Which band a find is in. Lower is more worth your attention. */
 function findRank(d) {
   if (d.isPreOrder) return 0;              // takes money now — decide deliberately
@@ -1702,6 +1719,11 @@ function renderFinds() {
         ? money(d.price) + ' at ' + (d.retailer || 'the retailer')
         : money(d.price));
     }
+    // What this kind of thing usually costs. Not "the MSRP of this product" —
+    // no retailer publishes one, and two honest shops price the same box
+    // differently. "Usually" is the claim that is actually true.
+    const typical = TYPICAL_PRICE[String(d.kind || '').toLowerCase()];
+    if (typical) facts.push('usually ' + money(typical));
     if (d.orderLimit) facts.push('limit ' + d.orderLimit + ' per order');
     left.appendChild(el('div', 'meta', facts.join(' · ')));
 
@@ -1734,6 +1756,14 @@ function renderFinds() {
     // the buy box at forty times the money, because Walmart has none and the
     // box falls to whoever does. Nothing is wrong with the find. Being sent to
     // that page with no warning is what was wrong.
+    // The number you are actually asking for when you look at a price: is this
+    // sane? Flagged well above 1, because first-party shops genuinely differ by
+    // twenty per cent and a flag that fires on that is one nobody reads.
+    const over = overTypical(d.kind, d.price);
+    if (over !== null && over >= FLAG_ABOVE) {
+      tags.appendChild(el('span', 'pill flag', over.toFixed(1) + '× the usual price'));
+    }
+
     if (d.state === 'out' && d.otherOffers > 0) {
       tags.appendChild(el('span', 'pill flag',
         d.otherOffers + (d.otherOffers === 1 ? ' reseller has' : ' resellers have') + ' the buy box'));

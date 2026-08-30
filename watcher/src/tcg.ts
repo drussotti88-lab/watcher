@@ -112,7 +112,11 @@ const SEALED: { term: string; kind: string }[] = [
   { term: 'ex box', kind: 'ex box' },
   { term: 'v box', kind: 'v box' },
   { term: 'blister', kind: 'blister' },
-  { term: 'mini tin', kind: 'tin' },
+  // Mini tins are about half the money of a full tin, and the app quotes a
+  // typical price per kind — so folding them together made one of the two
+  // quotes wrong every time.
+  { term: 'mini tin', kind: 'mini tin' },
+  { term: 'mini tins', kind: 'mini tin' },
   { term: 'poke ball tin', kind: 'tin' },
   { term: 'battle deck', kind: 'deck' },
   { term: 'theme deck', kind: 'deck' },
