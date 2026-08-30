@@ -22,6 +22,7 @@ import { isInterestingApi } from './apisniff.ts';
 import {
   readTargetSearch,
   rankScan,
+  searchMeta,
   type ScanRow,
   type ScanVerdict,
 } from './readers/target-search.ts';
@@ -36,6 +37,9 @@ export interface ScanResult {
   bodies: number;
   ms: number;
   note: string;
+  /** How many results the search says exist, and where this page sat in them. */
+  total: number | null;
+  offset: number | null;
 }
 
 /** Open a Target search page and read every result on it. */
@@ -80,10 +84,13 @@ export async function scanTargetSearch(browser: Browser, url: string): Promise<S
         bodies: bodies.length,
         ms: Date.now() - started,
         note: `challenged: ${challenge.reason}`,
+        total: null,
+        offset: null,
       };
     }
 
     const rows = readTargetSearch(bodies);
+    const meta = searchMeta(bodies);
     return {
       url,
       verdicts: rankScan(rows),
@@ -91,6 +98,8 @@ export async function scanTargetSearch(browser: Browser, url: string): Promise<S
       challengeReason: '',
       bodies: bodies.length,
       ms: Date.now() - started,
+      total: meta.total,
+      offset: meta.offset,
       note:
         rows.length === 0
           ? `no search results in ${bodies.length} captured responses — the page may have ` +
@@ -106,6 +115,8 @@ export async function scanTargetSearch(browser: Browser, url: string): Promise<S
       bodies: bodies.length,
       ms: Date.now() - started,
       note: `could not read the page: ${(err as Error).message}`,
+      total: null,
+      offset: null,
     };
   } finally {
     page.off('response', onResponse);

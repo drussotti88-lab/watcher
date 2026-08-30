@@ -15,6 +15,7 @@ import {
   searchProducts,
   classify,
   rankScan,
+  searchMeta,
   type ScanRow,
 } from '../src/readers/target-search.ts';
 import {
@@ -190,6 +191,8 @@ const asResult = (over: Partial<ScanResult> = {}): ScanResult => ({
   bodies: 9,
   ms: 4200,
   note: '',
+  total: null,
+  offset: null,
   ...over,
 });
 
@@ -291,7 +294,7 @@ test('THE FIRST RUN SAYS IT IS A BASELINE, NOT THAT NOTHING IS HAPPENING', () =>
   // Seeding silently is right — announcing an entire catalogue on day one is
   // noise — but a report that just said "nothing new" would read as a failure.
   const out = renderDiscover({
-    scan: { url: 'u', verdicts: rankScan(rows, CAPTURE_DAY), challenged: false, challengeReason: '', bodies: 9, ms: 100, note: '' },
+    scan: { url: 'u', verdicts: rankScan(rows, CAPTURE_DAY), challenged: false, challengeReason: '', bodies: 9, ms: 100, note: '', total: null, offset: null },
     candidates: candidates(rankScan(rows, CAPTURE_DAY)),
     fresh: [],
     received: 2,
@@ -304,7 +307,7 @@ test('THE FIRST RUN SAYS IT IS A BASELINE, NOT THAT NOTHING IS HAPPENING', () =>
 
 test('a later run names what appeared', () => {
   const out = renderDiscover({
-    scan: { url: 'u', verdicts: rankScan(rows, CAPTURE_DAY), challenged: false, challengeReason: '', bodies: 9, ms: 100, note: '' },
+    scan: { url: 'u', verdicts: rankScan(rows, CAPTURE_DAY), challenged: false, challengeReason: '', bodies: 9, ms: 100, note: '', total: null, offset: null },
     candidates: candidates(rankScan(rows, CAPTURE_DAY)),
     fresh: ['Pokémon TCG: Something That Was Not Here Yesterday'],
     received: 3,
@@ -317,7 +320,7 @@ test('a later run names what appeared', () => {
 
 test('a quiet run says so plainly', () => {
   const out = renderDiscover({
-    scan: { url: 'u', verdicts: rankScan(rows, CAPTURE_DAY), challenged: false, challengeReason: '', bodies: 9, ms: 100, note: '' },
+    scan: { url: 'u', verdicts: rankScan(rows, CAPTURE_DAY), challenged: false, challengeReason: '', bodies: 9, ms: 100, note: '', total: null, offset: null },
     candidates: candidates(rankScan(rows, CAPTURE_DAY)),
     fresh: [],
     received: 2,
@@ -330,7 +333,7 @@ test('a quiet run says so plainly', () => {
 test('A HUB THAT WILL NOT ANSWER IS NOT REPORTED AS AN EMPTY CATALOGUE', () => {
   // The two look identical in a summary line and mean opposite things.
   const out = renderDiscover({
-    scan: { url: 'u', verdicts: rankScan(rows, CAPTURE_DAY), challenged: false, challengeReason: '', bodies: 9, ms: 100, note: '' },
+    scan: { url: 'u', verdicts: rankScan(rows, CAPTURE_DAY), challenged: false, challengeReason: '', bodies: 9, ms: 100, note: '', total: null, offset: null },
     candidates: candidates(rankScan(rows, CAPTURE_DAY)),
     fresh: [],
     received: 0,
@@ -349,7 +352,7 @@ test('things that are sealed but not a US drop are called out separately', () =>
   };
   const found = candidates(rankScan([jp], CAPTURE_DAY));
   const out = renderDiscover({
-    scan: { url: 'u', verdicts: [], challenged: false, challengeReason: '', bodies: 1, ms: 10, note: '' },
+    scan: { url: 'u', verdicts: [], challenged: false, challengeReason: '', bodies: 1, ms: 10, note: '', total: null, offset: null },
     candidates: found,
     fresh: [],
     received: 1,
@@ -358,4 +361,53 @@ test('things that are sealed but not a US drop are called out separately', () =>
   });
   assert.match(out, /Sealed, but not a US retail drop/);
   assert.match(out, /japanese/);
+});
+
+
+// ── Knowing there is more ────────────────────────────────────────────────────
+//
+// The number that reframed the whole feature: a query for "pokemon booster
+// box" reports 314 results and hands back 24. Reading one page was seeing
+// seven per cent of the catalogue and calling it a sweep.
+
+test('THE SEARCH SAYS HOW MANY RESULTS THERE REALLY ARE', () => {
+  const withMeta = {
+    data_source_modules: [
+      {
+        module_data: {
+          search_response: {
+            search_response: {
+              metadata: { count: 24, offset: 0, total_results: 314, total_pages: 14 },
+            },
+            products: [],
+          },
+        },
+      },
+    ],
+  };
+  const meta = searchMeta([withMeta]);
+  assert.equal(meta.total, 314);
+  assert.equal(meta.offset, 0);
+  assert.equal(meta.count, 24);
+});
+
+test('a later page reports where it sits', () => {
+  const page2 = {
+    search_response: { metadata: { count: 24, offset: 24, total_results: 314 } },
+  };
+  assert.equal(searchMeta([page2]).offset, 24);
+});
+
+test('A RESPONSE THAT SAYS NOTHING IS NULL, NOT ZERO', () => {
+  // Zero would read as "no results and no more pages", which is the same shape
+  // as a successful empty search — and would silently stop the sweep paging.
+  assert.deepEqual(searchMeta([{ nothing: true }]), { total: null, offset: null, count: null });
+  assert.deepEqual(searchMeta([]), { total: null, offset: null, count: null });
+  assert.deepEqual(searchMeta([null]), { total: null, offset: null, count: null });
+});
+
+test('the real fixture has no metadata, and that is handled', () => {
+  // It was captured before any of this existed. Absent must mean "one page",
+  // not a crash.
+  assert.equal(searchMeta([body]).total, null);
 });

@@ -177,6 +177,42 @@ export function toScanRow(product: Record<string, unknown>): ScanRow {
   };
 }
 
+/**
+ * What the search said about itself.
+ *
+ * `total` is the number that reframed this whole feature: a query for
+ * "pokemon booster box" reports 314 results and hands back 24. Reading one
+ * page was seeing seven per cent of the catalogue and calling it a sweep.
+ */
+export interface SearchMeta {
+  total: number | null;
+  offset: number | null;
+  count: number | null;
+}
+
+export function searchMeta(bodies: unknown[]): SearchMeta {
+  let found: SearchMeta = { total: null, offset: null, count: null };
+  const visit = (node: unknown, depth: number): void => {
+    if (depth > 12 || !node || typeof node !== 'object') return;
+    if (Array.isArray(node)) {
+      for (const item of node) visit(item, depth + 1);
+      return;
+    }
+    const rec = node as Record<string, unknown>;
+    if (found.total === null && rec.total_results !== undefined) {
+      found = {
+        total: num(rec.total_results),
+        offset: num(rec.offset),
+        count: num(rec.count),
+      };
+      return;
+    }
+    for (const key of Object.keys(rec)) visit(rec[key], depth + 1);
+  };
+  visit(bodies, 0);
+  return found;
+}
+
 /** Read every result in a captured search response. */
 export function readTargetSearch(bodies: unknown[]): ScanRow[] {
   const rows: ScanRow[] = [];

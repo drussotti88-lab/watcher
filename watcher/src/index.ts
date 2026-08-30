@@ -59,8 +59,35 @@ const DEFAULT_QUERIES = [
  */
 const SWEEP_RETAILER = 'Target';
 
-const searchUrl = (query: string): string =>
-  'https://www.target.com/s?searchTerm=' + encodeURIComponent(query);
+/**
+ * Target's own facet id for "Sold by: Target".
+ *
+ * Read off the search response rather than guessed: `d_sellers_all` lists
+ * `dq4mn = Target` alongside the marketplace sellers. Applying it is the
+ * difference between five useful results in twenty-four and twenty-four.
+ *
+ * Nineteen of every twenty-four results for "pokemon booster box" were Target
+ * Plus resellers, and the sweep threw every one of them away *after* paying
+ * for the page. Now the page is not paid for.
+ */
+const SOLD_BY_TARGET = 'dq4mn';
+
+/** How many pages deep to go per query. */
+const MAX_PAGES = 3;
+
+/** Results per page, as Target's own request declares it. */
+const PAGE_SIZE = 24;
+
+const searchUrl = (query: string, offset = 0): string => {
+  const params = new URLSearchParams({
+    searchTerm: query,
+    facetedValue: SOLD_BY_TARGET,
+  });
+  // Nao is the offset the storefront uses. Absent means the first page, and a
+  // zero would be harmless but noisy in the log.
+  if (offset > 0) params.set('Nao', String(offset));
+  return 'https://www.target.com/s?' + params.toString();
+};
 
 const COMMANDS = [
   'watch',
@@ -166,8 +193,8 @@ async function runPasses(once: boolean): Promise<void> {
   console.log(`  Browser profile: ${browser.profileDir} (signed out, deliberately)`);
   if (!once) console.log(`  Ctrl+C to stop.\n`);
 
-  /** Queries still to run in the current sweep. Empty means none in progress. */
-  let sweepPlan: string[] = [];
+  /** Pages still to fetch in the current sweep. Empty means none in progress. */
+  let sweepPlan: { query: string; offset: number }[] = [];
   /** Alternates while a sweep is planned, so watching and sweeping share the budget. */
   let sweepTurn = false;
 
@@ -188,9 +215,11 @@ async function runPasses(once: boolean): Promise<void> {
    */
   const sweepOnce = async (): Promise<void> => {
     if (sweepPlan.length > 0 && pacer.waitMs(SWEEP_RETAILER, Date.now()) <= 0) {
-      const query = sweepPlan.shift() as string;
+      const { query, offset } = sweepPlan.shift() as { query: string; offset: number };
+      const page = Math.floor(offset / PAGE_SIZE) + 1;
+      const label = page === 1 ? `"${query}"` : `"${query}" p${page}`;
       pacer.record(SWEEP_RETAILER, Date.now());
-      const scan = await scanTargetSearch(browser, searchUrl(query));
+      const scan = await scanTargetSearch(browser, searchUrl(query, offset));
 
       if (scan.challenged) {
         // Standing down is about the retailer, not about this query. Drop
@@ -207,17 +236,32 @@ async function runPasses(once: boolean): Promise<void> {
           message: `challenged during sweep — standing down ${mins}m, plan abandoned`,
         });
       } else if (scan.note) {
-        console.log(`  ${timestamp()}  sweep "${query}": ${scan.note}`);
+        console.log(`  ${timestamp()}  sweep ${label}: ${scan.note}`);
         activity.record({
           kind: 'sweep',
           level: 'error',
           retailer: SWEEP_RETAILER,
           ms: scan.ms,
-          message: `sweep "${query}" failed: ${scan.note}`,
+          message: `sweep ${label} failed: ${scan.note}`,
         });
       } else {
         const found = candidates(scan.verdicts, query);
-        let line = `sweep "${query}": ${scan.verdicts.length} results, ${found.length} kept`;
+        let line = `sweep ${label}: ${scan.verdicts.length} results, ${found.length} kept`;
+
+        // Follow the pages. A query for "pokemon booster box" reports 314
+        // results and hands back 24; reading one page was seeing seven per
+        // cent of the catalogue and calling it a sweep. Queued at the front so
+        // a query finishes before the next one starts, and capped, because a
+        // broad query can run to fourteen pages and the point is coverage of
+        // what is new, not a full crawl.
+        const more = scan.total !== null && offset + PAGE_SIZE < scan.total;
+        if (more && page < MAX_PAGES) {
+          sweepPlan.unshift({ query, offset: offset + PAGE_SIZE });
+          line += ` · ${scan.total} total, fetching p${page + 1}`;
+        } else if (scan.total !== null) {
+          line += ` · ${scan.total} total`;
+          if (more) line += `, stopping at p${MAX_PAGES}`;
+        }
         if (found.length > 0) {
           // shift() has already run, so an empty plan means this was the last
           // query. Only that one finishes the sweep; the others must not, or a
@@ -232,7 +276,7 @@ async function runPasses(once: boolean): Promise<void> {
           if (result.seeded) line += ' (baseline)';
           else if (fresh.length) line += ` — NEW: ${fresh.join(', ')}`;
         }
-        if (sweepPlan.length) line += ` · ${sweepPlan.length} queries left`;
+        if (sweepPlan.length) line += ` · ${sweepPlan.length} pages left`;
         console.log(`  ${timestamp()}  ${line}`);
         activity.record({
           kind: 'sweep',
@@ -289,11 +333,11 @@ async function runPasses(once: boolean): Promise<void> {
       // remaining queries to the next window rather than resuming — a mild
       // cost, and the alternative is another piece of state to keep honest.
       if (sweepPlan.length === 0 && hub.sweepDue) {
-        sweepPlan = [...DEFAULT_QUERIES];
-        console.log(`  ${timestamp()}  sweep due — ${sweepPlan.length} queries, one per turn`);
+        sweepPlan = DEFAULT_QUERIES.map((query) => ({ query, offset: 0 }));
+        console.log(`  ${timestamp()}  sweep due — ${sweepPlan.length} queries, one page per turn`);
         activity.record({
           kind: 'sweep',
-          message: `sweep starting: ${sweepPlan.length} queries, one per turn`,
+          message: `sweep starting: ${sweepPlan.length} queries, one page per turn`,
         });
       }
 
@@ -499,6 +543,8 @@ async function main(): Promise<void> {
             bodies: 0,
             ms: 0,
             note: '',
+            total: null,
+            offset: null,
           },
           candidates: found,
           fresh,
