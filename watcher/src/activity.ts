@@ -122,6 +122,10 @@ export class Activity {
     const clean: ActivityLine = {
       ...line,
       at: line.at ?? new Date(this.now()).toISOString(),
+      // Defaulted here rather than only on the Hub, so the local file and the
+      // uploaded row say the same thing. They did not, and a log that reads
+      // differently depending on where you read it is a log you cannot trust.
+      level: line.level ?? 'info',
       message: scrub(line.message ?? '', this.secrets),
       ...(line.detail === undefined ? {} : { detail: scrub(line.detail, this.secrets) }),
       ...(line.retailer === undefined ? {} : { retailer: scrub(line.retailer, this.secrets) }),
