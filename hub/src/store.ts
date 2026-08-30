@@ -139,8 +139,9 @@ export async function recordDiscoveries(
   if (items.length === 0) return [];
 
   const statements: Statement[] = items.map((item) => ({
-    text: `INSERT INTO discoveries (user_id, source_id, external_id, url, name, price, announced)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)
+    text: `INSERT INTO discoveries
+             (user_id, source_id, external_id, url, name, price, announced, kind, confidence, found_by)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
            ON CONFLICT (user_id, source_id, external_id) DO NOTHING`,
     params: [
       userId,
@@ -150,6 +151,9 @@ export async function recordDiscoveries(
       item.name,
       item.price ?? null,
       !announce,
+      item.kind ?? '',
+      item.confidence ?? '',
+      item.foundBy ?? '',
     ],
   }));
   await db.batch(statements);
@@ -595,9 +599,50 @@ export interface Settings {
    * $45 and leaves the log still saying $30.
    */
   shippingAllowance: number;
+  /**
+   * When the Watcher is allowed to look, as HH:MM in `timezone`.
+   *
+   * Target runs its scheduled drops in the small hours, so polling all day is
+   * mostly traffic spent on a page that will not change — and traffic is the
+   * one thing that earns a challenge and takes the Watcher off the air at the
+   * moment it matters. Equal values mean no restriction, which is the default
+   * and the old behaviour.
+   *
+   * A window may cross midnight: 22:00 to 06:00 is one window, not two.
+   */
+  activeFrom: string;
+  activeUntil: string;
+  /** IANA zone the window is expressed in. Blank means the machine's own. */
+  timezone: string;
+  /**
+   * Stop everything, without unpicking anything.
+   *
+   * Distinct from pausing each mission: this is the master switch, and it is
+   * the honest way to stop a system rather than deleting the missions and
+   * rebuilding them later.
+   */
+  paused: boolean;
 }
 
-export const DEFAULT_SETTINGS: Settings = { taxRate: 0, shippingAllowance: 0 };
+export const DEFAULT_SETTINGS: Settings = {
+  taxRate: 0,
+  shippingAllowance: 0,
+  activeFrom: '',
+  activeUntil: '',
+  timezone: '',
+  paused: false,
+};
+
+/** HH:MM, 24-hour, or blank. Deliberately strict: a half-parsed time is worse. */
+export function isClockTime(v: string): boolean {
+  if (v === '') return true;
+  const parts = v.split(':');
+  if (parts.length !== 2) return false;
+  const h = Number(parts[0]);
+  const m = Number(parts[1]);
+  if (!Number.isInteger(h) || !Number.isInteger(m)) return false;
+  return h >= 0 && h <= 23 && m >= 0 && m <= 59 && parts[0]!.length === 2 && parts[1]!.length === 2;
+}
 
 export function validateSettings(s: Partial<Settings>): string | null {
   if (s.taxRate !== undefined) {
@@ -613,6 +658,29 @@ export function validateSettings(s: Partial<Settings>): string | null {
       return 'a shipping allowance cannot be negative';
     }
     if (s.shippingAllowance > 100) return 'that shipping allowance looks like a typo';
+  }
+  for (const key of ['activeFrom', 'activeUntil'] as const) {
+    if (s[key] !== undefined && !isClockTime(String(s[key]))) {
+      return `${key} must be a 24-hour time like 02:30, or blank for no restriction`;
+    }
+  }
+  if (s.timezone !== undefined && String(s.timezone) !== '') {
+    // Asked of the platform rather than checked against a list we would have to
+    // maintain. A bad zone here would silently shift the whole window.
+    try {
+      new Intl.DateTimeFormat('en-US', { timeZone: String(s.timezone) });
+    } catch {
+      return `"${s.timezone}" is not a timezone this server knows`;
+    }
+  }
+  // One end of a window without the other is a half-configured rule, and the
+  // safe reading of it is not obvious — so it is refused rather than guessed.
+  const from = s.activeFrom;
+  const until = s.activeUntil;
+  if (from !== undefined && until !== undefined) {
+    if ((from === '') !== (until === '')) {
+      return 'set both ends of the window, or neither';
+    }
   }
   return null;
 }
@@ -631,9 +699,17 @@ export async function getSettings(db: Sql, userId: number): Promise<Settings> {
     // NaN > ceiling is false, which would silently approve everything.
     return Number.isFinite(n) && n >= 0 ? n : fallback;
   };
+  const text = (k: string, fallback: string): string => {
+    const raw = map.get(k);
+    return raw === undefined ? fallback : String(raw);
+  };
   return {
     taxRate: num('taxRate', DEFAULT_SETTINGS.taxRate),
     shippingAllowance: num('shippingAllowance', DEFAULT_SETTINGS.shippingAllowance),
+    activeFrom: isClockTime(text('activeFrom', '')) ? text('activeFrom', '') : '',
+    activeUntil: isClockTime(text('activeUntil', '')) ? text('activeUntil', '') : '',
+    timezone: text('timezone', ''),
+    paused: text('paused', '') === 'true',
   };
 }
 
@@ -646,7 +722,14 @@ export async function setSettings(
   if (problem) throw new Error(problem);
 
   const statements: Statement[] = [];
-  for (const key of ['taxRate', 'shippingAllowance'] as const) {
+  for (const key of [
+    'taxRate',
+    'shippingAllowance',
+    'activeFrom',
+    'activeUntil',
+    'timezone',
+    'paused',
+  ] as const) {
     const value = patch[key];
     if (value === undefined) continue;
     statements.push({
@@ -1098,8 +1181,14 @@ export async function recordObservation(
   );
   if (!owns.length) throw new Error('that listing does not belong to you');
 
-  const prior = await db.query<{ state: string; price: unknown; seller_kind: string }>(
-    'SELECT state, price, seller_kind FROM watch_state WHERE user_id = $1 AND listing_id = $2',
+  const prior = await db.query<{
+    state: string;
+    price: unknown;
+    seller_kind: string;
+    available_quantity: unknown;
+  }>(
+    `SELECT state, price, seller_kind, available_quantity
+       FROM watch_state WHERE user_id = $1 AND listing_id = $2`,
     [userId, obs.listingId],
   );
 
@@ -1109,11 +1198,34 @@ export async function recordObservation(
   const price = obs.price ?? null;
   const sellerKind = obs.sellerKind ?? 'unknown';
 
+  // ── Why a count crossing zero counts as a change ──────────────────────────
+  //
+  // It did not, and that was a real hole. A quantity moving while the state
+  // stayed 'out' wrote no row at all: the current number was upserted into
+  // watch_state, so the page showed it, and the history showed nothing. Which
+  // means the one question worth asking — does inventory appear *before* a drop
+  // goes live — had no data behind it, and never would have.
+  //
+  // Deliberately only across zero, not on every movement. On the way down a
+  // live drop ticks 20, 18, 14, 9, and a row for each would be the same flood
+  // of noise this table exists to avoid; the per-check activity log carries
+  // that, which is the right home for it. Nothing-to-something and
+  // something-to-nothing are events. The steps in between are a time series.
+  const previousQuantity =
+    before && before.available_quantity !== null && before.available_quantity !== undefined
+      ? Number(before.available_quantity)
+      : null;
+  const quantity = obs.availableQuantity ?? null;
+  const crossedZero =
+    (!previousQuantity && quantity !== null && quantity > 0) ||
+    (previousQuantity !== null && previousQuantity > 0 && quantity === 0);
+
   const changed =
     !isFirst &&
     (before.state !== obs.state ||
       previousPrice !== price ||
-      before.seller_kind !== sellerKind);
+      before.seller_kind !== sellerKind ||
+      crossedZero);
 
   await db.query(
     `INSERT INTO watch_state (
@@ -1255,4 +1367,334 @@ export async function recentObservations(db: Sql, userId: number, limit = 50): P
     note: String(r.note ?? ''),
     at: r.at ? new Date(String(r.at)).toISOString() : '',
   }));
+}
+
+// ─── The activity log ────────────────────────────────────────────────────────
+//
+// The exception to this file's write-only-when-something-changed rule, and the
+// reason is in schema.sql: for diagnosis the boring rows are the signal. A
+// failure at 14:02 means one thing if the checks either side of it worked and
+// something completely different if they did not.
+
+export interface ActivityIn {
+  /** When it happened on the Watcher's clock, not when it arrived here. */
+  at?: string;
+  kind: 'check' | 'pass' | 'hub' | 'browser' | 'startup';
+  level?: 'info' | 'warn' | 'error';
+  retailer?: string;
+  missionId?: number | null;
+  listingId?: number | null;
+  state?: string;
+  price?: number | null;
+  ms?: number | null;
+  /** What the retailer said was available. Null means it did not say. */
+  availableQuantity?: number | null;
+  /** Already scrubbed on the Watcher's machine. Scrubbed again on the way out. */
+  message: string;
+  detail?: string;
+}
+
+export interface ActivityRow extends Required<Omit<ActivityIn, 'at'>> {
+  id: number;
+  at: string;
+}
+
+const LEVELS = new Set(['info', 'warn', 'error']);
+const KINDS = new Set(['check', 'pass', 'hub', 'browser', 'startup']);
+
+/**
+ * Write a batch of activity.
+ *
+ * Returns how many landed rather than throwing on a bad one: a malformed line
+ * in the middle of a batch must not cost the fifty around it, and losing log
+ * lines is not worth an error path anywhere upstream.
+ */
+export async function recordActivity(
+  db: Sql,
+  userId: number,
+  lines: ActivityIn[],
+): Promise<{ written: number; rejected: number }> {
+  const usable = lines.filter((l) => l && KINDS.has(l.kind) && typeof l.message === 'string');
+  if (usable.length === 0) return { written: 0, rejected: lines.length };
+
+  // One statement, many rows. Fifty round trips through the pooler for fifty
+  // log lines would cost more than the checks they describe.
+  const values: string[] = [];
+  const params: unknown[] = [userId];
+  for (const l of usable) {
+    const base = params.length;
+    values.push(
+      `($1, $${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, ` +
+        `$${base + 6}, $${base + 7}, $${base + 8}, $${base + 9}, $${base + 10}, ` +
+        `$${base + 11}, $${base + 12})`,
+    );
+    params.push(
+      l.at && !Number.isNaN(Date.parse(l.at)) ? new Date(l.at).toISOString() : new Date().toISOString(),
+      l.kind,
+      LEVELS.has(l.level ?? '') ? l.level : 'info',
+      (l.retailer ?? '').slice(0, 40),
+      Number.isInteger(l.missionId) ? l.missionId : null,
+      Number.isInteger(l.listingId) ? l.listingId : null,
+      (l.state ?? '').slice(0, 20),
+      typeof l.price === 'number' && Number.isFinite(l.price) ? l.price : null,
+      Number.isInteger(l.ms) ? l.ms : null,
+      Number.isInteger(l.availableQuantity) ? l.availableQuantity : null,
+      // A runaway stack trace must not become a megabyte row.
+      (l.message ?? '').slice(0, 2000),
+      (l.detail ?? '').slice(0, 4000),
+    );
+  }
+
+  await db.query(
+    `INSERT INTO activity
+       (user_id, at, kind, level, retailer, mission_id, listing_id, state, price, ms,
+        available_quantity, message, detail)
+     VALUES ${values.join(', ')}`,
+    params,
+  );
+  return { written: usable.length, rejected: lines.length - usable.length };
+}
+
+/** How many days of activity are kept, and the hard ceiling underneath it. */
+export const ACTIVITY_DAYS = 7;
+export const ACTIVITY_MAX_ROWS = 50_000;
+
+/**
+ * Keep the log from becoming the database.
+ *
+ * Two rules, because either alone has a hole. Age alone is unbounded if
+ * something starts looping and writes a million rows in an hour; a row cap
+ * alone keeps a year of history for an idle account and none for a busy one.
+ */
+export async function pruneActivity(db: Sql, userId: number): Promise<number> {
+  const old = await db.query<{ id: number }>(
+    `DELETE FROM activity
+      WHERE user_id = $1 AND at < now() - ($2 || ' days')::interval
+      RETURNING id`,
+    [userId, String(ACTIVITY_DAYS)],
+  );
+  const over = await db.query<{ id: number }>(
+    `DELETE FROM activity
+      WHERE user_id = $1
+        AND id <= COALESCE(
+          (SELECT id FROM activity WHERE user_id = $1 ORDER BY id DESC OFFSET $2 LIMIT 1), -1)
+      RETURNING id`,
+    [userId, ACTIVITY_MAX_ROWS],
+  );
+  return old.length + over.length;
+}
+
+function toActivity(r: Record<string, unknown>): ActivityRow {
+  return {
+    id: Number(r.id),
+    at: r.at ? new Date(String(r.at)).toISOString() : '',
+    kind: String(r.kind ?? '') as ActivityIn['kind'],
+    level: String(r.level ?? 'info') as 'info' | 'warn' | 'error',
+    retailer: String(r.retailer ?? ''),
+    missionId: r.mission_id === null || r.mission_id === undefined ? null : Number(r.mission_id),
+    listingId: r.listing_id === null || r.listing_id === undefined ? null : Number(r.listing_id),
+    state: String(r.state ?? ''),
+    price: toPrice(r.price),
+    ms: r.ms === null || r.ms === undefined ? null : Number(r.ms),
+    availableQuantity:
+      r.available_quantity === null || r.available_quantity === undefined
+        ? null
+        : Number(r.available_quantity),
+    message: String(r.message ?? ''),
+    detail: String(r.detail ?? ''),
+  };
+}
+
+/** The log, newest first. `sinceHours` bounds it; `level` narrows to trouble. */
+export async function recentActivity(
+  db: Sql,
+  userId: number,
+  opts: { sinceHours?: number; limit?: number; level?: 'warn' | 'error' } = {},
+): Promise<ActivityRow[]> {
+  const hours = Math.min(Math.max(opts.sinceHours ?? 24, 1), ACTIVITY_DAYS * 24);
+  const limit = Math.min(Math.max(opts.limit ?? 2000, 1), 20_000);
+  const where = opts.level === 'error'
+    ? `AND level = 'error'`
+    : opts.level === 'warn'
+      ? `AND level IN ('warn', 'error')`
+      : '';
+  const rows = await db.query(
+    `SELECT * FROM activity
+      WHERE user_id = $1 AND at > now() - ($2 || ' hours')::interval ${where}
+      ORDER BY at DESC, id DESC
+      LIMIT $3`,
+    [userId, String(hours), limit],
+  );
+  return rows.map(toActivity);
+}
+
+/**
+ * The shape of what happened, without the lines.
+ *
+ * What you want first when something is wrong: which retailer, how often it
+ * worked, how often it did not, and how slow it was when it did. Computed in
+ * the database because pulling ten thousand rows to count them is the kind of
+ * thing that turns a diagnostic into an outage.
+ */
+export async function activitySummary(
+  db: Sql,
+  userId: number,
+  sinceHours = 24,
+): Promise<
+  { retailer: string; checks: number; failures: number; inStock: number; medianMs: number | null }[]
+> {
+  const hours = Math.min(Math.max(sinceHours, 1), ACTIVITY_DAYS * 24);
+  const rows = await db.query(
+    `SELECT retailer,
+            COUNT(*)                                          AS checks,
+            COUNT(*) FILTER (WHERE level = 'error')           AS failures,
+            COUNT(*) FILTER (WHERE state = 'in')              AS in_stock,
+            PERCENTILE_DISC(0.5) WITHIN GROUP (ORDER BY ms)   AS median_ms
+       FROM activity
+      WHERE user_id = $1 AND kind = 'check' AND at > now() - ($2 || ' hours')::interval
+      GROUP BY retailer
+      ORDER BY checks DESC`,
+    [userId, String(hours)],
+  );
+  return rows.map((r) => ({
+    retailer: String(r.retailer ?? ''),
+    checks: Number(r.checks ?? 0),
+    failures: Number(r.failures ?? 0),
+    inStock: Number(r.in_stock ?? 0),
+    medianMs: r.median_ms === null || r.median_ms === undefined ? null : Number(r.median_ms),
+  }));
+}
+
+
+// ─── Reviewing what a sweep found ────────────────────────────────────────────
+//
+// A sweep proposes and a person decides. The deciding is the whole reason the
+// feed is usable: without a way to say "never show me this again", every sweep
+// re-offers the thirty things already rejected.
+
+export interface DiscoveryRow {
+  id: number;
+  sourceId: string;
+  externalId: string;
+  name: string;
+  url: string;
+  price: number | null;
+  kind: string;
+  confidence: string;
+  foundBy: string;
+  status: string;
+  firstSeenAt: string;
+  /** True when a product with this name already exists — usually already yours. */
+  alreadyHave: boolean;
+}
+
+function toDiscovery(r: Record<string, unknown>): DiscoveryRow {
+  return {
+    id: Number(r.id),
+    sourceId: String(r.source_id ?? ''),
+    externalId: String(r.external_id ?? ''),
+    name: String(r.name ?? ''),
+    url: String(r.url ?? ''),
+    price: toPrice(r.price),
+    kind: String(r.kind ?? ''),
+    confidence: String(r.confidence ?? ''),
+    foundBy: String(r.found_by ?? ''),
+    status: String(r.status ?? 'new'),
+    firstSeenAt: r.first_seen_at ? new Date(String(r.first_seen_at)).toISOString() : '',
+    alreadyHave: Boolean(r.already_have),
+  };
+}
+
+/**
+ * Everything waiting on a decision, newest first.
+ *
+ * Distinct from `pendingDiscoveries` above, which answers a different question
+ * — "what has this source found that was never announced". This one is about
+ * whether a *person* has looked at it yet.
+ */
+export async function discoveriesToReview(
+  db: Sql,
+  userId: number,
+  limit = 200,
+): Promise<DiscoveryRow[]> {
+  const rows = await db.query(
+    `SELECT d.*,
+            EXISTS (
+              SELECT 1 FROM listings l
+               WHERE l.user_id = d.user_id AND l.external_id = d.external_id
+            ) AS already_have
+       FROM discoveries d
+      WHERE d.user_id = $1 AND d.status = 'new'
+      ORDER BY d.first_seen_at DESC, d.id DESC
+      LIMIT $2`,
+    [userId, Math.min(Math.max(limit, 1), 500)],
+  );
+  return rows.map(toDiscovery);
+}
+
+export async function getDiscovery(
+  db: Sql,
+  userId: number,
+  id: number,
+): Promise<DiscoveryRow | null> {
+  const rows = await db.query(
+    `SELECT *, false AS already_have FROM discoveries WHERE user_id = $1 AND id = $2`,
+    [userId, id],
+  );
+  return rows.length ? toDiscovery(rows[0]!) : null;
+}
+
+/**
+ * Decline one, permanently.
+ *
+ * Not a delete. The row is what stops the next sweep rediscovering the same
+ * thing and offering it again as news — the discovery table is also the memory
+ * of what has been seen.
+ */
+export async function forgetDiscovery(db: Sql, userId: number, id: number): Promise<boolean> {
+  const rows = await db.query<{ id: number }>(
+    `UPDATE discoveries SET status = 'forgotten', decided_at = now()
+      WHERE user_id = $1 AND id = $2 AND status = 'new'
+      RETURNING id`,
+    [userId, id],
+  );
+  return rows.length > 0;
+}
+
+/**
+ * Promote one to something watchable.
+ *
+ * Creates the product and the listing and nothing else. **No mission, and
+ * certainly nothing armed** — a sweep is a machine's guess and arming is a
+ * decision about money, so the two are kept a deliberate click apart.
+ */
+export async function keepDiscovery(
+  db: Sql,
+  userId: number,
+  id: number,
+): Promise<{ productKey: string; listingId: number }> {
+  const found = await getDiscovery(db, userId, id);
+  if (!found) throw new Error('no such discovery');
+  if (found.status !== 'new') throw new Error(`this one was already ${found.status}`);
+
+  const source = await getSource(db, userId, found.sourceId);
+  const retailer = source?.retailer ?? 'Target';
+
+  const product = await upsertProduct(db, userId, {
+    name: found.name,
+    msrp: found.price ?? null,
+  });
+  const listing = await addListing(db, userId, {
+    productKey: product.key,
+    retailer,
+    externalId: found.externalId,
+    url: found.url,
+  });
+
+  await db.query(
+    `UPDATE discoveries SET status = 'kept', decided_at = now(), product_key = $3
+      WHERE user_id = $1 AND id = $2`,
+    [userId, id, product.key],
+  );
+  return { productKey: product.key, listingId: listing.id };
 }

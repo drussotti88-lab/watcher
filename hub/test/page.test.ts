@@ -83,11 +83,34 @@ async function boot(
       calls.push({ method, path, body });
       const key = `${method} ${path}`;
       if (failures.has(key)) {
-        return { ok: false, status: 400, json: async () => ({ error: failures.get(key) }) };
+        return {
+          ok: false,
+          status: 400,
+          json: async () => ({ error: failures.get(key) }),
+          text: async () => JSON.stringify({ error: failures.get(key) }),
+        };
       }
-      return { ok: true, status: 200, json: async () => replies.get(key) ?? {} };
+      const value = replies.get(key) ?? {};
+      // Both, because not every caller wants parsed JSON. The diagnostics
+      // download takes the text so it can save exactly the bytes it checked.
+      return {
+        ok: true,
+        status: 200,
+        json: async () => value,
+        text: async () => JSON.stringify(value),
+      };
     };
     win.confirm = () => true;
+
+    // jsdom implements neither, and the download button needs both. Recording
+    // what was handed to createObjectURL is also how the test reads the file
+    // that would have been saved.
+    win.__blobs = [];
+    win.URL.createObjectURL = (blob: any) => {
+      win.__blobs.push(blob);
+      return 'blob:test/' + win.__blobs.length;
+    };
+    win.URL.revokeObjectURL = () => {};
   };
 
   const dom = new JSDOM(dashboardPage(), {
@@ -933,4 +956,322 @@ test('the run log trims the shared prefix too', async () => {
   (h.doc.querySelector('[data-tab=activity]') as any).click();
   assert.match($(h, '#runs-card').textContent, /30th Celebration Elite Trainer Box/);
   assert.doesNotMatch($(h, '#runs-card').textContent, /Trading Card Game/);
+});
+
+// ── The diagnostics download ─────────────────────────────────────────────────
+
+const EXPORT = {
+  generatedAt: '2026-08-29T12:00:00.000Z',
+  windowHours: 24,
+  counts: { lines: 412, byLevel: { info: 400, warn: 4, error: 8 } },
+  summary: [{ retailer: 'target', checks: 400, failures: 8, inStock: 2, medianMs: 1180 }],
+  lines: [],
+  warnings: [],
+};
+
+test('THE DOWNLOAD BUTTON PRODUCES A FILE, NOT A NAVIGATION', async () => {
+  // On a phone, pointing a link at a JSON endpoint opens a viewer and saves
+  // nothing. The bytes have to be turned into a file by the page.
+  const h = await boot();
+  h.reply('GET /api/activity/export?hours=24', EXPORT);
+
+  $(h, '#diag-download').click();
+  await h.settle();
+
+  const win = h.dom.window as any;
+  assert.equal(win.__blobs.length, 1, 'nothing was offered for saving');
+  assert.ok(
+    h.calls.some((c) => c.path === '/api/activity/export?hours=24'),
+    'the export was never fetched',
+  );
+});
+
+test('the chosen window is the window that gets asked for', async () => {
+  const h = await boot();
+  $(h, '#diag-hours').value = '168';
+  h.reply('GET /api/activity/export?hours=168', EXPORT);
+
+  $(h, '#diag-download').click();
+  await h.settle();
+
+  assert.ok(h.calls.some((c) => c.path === '/api/activity/export?hours=168'));
+});
+
+test('the button reports what it saved, and how much of it failed', async () => {
+  // A download that says nothing leaves you wondering whether it worked. The
+  // failure count is the number worth seeing before opening the file.
+  const h = await boot();
+  h.reply('GET /api/activity/export?hours=24', EXPORT);
+
+  $(h, '#diag-download').click();
+  await h.settle();
+
+  const msg = $(h, '#diag-msg').textContent;
+  assert.match(msg, /412 lines/);
+  assert.match(msg, /8 of them failures/);
+});
+
+test("A BUNDLE THAT WARNS ABOUT ITSELF SAYS SO ON THE BUTTON", async () => {
+  // The export checks its own output. If that check ever trips, the person
+  // holding the file needs to know before they pass it to anybody.
+  const h = await boot();
+  h.reply('GET /api/activity/export?hours=24', { ...EXPORT, warnings: ['email'] });
+
+  $(h, '#diag-download').click();
+  await h.settle();
+
+  assert.match($(h, '#diag-msg').textContent, /check it first: email/);
+});
+
+test('a failed export says so instead of saving an error page', async () => {
+  const h = await boot();
+  h.fail('GET /api/activity/export?hours=24', 'nope');
+
+  $(h, '#diag-download').click();
+  await h.settle();
+
+  assert.match($(h, '#diag-msg').textContent, /400/);
+  assert.equal((h.dom.window as any).__blobs.length, 0, 'and saved nothing');
+});
+
+test('the settings tab spells out what is and is not in the file', async () => {
+  // The claim is the reason it is safe to send. It belongs next to the button,
+  // not in a commit message.
+  const h = await boot();
+  const text = $(h, '#tab-settings').textContent;
+  assert.match(text, /Not in it/);
+  for (const promised of ['token', 'password', 'postcode', 'email']) {
+    assert.ok(text.includes(promised), `the page should say ${promised} is excluded`);
+  }
+});
+
+// ── The countdown ────────────────────────────────────────────────────────────
+//
+// The only forward-looking thing on the card. Everything else describes a
+// reading that has already happened; this says something is coming.
+
+function withRelease(over: Record<string, unknown>): unknown {
+  const base = JSON.parse(JSON.stringify(DASHBOARD));
+  Object.assign(base.missions[0], { state: 'out', price: 69.99 }, over);
+  return base;
+}
+
+const inDays = (n: number): string =>
+  new Date(Date.now() + n * 86400000).toISOString().slice(0, 10);
+
+/**
+ * The text of the rendered pills, and nothing else.
+ *
+ * Not `body.textContent`: in jsdom that includes the page's own <script>, so
+ * every negative assertion passed by matching the source of the very code it
+ * was meant to prove had not run. Three of these tests were green for that
+ * reason before this helper existed.
+ */
+const pills = (h: Harness): string =>
+  [...h.doc.querySelectorAll('.pill')].map((p) => p.textContent).join(' | ');
+
+test('AN OUT-OF-STOCK ITEM WITH A KNOWN DROP DATE SAYS SO', async () => {
+  // Without this, a box dropping on Tuesday and a box that sold out in March
+  // render identically: one grey OUT OF STOCK pill each.
+  const h = await boot(withRelease({ releaseDate: inDays(18) }));
+  assert.match(pills(h), /drops in 18 days/);
+});
+
+test('the day itself is called out, not counted', async () => {
+  const h = await boot(withRelease({ releaseDate: inDays(0) }));
+  assert.match(pills(h), /DROPS TODAY/);
+  assert.ok(!pills(h).includes('drops in 0 days'));
+});
+
+test('tomorrow reads as tomorrow', async () => {
+  const h = await boot(withRelease({ releaseDate: inDays(1) }));
+  assert.match(pills(h), /drops tomorrow/);
+});
+
+test('A COUNTDOWN THAT HAS GONE NEGATIVE IS NOT SHOWN', async () => {
+  // Worse than no countdown: a date that has passed still reads as news, and
+  // the whole point of the pill is that it means something is coming.
+  const h = await boot(withRelease({ releaseDate: inDays(-5) }));
+  assert.ok(!pills(h).includes('drops in'));
+});
+
+test('once it is actually in stock the date stops being the story', async () => {
+  const h = await boot(withRelease({ state: 'in', releaseDate: inDays(2) }));
+  assert.ok(!pills(h).includes('drops in'));
+});
+
+test('a mission with no release date renders exactly as before', async () => {
+  const h = await boot(withRelease({ releaseDate: null }));
+  assert.ok(!pills(h).includes('drops'));
+});
+
+test('a date far enough out is not treated as a countdown', async () => {
+  // A street date a year away is a catalogue fact, not something to watch for.
+  const h = await boot(withRelease({ releaseDate: inDays(300) }));
+  assert.ok(!pills(h).includes('drops in'));
+});
+
+// ── The review list ──────────────────────────────────────────────────────────
+//
+// A sweep proposes, a person decides. These are about the deciding.
+
+const FINDS = [
+  {
+    id: 7, sourceId: 'target-tcg', externalId: '1010892076',
+    name: 'Pokémon TCG: 30th Celebration Elite Trainer Box',
+    url: 'https://www.target.com/p/-/A-1010892076', price: 69.99,
+    kind: 'elite trainer box', confidence: 'sealed', foundBy: 'pokemon elite trainer box',
+    status: 'new', firstSeenAt: new Date().toISOString(), alreadyHave: false,
+  },
+  {
+    id: 8, sourceId: 'target-tcg', externalId: '1010892099',
+    name: 'Pokémon TCG: 30th Celebration Poster Collection',
+    url: 'https://www.target.com/p/-/A-1010892099', price: 19.99,
+    kind: 'poster collection', confidence: 'unsure', foundBy: 'pokemon booster pack',
+    status: 'new', firstSeenAt: new Date().toISOString(), alreadyHave: false,
+  },
+];
+
+const withFinds = (finds: unknown[] = FINDS): unknown => {
+  const base = JSON.parse(JSON.stringify(DASHBOARD));
+  base.discoveries = finds;
+  return base;
+};
+
+test('THE SWEEP LIST SHOWS WHAT WAS FOUND, WITH KEEP AND FORGET', async () => {
+  const h = await boot(withFinds());
+  const text = $(h, '#tab-finds').textContent;
+
+  assert.match(text, /30th Celebration Elite Trainer Box/);
+  assert.match(text, /elite trainer box/);
+  assert.match(text, /found by "pokemon elite trainer box"/);
+
+  const buttons = [...h.doc.querySelectorAll('#finds-list button')].map((b) => b.textContent);
+  assert.ok(buttons.includes('Keep'));
+  assert.ok(buttons.includes('Forget'));
+});
+
+test('the confident ones come first, but the unsure ones are still shown', async () => {
+  // Dropping a real drop is the expensive error. Showing a poster collection
+  // costs two seconds, so it is shown — just not first.
+  const h = await boot(withFinds());
+  const names = [...h.doc.querySelectorAll('#finds-list .name')].map((n) => n.textContent);
+  assert.match(names[0], /Elite Trainer Box/);
+  assert.match(names[1], /Poster Collection/);
+});
+
+test('an uncertain find says so on its face', async () => {
+  const h = await boot(withFinds());
+  const pillText = [...h.doc.querySelectorAll('#finds-list .pill')].map((p) => p.textContent);
+  assert.ok(pillText.some((t) => t.includes('not sure')));
+});
+
+test('KEEPING SENDS KEEP, AND SAYS IT ARMED NOTHING', async () => {
+  // The whole safety story of this feature in one assertion. A machine's guess
+  // becoming a thing that spends money must take a second, deliberate step.
+  const h = await boot(withFinds());
+  h.reply('POST /api/discoveries/7/keep', { kept: { productKey: 'k', listingId: 3 } });
+
+  const keep = [...h.doc.querySelectorAll('#finds-list button')].find((b) => b.textContent === 'Keep');
+  keep.click();
+  await h.settle();
+
+  const call = h.calls.find((c) => c.path === '/api/discoveries/7/keep');
+  assert.ok(call, 'keep did nothing at all');
+  assert.equal(call.method, 'POST');
+  assert.ok(
+    !h.calls.some((c) => c.path === '/api/missions'),
+    'keeping must never create a mission, let alone arm one',
+  );
+});
+
+test('forgetting sends forget for that exact find', async () => {
+  const h = await boot(withFinds());
+  h.reply('POST /api/discoveries/7/forget', { forgotten: 7 });
+
+  const forget = [...h.doc.querySelectorAll('#finds-list button')].find((b) => b.textContent === 'Forget');
+  forget.click();
+  await h.settle();
+
+  assert.ok(h.calls.some((c) => c.path === '/api/discoveries/7/forget' && c.method === 'POST'));
+});
+
+test('an empty list says what to do about it, not just that it is empty', async () => {
+  const h = await boot(withFinds([]));
+  const text = $(h, '#tab-finds').textContent;
+  assert.match(text, /Nothing waiting/);
+  assert.match(text, /npm run discover/);
+});
+
+test('a find you already watch is marked, not hidden', async () => {
+  // Hiding it would make the sweep look like it had missed something.
+  const h = await boot(withFinds([{ ...FINDS[0], alreadyHave: true }]));
+  const pillText = [...h.doc.querySelectorAll('#finds-list .pill')].map((p) => p.textContent);
+  assert.ok(pillText.some((t) => t.includes('already on your list')));
+});
+
+test('a dashboard from before this feature does not break the page', async () => {
+  // The Watcher and the Hub deploy separately, and an old payload with no
+  // discoveries key must render rather than throw.
+  const base = JSON.parse(JSON.stringify(DASHBOARD));
+  delete base.discoveries;
+  const h = await boot(base);
+  assert.match($(h, '#tab-finds').textContent, /Nothing waiting/);
+  assert.equal($(h, '#c-finds').textContent, '');
+});
+
+// ── When to watch ────────────────────────────────────────────────────────────
+
+const withSettings = (over: Record<string, unknown>): unknown => {
+  const base = JSON.parse(JSON.stringify(DASHBOARD));
+  base.settings = { taxRate: 0, shippingAllowance: 0, activeFrom: '', activeUntil: '', timezone: '', paused: false, ...over };
+  return base;
+};
+
+test('the window is shown as it was saved', async () => {
+  const h = await boot(withSettings({ activeFrom: '02:30', activeUntil: '05:00', timezone: 'America/Chicago' }));
+  assert.equal($(h, '#hours-form [name=activeFrom]').value, '02:30');
+  assert.equal($(h, '#hours-form [name=activeUntil]').value, '05:00');
+  assert.equal($(h, '#hours-form [name=timezone]').value, 'America/Chicago');
+});
+
+test('saving hours sends all four fields', async () => {
+  const h = await boot(withSettings({}));
+  $(h, '#hours-form [name=activeFrom]').value = '03:00';
+  $(h, '#hours-form [name=activeUntil]').value = '05:00';
+  $(h, '#hours-form [name=timezone]').value = 'America/Chicago';
+  h.reply('POST /api/settings', { settings: {} });
+
+  submit($(h, '#hours-form'), h.dom.window);
+  await h.settle();
+
+  const call = h.calls.find((c) => c.path === '/api/settings');
+  assert.ok(call, 'saving did nothing');
+  assert.equal(call.body.activeFrom, '03:00');
+  assert.equal(call.body.activeUntil, '05:00');
+  assert.equal(call.body.timezone, 'America/Chicago');
+  assert.equal(call.body.paused, false);
+});
+
+test('PAUSING IS SAID WHERE IT CANNOT BE MISSED', async () => {
+  // A system that is doing nothing on purpose and a system that is broken look
+  // identical from the outside. This is the difference.
+  const h = await boot(withSettings({ paused: true }));
+  assert.equal($(h, '#paused-banner').hidden, false);
+  assert.match($(h, '#paused-banner').textContent, /Everything is paused/);
+  assert.equal($(h, '#hours-form [name=paused]').checked, true);
+});
+
+test('the banner is not there when nothing is paused', async () => {
+  const h = await boot(withSettings({ paused: false }));
+  assert.equal($(h, '#paused-banner').hidden, true);
+});
+
+test('the page says what still wakes it', async () => {
+  // The promise that makes quiet hours safe to turn on. It belongs next to the
+  // switch, not in a commit message.
+  const h = await boot(withSettings({}));
+  const text = $(h, '#tab-settings').textContent;
+  assert.match(text, /Check now/);
+  assert.match(text, /release date is today/);
 });

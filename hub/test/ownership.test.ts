@@ -163,7 +163,7 @@ test('SETTINGS: MY TAX RATE IS NOT THEIR TAX RATE', async () => {
   const { db } = await twoUsers();
   await store.setSettings(db, A, { taxRate: 0.0975, shippingAllowance: 9.99 });
 
-  assert.deepEqual(await store.getSettings(db, B), { taxRate: 0, shippingAllowance: 0 });
+  assert.deepEqual(await store.getSettings(db, B), store.DEFAULT_SETTINGS);
   assert.equal((await store.getSettings(db, A)).taxRate, 0.0975);
 });
 

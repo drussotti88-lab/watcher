@@ -15,3 +15,7 @@ watcher.config.json
 probe-artifacts/
 
 *.log
+
+# The activity log. Scrubbed on the way in, but still a record of this
+# machine going about its business, and nobody else's business.
+logs/

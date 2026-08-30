@@ -7,6 +7,15 @@ export interface Discovered {
   name: string;
   url: string;
   price?: number | null;
+  /**
+   * What the sweep thought it was — 'elite trainer box', 'booster box'. Blank
+   * when it could not tell, which is not the same as it being nothing.
+   */
+  kind?: string;
+  /** 'sealed' when the sweep was confident, 'unsure' when it wants a person. */
+  confidence?: string;
+  /** The query that turned it up, so a keyword that only returns rubbish shows. */
+  foundBy?: string;
 }
 
 export type SourceKind = 'sitemap_index' | 'sitemap' | 'json_list' | 'watcher';

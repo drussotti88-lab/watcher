@@ -1,0 +1,39 @@
+{
+  "_why": "A real capture, stripped to the availability fields. Target's own search response for the 30th Celebration Elite Trainer Box on 29 Aug 2026: out of stock, no quantity, and an on-sale date eighteen days out that we were throwing away.",
+  "data_source_modules": [
+    {
+      "module_data": {
+        "search_response": {
+          "products": [
+            {
+              "tcin": "1010892076",
+              "item": {
+                "product_description": {
+                  "title": "Pok&#233;mon Trading Card Game: 30th Celebration Elite Trainer Box"
+                },
+                "mmbv_content": { "street_date": "2026-09-16" },
+                "fulfillment": { "purchase_limit": 2 }
+              },
+              "price": { "current_retail": 69.99 },
+              "fulfillment": {
+                "sold_out": false,
+                "shipping_options": {
+                  "availability_status": "OUT_OF_STOCK",
+                  "reason_code": "INVENTORY_UNAVAILABLE",
+                  "available_to_promise_quantity": 0
+                },
+                "store_options": [
+                  {
+                    "order_pickup": { "availability_status": "UNAVAILABLE" },
+                    "in_store_only": { "availability_status": "NOT_SOLD_IN_STORE" },
+                    "pre_order_location_available_to_promise_quantity": 0
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

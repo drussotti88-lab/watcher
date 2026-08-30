@@ -1,0 +1,92 @@
+{
+  "note": "Real shapes, taken from things this system has actually logged. Both packages run this same file; if the two scrub.ts copies ever drift, the corpus is what notices.",
+  "dirty": [
+    {
+      "why": "Target puts the visitor id, the home store and the postcode in the URL, and the URL goes into the error verbatim",
+      "input": "the check could not be completed: page.goto: net::ERR_ABORTED at https://www.target.com/p/pokemon-tcg-scarlet-violet-151-elite-trainer-box/-/A-94300065?preselect=94300065&visitor_id=018F2A9C3B4D5E6F7A8B9C0D&pricing_store_id=1234&zip=37067",
+      "mustNotContain": ["visitor_id=018F", "37067", "1234", "018F2A9C3B4D5E6F7A8B9C0D"],
+      "mustContain": ["target.com", "scarlet-violet-151-elite-trainer-box", "ERR_ABORTED"]
+    },
+    {
+      "why": "a 401 body quotes the bearer token back at you",
+      "input": "GET /api/missions/active -> 401: unauthorised (sent Authorization: Bearer ph_live_9f2c8a1b7d4e6f3a2b5c8d9e0f1a)",
+      "mustNotContain": ["ph_live_9f2c8a1b7d4e6f3a2b5c8d9e0f1a", "9f2c8a1b"],
+      "mustContain": ["401", "/api/missions/active"]
+    },
+    {
+      "why": "Windows spells out the account name in every path",
+      "input": "Error: ENOENT: no such file or directory, open 'C:\\Users\\danru\\Pokemon\\watcher\\chrome-profile-watch\\Default\\Cookies'",
+      "mustNotContain": ["danru"],
+      "mustContain": ["ENOENT", "chrome-profile-watch"]
+    },
+    {
+      "why": "the redsky call carries an api key, the store id and the postcode",
+      "input": "redsky failed: https://redsky.target.com/redsky_aggregations/v1/web/pdp_client_v1?key=9f36aeafbe60771e321a7cc95a78140772ab3e96&tcin=94300065&pricing_store_id=1234&zip=37067&latitude=36.02&longitude=-86.78",
+      "mustNotContain": ["9f36aeafbe60771e321a7cc95a78140772ab3e96", "37067", "36.02", "-86.78"],
+      "mustContain": ["redsky.target.com"]
+    },
+    {
+      "why": "a connection error names the local network",
+      "input": "hub unreachable: fetch failed (connect ECONNREFUSED 192.168.1.14:3000)",
+      "mustNotContain": ["192.168.1.14"],
+      "mustContain": ["ECONNREFUSED"]
+    },
+    {
+      "why": "a session cookie is the account",
+      "input": "set-cookie: TealeafAkaSid=x9f2QRc8vN1pLm4TzB7yWd0aE; Path=/; Secure; HttpOnly",
+      "mustNotContain": ["x9f2QRc8vN1pLm4TzB7yWd0aE", "TealeafAkaSid"],
+      "mustContain": ["set-cookie"]
+    },
+    {
+      "why": "an email address is an identity",
+      "input": "signed in to pokemoncenter as first.last+tcg@gmail.com",
+      "mustNotContain": ["first.last+tcg@gmail.com", "gmail.com"],
+      "mustContain": ["pokemoncenter"]
+    },
+    {
+      "why": "a store address and a phone number",
+      "input": "nearest store: Cool Springs, Franklin TN 37067, (615) 555-0142",
+      "mustNotContain": ["37067", "555-0142", "615"],
+      "mustContain": ["Cool Springs"]
+    },
+    {
+      "why": "a JSON blob that got stringified into a message",
+      "input": "reader returned {\"tcin\":\"94300065\",\"visitor_id\":\"018F2A9C3B4D5E6F\",\"zip\":\"37067\",\"price\":49.99}",
+      "mustNotContain": ["018F2A9C3B4D5E6F", "37067"],
+      "mustContain": ["94300065", "49.99"]
+    },
+    {
+      "why": "the process knows its own token even when nothing about the text looks like a token",
+      "input": "config: posting to hub with tok-abcdefgh12345678 appended",
+      "secrets": ["tok-abcdefgh12345678"],
+      "mustNotContain": ["tok-abcdefgh12345678"],
+      "mustContain": ["posting to hub"]
+    }
+  ],
+  "clean": [
+    {
+      "why": "the ordinary check line is the entire point of the log and must survive intact",
+      "input": "Pokemon TCG Scarlet & Violet 151 Elite Trainer Box (target): out, $49.99, 1180ms"
+    },
+    {
+      "why": "versions are logged on purpose and a naive ip rule eats the Chrome one",
+      "input": "chromium 140.0.7339.207 / node v22.22.2 / playwright 1.49.0"
+    },
+    {
+      "why": "productKey is not a key in the secret sense and is worth reading",
+      "input": "mission 12 productKey=pokemon-sv151-etb product_key=pokemon-sv151-etb"
+    },
+    {
+      "why": "pacing and stand-down lines carry no identity at all",
+      "input": "target: standing down 40m after a challenge; walmart: pacing, 12s"
+    },
+    {
+      "why": "a bare product URL with no query is the most useful thing in the file",
+      "input": "https://www.pokemoncenter.com/product/290-10099/pokemon-tcg-scarlet-and-violet-151-elite-trainer-box"
+    },
+    {
+      "why": "prices, quantities and timings must not be mistaken for identifiers",
+      "input": "declined: $54.75 (49.99 + 9.50% tax) is over the $52.00 ceiling, qty 2, 940ms"
+    }
+  ]
+}

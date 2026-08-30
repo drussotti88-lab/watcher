@@ -245,3 +245,49 @@ test('a zero price is read as absent, never as free', async () => {
   const [row] = await store.pendingDiscoveries(db, USER, 'pc');
   assert.equal(row!.price, null, 'the same rule the readers use, for the same reason');
 });
+
+test('INGEST SAYS WHAT WAS NEW, BY NAME', async () => {
+  // The caller cannot work this out for itself: "new" is a question about
+  // everything ever seen, and the Watcher is a process that restarts. Without
+  // the names, a discovery run can report a count and nothing you can act on.
+  const db = await setup();
+  // A source that has never been swept. `pc` in setup() is already seeded, so
+  // using it would test the second sweep twice and never the baseline.
+  await db.query(
+    `INSERT INTO sources (id, label, retailer, kind, url, via, config, enabled, seeded)
+     VALUES ('tgt', 'Target TCG', 'Target', 'watcher', '', 'watcher',
+             '{"filters":["pokemon"]}'::jsonb, true, false)`,
+  );
+
+  const first = await call(db, 'POST', '/ingest', {
+    token: TOKEN,
+    body: {
+      sourceId: 'tgt',
+      items: [{ externalId: '1', name: 'Pokemon 30th Celebration ETB', url: 'u1', price: 69.99 }],
+    },
+  });
+  assert.equal(first.body.seeded, true, 'the first sweep is a baseline');
+  assert.deepEqual(first.body.names, [], 'and announces nothing');
+
+  const second = await call(db, 'POST', '/ingest', {
+    token: TOKEN,
+    body: {
+      sourceId: 'tgt',
+      items: [
+        { externalId: '1', name: 'Pokemon 30th Celebration ETB', url: 'u1', price: 69.99 },
+        { externalId: '2', name: 'Pokemon Mega Evolution Booster Bundle', url: 'u2', price: 26.99 },
+      ],
+    },
+  });
+  assert.equal(second.body.new, 1);
+  assert.deepEqual(second.body.names, ['Pokemon Mega Evolution Booster Bundle']);
+});
+
+test('a run where nothing appeared names nothing, and says so with an empty list', async () => {
+  const db = await setup();
+  const items = [{ externalId: '1', name: 'Pokemon ETB', url: 'u1', price: 1 }];
+  await call(db, 'POST', '/ingest', { token: TOKEN, body: { sourceId: 'pc', items } });
+  const again = await call(db, 'POST', '/ingest', { token: TOKEN, body: { sourceId: 'pc', items } });
+  assert.equal(again.body.new, 0);
+  assert.deepEqual(again.body.names, []);
+});

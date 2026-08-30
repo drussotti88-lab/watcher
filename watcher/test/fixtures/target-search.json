@@ -1,0 +1,264 @@
+{
+ "_why": "A real Target search response (cdui slp endpoint), stripped to the availability fields and with the store id replaced. Six SKUs: two unreleased Target-sold boxes with a street date, two marketplace resellers in stock at four times MSRP, one Target-sold figure in stock, one Target-sold box in stock.",
+ "data_source_modules": [
+  {
+   "module_data": {
+    "search_response": {
+     "products": [
+      {
+       "tcin": "1010892076",
+       "item": {
+        "product_description": {
+         "title": "Pok&#233;mon Trading Card Game: 30th Celebration Elite Trainer Box"
+        },
+        "enrichment": {
+         "buy_url": "https://www.target.com/p/pok-233-mon-trading-card-game-30th-celebration-elite-trainer-box/-/A-1010892076"
+        },
+        "fulfillment": {},
+        "product_vendors": [],
+        "mmbv_content": {
+         "street_date": "2026-09-16"
+        }
+       },
+       "price": {
+        "current_retail": 69.99
+       },
+       "fulfillment": {
+        "is_out_of_stock_in_all_store_locations": true,
+        "sold_out": false,
+        "shipping_options": {
+         "availability_status": "OUT_OF_STOCK",
+         "reason_code": "INVENTORY_UNAVAILABLE",
+         "available_to_promise_quantity": 0
+        },
+        "store_options": [
+         {
+          "location_id": "9999",
+          "order_pickup": {
+           "availability_status": "UNAVAILABLE"
+          },
+          "in_store_only": {
+           "availability_status": "NOT_SOLD_IN_STORE"
+          },
+          "ship_to_store": {
+           "availability_status": "UNAVAILABLE"
+          }
+         }
+        ]
+       }
+      },
+      {
+       "tcin": "1010892068",
+       "item": {
+        "product_description": {
+         "title": "Pok&#233;mon Trading Card Game: 30th Celebration Sylveon ex Box"
+        },
+        "enrichment": {
+         "buy_url": "https://www.target.com/p/pok-233-mon-trading-card-game-30th-celebration-sylveon-ex-box/-/A-1010892068"
+        },
+        "fulfillment": {},
+        "product_vendors": [],
+        "mmbv_content": {
+         "street_date": "2026-09-16"
+        }
+       },
+       "price": {
+        "current_retail": 29.99
+       },
+       "fulfillment": {
+        "is_out_of_stock_in_all_store_locations": true,
+        "sold_out": false,
+        "shipping_options": {
+         "availability_status": "OUT_OF_STOCK",
+         "reason_code": "INVENTORY_UNAVAILABLE",
+         "available_to_promise_quantity": 0
+        },
+        "store_options": [
+         {
+          "location_id": "9999",
+          "order_pickup": {
+           "availability_status": "UNAVAILABLE"
+          },
+          "in_store_only": {
+           "availability_status": "NOT_SOLD_IN_STORE"
+          },
+          "ship_to_store": {
+           "availability_status": "UNAVAILABLE"
+          }
+         }
+        ]
+       }
+      },
+      {
+       "tcin": "1011202516",
+       "item": {
+        "product_description": {
+         "title": "Pokemon Sword & Shield Shining Fates Elite Trainer Box"
+        },
+        "enrichment": {
+         "buy_url": "https://www.target.com/p/pokemon-sword-shield-shining-fates-elite-trainer-box/-/A-1011202516"
+        },
+        "fulfillment": {
+         "is_marketplace": true
+        },
+        "product_vendors": [
+         {
+          "vendor_name": "BlueProton"
+         }
+        ]
+       },
+       "price": {
+        "current_retail": 279.99
+       },
+       "fulfillment": {
+        "is_out_of_stock_in_all_store_locations": true,
+        "sold_out": false,
+        "shipping_options": {
+         "availability_status": "IN_STOCK",
+         "available_to_promise_quantity": 8
+        },
+        "store_options": [
+         {
+          "location_id": "9999",
+          "order_pickup": {
+           "availability_status": "UNAVAILABLE"
+          },
+          "in_store_only": {
+           "availability_status": "NOT_SOLD_IN_STORE"
+          },
+          "ship_to_store": {
+           "availability_status": "UNAVAILABLE"
+          }
+         }
+        ]
+       }
+      },
+      {
+       "tcin": "1012664193",
+       "item": {
+        "product_description": {
+         "title": "Pokemon TCG: Mega Evolution - Pitch Black Pokemon Center Elite Trainer Box"
+        },
+        "enrichment": {
+         "buy_url": "https://www.target.com/p/pokemon-tcg-mega-evolution-pitch-black-pokemon-center-elite-trainer-box/-/A-1012664193"
+        },
+        "fulfillment": {
+         "is_marketplace": true
+        },
+        "product_vendors": [
+         {
+          "vendor_name": "Collectors Emporium"
+         }
+        ]
+       },
+       "price": {
+        "current_retail": 179.99
+       },
+       "fulfillment": {
+        "is_out_of_stock_in_all_store_locations": true,
+        "sold_out": false,
+        "shipping_options": {
+         "availability_status": "IN_STOCK",
+         "available_to_promise_quantity": 20
+        },
+        "store_options": [
+         {
+          "location_id": "9999",
+          "order_pickup": {
+           "availability_status": "UNAVAILABLE"
+          },
+          "in_store_only": {
+           "availability_status": "NOT_SOLD_IN_STORE"
+          },
+          "ship_to_store": {
+           "availability_status": "UNAVAILABLE"
+          }
+         }
+        ]
+       }
+      },
+      {
+       "tcin": "94725169",
+       "item": {
+        "product_description": {
+         "title": "Pokemon Rayquaza 6&#34; Super-Articulated Action Figure (Target Exclusive)"
+        },
+        "enrichment": {
+         "buy_url": "https://www.target.com/p/pokemon-rayquaza-6-34-super-articulated-action-figure-target-exclusive/-/A-94725169"
+        },
+        "fulfillment": {},
+        "product_vendors": []
+       },
+       "price": {
+        "current_retail": 19.99
+       },
+       "fulfillment": {
+        "is_out_of_stock_in_all_store_locations": false,
+        "sold_out": false,
+        "shipping_options": {
+         "availability_status": "IN_STOCK",
+         "available_to_promise_quantity": 10
+        },
+        "store_options": [
+         {
+          "location_id": "9999",
+          "order_pickup": {
+           "availability_status": "IN_STOCK"
+          },
+          "in_store_only": {
+           "availability_status": "IN_STOCK"
+          }
+         }
+        ]
+       }
+      },
+      {
+       "tcin": "1005837596",
+       "item": {
+        "product_description": {
+         "title": "Pokemon TCG: Scarlet & Violet—Prismatic Evolutions Poster Collection"
+        },
+        "enrichment": {
+         "buy_url": "https://www.target.com/p/pokemon-tcg-scarlet-violet-prismatic-evolutions-poster-collection/-/A-1005837596"
+        },
+        "fulfillment": {
+         "is_marketplace": true
+        },
+        "product_vendors": [
+         {
+          "vendor_name": "Collectors Emporium"
+         }
+        ]
+       },
+       "price": {
+        "current_retail": 59.99
+       },
+       "fulfillment": {
+        "is_out_of_stock_in_all_store_locations": true,
+        "sold_out": false,
+        "shipping_options": {
+         "availability_status": "IN_STOCK",
+         "available_to_promise_quantity": 18
+        },
+        "store_options": [
+         {
+          "location_id": "9999",
+          "order_pickup": {
+           "availability_status": "UNAVAILABLE"
+          },
+          "in_store_only": {
+           "availability_status": "NOT_SOLD_IN_STORE"
+          },
+          "ship_to_store": {
+           "availability_status": "UNAVAILABLE"
+          }
+         }
+        ]
+       }
+      }
+     ]
+    }
+   }
+  }
+ ]
+}

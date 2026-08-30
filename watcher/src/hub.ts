@@ -32,6 +32,8 @@ export interface Mission {
   state: string;
   price: number | null;
   lastCheckedAt: string;
+  /** Target's published on-sale date, when it has one. Drives waking up. */
+  releaseDate?: string | null;
 }
 
 /**
@@ -45,9 +47,23 @@ export interface Settings {
   taxRate: number;
   /** The most to pay for postage on any one order, on top of the ceiling. */
   shippingAllowance: number;
+  /** HH:MM window in which to watch at all. Equal or blank means always. */
+  activeFrom: string;
+  activeUntil: string;
+  /** IANA zone the window is written in. Blank means this machine's own. */
+  timezone: string;
+  /** The master switch. True means look at nothing. */
+  paused: boolean;
 }
 
-export const DEFAULT_SETTINGS: Settings = { taxRate: 0, shippingAllowance: 0 };
+export const DEFAULT_SETTINGS: Settings = {
+  taxRate: 0,
+  shippingAllowance: 0,
+  activeFrom: '',
+  activeUntil: '',
+  timezone: '',
+  paused: false,
+};
 
 export interface ObservationOut {
   listingId: number;
@@ -223,9 +239,16 @@ export class Hub {
     // Only replace what we have if the Hub actually sent something usable. A
     // half-answer must not quietly reset the tax rate to zero.
     if (data.settings && Number.isFinite(data.settings.taxRate)) {
+      const incoming = data.settings;
       this.settingsValue = {
-        taxRate: Math.max(0, data.settings.taxRate),
-        shippingAllowance: Math.max(0, data.settings.shippingAllowance ?? 0),
+        taxRate: Math.max(0, incoming.taxRate),
+        shippingAllowance: Math.max(0, incoming.shippingAllowance ?? 0),
+        // Strings, defaulted rather than trusted: a half-answer from the Hub
+        // must not switch watching off, so anything unusable reads as "always".
+        activeFrom: typeof incoming.activeFrom === 'string' ? incoming.activeFrom : '',
+        activeUntil: typeof incoming.activeUntil === 'string' ? incoming.activeUntil : '',
+        timezone: typeof incoming.timezone === 'string' ? incoming.timezone : '',
+        paused: incoming.paused === true,
       };
     }
     this.cached = missions;
@@ -330,6 +353,49 @@ export class Hub {
       if (i >= 0) this.pendingRuns.splice(i, 1);
     }
     return delivered.length === batch.length;
+  }
+
+  /**
+   * Post activity lines.
+   *
+   * Returns a boolean rather than throwing, and deliberately does NOT set
+   * `lastError`: that field is how the loop reports a Hub that is failing to
+   * take *readings*, and letting the log's own delivery problems write to it
+   * would put the least important failure in the most prominent place.
+   *
+   * The lines arrive already scrubbed — see watcher/src/scrub.ts. This method
+   * does not scrub, because a second scrub here would make it look as though
+   * the guarantee lived at the boundary, and it does not: it lives at the
+   * point the line is created, which is upstream of the local file too.
+   */
+  async recordActivity(lines: { message: string }[]): Promise<boolean> {
+    if (lines.length === 0) return true;
+    try {
+      await this.call('POST', '/api/activity', { lines });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Offer what a scan found to the discovery feed.
+   *
+   * The Hub owns the "is this new" judgement, and it has to: newness is a
+   * question about everything ever seen, and the Watcher is a process that
+   * restarts. All this does is hand over what is on the page right now.
+   */
+  async ingest(
+    sourceId: string,
+    items: { externalId: string; name: string; url: string; price: number | null }[],
+  ): Promise<{
+    received: number;
+    new: number;
+    announced: number;
+    seeded: boolean;
+    names?: string[];
+  }> {
+    return this.call('POST', '/ingest', { sourceId, items });
   }
 
   /**

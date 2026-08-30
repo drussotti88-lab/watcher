@@ -356,3 +356,155 @@ test('ANYTHING UNRECOGNISED IS LEFT ALONE, never guessed at', () => {
   assert.equal(decodeEntities('&#0;'), '&#0;');
   assert.equal(decodeEntities('plain text'), 'plain text');
 });
+
+// ── The on-sale date ─────────────────────────────────────────────────────────
+//
+// The question these were written for: "what tells us something we've been
+// waiting for is about to be stocked, before it goes on sale?" The answer
+// turned out not to be a quantity creeping upwards — there is no such thing on
+// Target, the count is 0 until the moment it is not — but a date the retailer
+// publishes outright, weeks ahead, which this reader was discarding.
+
+const streetFixture = JSON.parse(
+  readFileSync(new URL('./fixtures/target-street-date.json', import.meta.url), 'utf8'),
+);
+
+// 29 Aug 2026. The day the capture was taken; the street date is 18 days out.
+const CAPTURE_DAY = Date.parse('2026-08-29T12:00:00Z');
+
+test('TARGET TELLS US THE ON-SALE DATE WHILE THE ITEM IS STILL OUT OF STOCK', async () => {
+  const read = readTargetBodies([streetFixture], '1010892076', CAPTURE_DAY);
+
+  assert.equal(read.state, 'out', 'still not buyable');
+  assert.equal(read.availableQuantity, 0, 'and no stock, as always before a drop');
+  assert.equal(read.preOrder.releaseDate, '2026-09-16', 'but the date was there all along');
+});
+
+test('the note says how far away it is, in days', async () => {
+  // "on sale 2026-09-16" is a fact. "18d away" is the thing you act on.
+  const read = readTargetBodies([streetFixture], '1010892076', CAPTURE_DAY);
+  assert.match(read.note, /on sale 2026-09-16 \(18d away\)/);
+});
+
+test('AN UNRELEASED ITEM IS NOT CALLED A PRE-ORDER', async () => {
+  // They are different things and they call for opposite behaviour. A
+  // pre-order can be bought now for later delivery; this cannot be bought at
+  // all. Saying otherwise is a lie the decision layer would act on.
+  const read = readTargetBodies([streetFixture], '1010892076', CAPTURE_DAY);
+  assert.equal(read.preOrder.isPreOrder, false);
+  assert.equal(read.state, 'out');
+});
+
+test('once the street date has passed it is no longer a countdown', async () => {
+  // Same item, read a month later. The date is history, not a promise, and
+  // "on sale in -14 days" would be nonsense on the card.
+  const read = readTargetBodies([streetFixture], '1010892076', Date.parse('2026-09-30T12:00:00Z'));
+  assert.equal(read.preOrder.releaseDate, '2026-09-16', 'the date is still worth keeping');
+  assert.match(read.note, /street date 2026-09-16/);
+  assert.ok(!read.note.includes('away'), 'but not counted down to');
+});
+
+test('the purchase limit is read, and it is what the quantity is clamped to', async () => {
+  // This is why "20 available" showed up on item after item: the promise count
+  // is min(stock, limit). A 9 against a limit of 20 means nine. A 20 against a
+  // limit of 20 means at least twenty, and possibly a pallet.
+  const read = readTargetBodies([streetFixture], '1010892076', CAPTURE_DAY);
+  assert.equal(read.orderLimit, 2);
+  assert.match(read.note, /limit 2/);
+});
+
+test('a zero pre-order count is recorded but not shouted about', async () => {
+  // Zero is the entire history of this field so far. A note on every line
+  // saying so is noise; the moment it is not zero is the signal.
+  const read = readTargetBodies([streetFixture], '1010892076', CAPTURE_DAY);
+  assert.ok(!read.note.includes('PRE-ORDER STOCK'));
+});
+
+test('PRE-ORDER STOCK LANDING IS THE ONE NUMBER THAT MOVES BEFORE A DROP', async () => {
+  // The only counter in Target's whole response that can be non-zero while the
+  // item is still unbuyable: an allocation loaded against a store ahead of the
+  // street date. Never seen non-zero yet — which is exactly why it is worth
+  // recording rather than assuming.
+  const loaded = JSON.parse(JSON.stringify(streetFixture));
+  loaded.data_source_modules[0].module_data.search_response.products[0]
+    .fulfillment.store_options[0].pre_order_location_available_to_promise_quantity = 36;
+
+  const read = readTargetBodies([loaded], '1010892076', CAPTURE_DAY);
+  assert.match(read.note, /PRE-ORDER STOCK 36/);
+  assert.equal(read.state, 'out', 'and it still must not read as buyable');
+});
+
+test('an item with no street date reads exactly as it did before', async () => {
+  // Most of the catalogue has none. This must be additive or it is a rewrite.
+  const bare = JSON.parse(JSON.stringify(streetFixture));
+  delete bare.data_source_modules[0].module_data.search_response.products[0].item.mmbv_content;
+
+  const read = readTargetBodies([bare], '1010892076', CAPTURE_DAY);
+  assert.equal(read.preOrder.releaseDate, null);
+  assert.equal(read.preOrder.isPreOrder, false);
+  assert.ok(!read.note.includes('on sale'));
+});
+
+test('a malformed street date is ignored rather than trusted', async () => {
+  const bad = JSON.parse(JSON.stringify(streetFixture));
+  bad.data_source_modules[0].module_data.search_response.products[0].item.mmbv_content.street_date =
+    'coming soon';
+
+  const read = readTargetBodies([bad], '1010892076', CAPTURE_DAY);
+  assert.equal(read.preOrder.releaseDate, null, 'a date that is not a date is not a date');
+});
+
+// ── Target Plus ──────────────────────────────────────────────────────────────
+//
+// This reader used to report every target.com listing as sold by Target, on a
+// comment that said "Target has no marketplace". That is false, and it mattered:
+// `sellerPolicy: 'retailer_only'` is the guard that stops an armed mission
+// buying from a reseller, and it compares seller.kind. Saying 'retailer' for
+// everything switched the guard off on the one retailer where resellers are the
+// only things in stock — 18 of 28 results in one capture, at $179 to $279
+// against a $50 box.
+
+test('TARGET MARKETPLACE LISTINGS ARE NOT REPORTED AS SOLD BY TARGET', async () => {
+  const mkt = JSON.parse(JSON.stringify(streetFixture));
+  const product = mkt.data_source_modules[0].module_data.search_response.products[0];
+  product.item.fulfillment.is_marketplace = true;
+  product.item.product_vendors = [{ vendor_name: 'Collectors Emporium' }];
+  product.fulfillment.shipping_options.availability_status = 'IN_STOCK';
+  product.fulfillment.shipping_options.available_to_promise_quantity = 3;
+  product.price.current_retail = 219.99;
+
+  const read = readTargetBodies([mkt], '1010892076', CAPTURE_DAY);
+
+  assert.equal(read.seller.kind, 'marketplace', 'a reseller must not read as the retailer');
+  assert.equal(read.seller.name, 'Collectors Emporium');
+  assert.equal(read.state, 'in', 'it really is in stock — that is the whole trap');
+});
+
+test('a Target-sold listing still reads as first party', async () => {
+  const read = readTargetBodies([streetFixture], '1010892076', CAPTURE_DAY);
+  assert.equal(read.seller.kind, 'retailer');
+  assert.equal(read.seller.name, 'Target');
+});
+
+test('a marketplace listing with no named vendor is still marketplace', async () => {
+  // The kind is what the spending guard reads. A missing name must not
+  // downgrade it to 'retailer'.
+  const mkt = JSON.parse(JSON.stringify(streetFixture));
+  mkt.data_source_modules[0].module_data.search_response.products[0]
+    .item.fulfillment.is_marketplace = true;
+
+  const read = readTargetBodies([mkt], '1010892076', CAPTURE_DAY);
+  assert.equal(read.seller.kind, 'marketplace');
+});
+
+test('a vendor name on a first-party listing does not make it a marketplace one', async () => {
+  // product_vendors turns up on Target's own items too. Only is_marketplace
+  // decides; the name only labels.
+  const odd = JSON.parse(JSON.stringify(streetFixture));
+  odd.data_source_modules[0].module_data.search_response.products[0]
+    .item.product_vendors = [{ vendor_name: 'Some Distributor' }];
+
+  const read = readTargetBodies([odd], '1010892076', CAPTURE_DAY);
+  assert.equal(read.seller.kind, 'retailer');
+  assert.equal(read.seller.name, 'Target');
+});

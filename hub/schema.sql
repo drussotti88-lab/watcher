@@ -436,3 +436,89 @@ DO $do$ BEGIN
       FOREIGN KEY (user_id, source_id) REFERENCES sources (user_id, id) ON DELETE CASCADE;
   END IF;
 END $do$;
+
+-- ---------------------------------------------------------------------------
+-- The activity log
+--
+-- Everything the Watcher did, one row per check, so a question like "why is
+-- Target failing" has an answer that is not "look at the terminal window that
+-- scrolled past yesterday". This is the one table that deliberately breaks the
+-- write-only-when-something-changed rule at the top of store.ts, because for
+-- diagnosis the boring rows *are* the signal: a failure means one thing when
+-- the nine checks around it succeeded and something else entirely when they
+-- did not.
+--
+-- Three decisions worth stating, because each is a trade:
+--
+--   · mission_id and listing_id are NOT foreign keys. Deleting a mission must
+--     not erase the record of why it was failing — that is usually the moment
+--     you most want to look. They are plain numbers that may point at nothing.
+--
+--   · message and detail arrive already scrubbed. The Watcher takes the
+--     secrets out on its own machine before posting (watcher/src/scrub.ts) and
+--     the Hub scrubs again on the way out. Nothing here is trusted to be clean
+--     just because the previous step said so.
+--
+--   · it is pruned on every write. A check every 30 seconds is ~11,500 rows a
+--     day; without a ceiling this table is the whole database inside a month.
+--     Seven days, and a hard row cap underneath it in case something loops.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS activity (
+  id         BIGSERIAL PRIMARY KEY,
+  user_id    BIGINT NOT NULL DEFAULT 1 REFERENCES users(id) ON DELETE CASCADE,
+  at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  -- 'check'   one page read
+  -- 'pass'    one time round the loop
+  -- 'hub'     talking to this server went wrong
+  -- 'browser' Chrome fell over, or came back
+  -- 'startup' versions and configuration, once per run
+  kind       TEXT NOT NULL,
+  -- 'info' | 'warn' | 'error'
+  level      TEXT NOT NULL DEFAULT 'info',
+  retailer   TEXT NOT NULL DEFAULT '',
+  mission_id BIGINT,
+  listing_id BIGINT,
+  state      TEXT NOT NULL DEFAULT '',
+  price      NUMERIC(10, 2),
+  ms         INTEGER,
+  -- What the retailer said was available at that moment.
+  --
+  -- Here rather than only in watch_state because this is the column that
+  -- answers "did stock build before the drop, or appear with it". A time
+  -- series needs every reading, including the ten thousand that said the same
+  -- thing; the sparse tables cannot answer it by construction.
+  available_quantity INTEGER,
+  message    TEXT NOT NULL DEFAULT '',
+  detail     TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS activity_recent_idx ON activity (user_id, at DESC);
+CREATE INDEX IF NOT EXISTS activity_level_idx ON activity (user_id, level, at DESC);
+
+-- ---------------------------------------------------------------------------
+-- Reviewing what a sweep found
+--
+-- A sweep proposes; a person decides. Three states, and the third is the one
+-- that makes the feed usable: without a way to say "no, never show me this
+-- again", every sweep re-offers the same thirty things you already rejected
+-- and the feed becomes noise you scroll past.
+--
+--   'new'        found, not yet judged
+--   'kept'       promoted to a product and a listing you can watch
+--   'forgotten'  judged and declined; never offered again
+--
+-- Note that 'forgotten' is not a delete. The row stays, which is what stops
+-- the next sweep rediscovering it as new — the discovery table is also the
+-- memory of what has been seen.
+-- ---------------------------------------------------------------------------
+ALTER TABLE discoveries ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'new';
+ALTER TABLE discoveries ADD COLUMN IF NOT EXISTS decided_at TIMESTAMPTZ;
+-- What the sweep thought it was, so the review list can group and explain.
+ALTER TABLE discoveries ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT '';
+ALTER TABLE discoveries ADD COLUMN IF NOT EXISTS confidence TEXT NOT NULL DEFAULT '';
+-- Which query turned it up. Useful for pruning a keyword that only ever
+-- returns rubbish.
+ALTER TABLE discoveries ADD COLUMN IF NOT EXISTS found_by TEXT NOT NULL DEFAULT '';
+
+CREATE INDEX IF NOT EXISTS discoveries_review_idx
+  ON discoveries (user_id, status, first_seen_at DESC);

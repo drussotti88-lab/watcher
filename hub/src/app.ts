@@ -28,6 +28,7 @@ import { announce, reportOps } from './notify.ts';
 import { applyFilters, dedupe } from './filter.ts';
 import { probeUrl } from './fetcher.ts';
 import { identify, mintSession, safeEqual, sessionCookie, clearCookie } from './auth.ts';
+import { scrub, looksSensitive } from './scrub.ts';
 import { loginPage, dashboardPage } from './page.ts';
 import { identifyListing } from './parsers/identify.ts';
 import { MANIFEST, SERVICE_WORKER, iconResponse } from './pwa.ts';
@@ -175,15 +176,17 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
 
     /** Everything the page renders, in one request. */
     if (request.method === 'GET' && path === '/api/dashboard') {
-      const [missions, runs, changes, products, listings, settings] = await Promise.all([
-        store.listMissions(db, userId),
-        store.recentRuns(db, userId, 40),
-        store.recentObservations(db, userId, 40),
-        store.listProducts(db, userId),
-        store.listListings(db, userId),
-        store.getSettings(db, userId),
-      ]);
-      return json({ missions, runs, changes, products, listings, settings, now });
+      const [missions, runs, changes, products, listings, settings, discoveries] =
+        await Promise.all([
+          store.listMissions(db, userId),
+          store.recentRuns(db, userId, 40),
+          store.recentObservations(db, userId, 40),
+          store.listProducts(db, userId),
+          store.listListings(db, userId),
+          store.getSettings(db, userId),
+          store.discoveriesToReview(db, userId),
+        ]);
+      return json({ missions, runs, changes, products, listings, settings, discoveries, now });
     }
 
     /** A single mission's whole run history. */
@@ -395,6 +398,132 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       }
     }
 
+    // ── Reviewing what a sweep found ─────────────────────────────────────────
+    //
+    // A sweep proposes, a person decides. Keeping creates something watchable
+    // and nothing more: no mission, nothing armed. A machine's guess and a
+    // decision about money are kept a deliberate click apart.
+
+    if (request.method === 'GET' && path === '/api/discoveries') {
+      return json({ discoveries: await store.discoveriesToReview(db, userId) });
+    }
+
+    if (request.method === 'POST' && path.startsWith('/api/discoveries/') && path.endsWith('/keep')) {
+      const id = Number(path.split('/')[3]);
+      if (!Number.isInteger(id)) return json({ error: 'bad discovery id' }, 400);
+      try {
+        return json({ kept: await store.keepDiscovery(db, userId, id) });
+      } catch (err) {
+        return json({ error: (err as Error).message }, 400);
+      }
+    }
+
+    if (request.method === 'POST' && path.startsWith('/api/discoveries/') && path.endsWith('/forget')) {
+      const id = Number(path.split('/')[3]);
+      if (!Number.isInteger(id)) return json({ error: 'bad discovery id' }, 400);
+      const done = await store.forgetDiscovery(db, userId, id);
+      if (!done) return json({ error: 'no such discovery, or it was already decided' }, 404);
+      return json({ forgotten: id });
+    }
+
+    // ── The activity log ─────────────────────────────────────────────────────
+
+    /**
+     * The Watcher posting what it did.
+     *
+     * Lines arrive already scrubbed on the machine that produced them. This
+     * endpoint does not re-scrub on the way in, deliberately: doing it here
+     * would put the guarantee at the wrong boundary and make the local copy on
+     * that machine the unprotected one. The second pass happens on export,
+     * where the data actually leaves.
+     *
+     * Pruning runs on every ingest rather than on a schedule. There is no cron
+     * — see the note at the top of this file — so the only reliable moment to
+     * enforce retention is when somebody is writing.
+     */
+    if (request.method === 'POST' && path === '/api/activity') {
+      const b = await body<{ lines?: store.ActivityIn[] }>();
+      if (!b || !Array.isArray(b.lines)) return json({ error: 'need lines[]' }, 400);
+
+      // A cap, so a runaway Watcher cannot post a million rows in one request.
+      const lines = b.lines.slice(0, 500);
+      const result = await store.recordActivity(db, userId, lines);
+      const pruned = await store.pruneActivity(db, userId);
+      return json({ ...result, pruned });
+    }
+
+    /**
+     * The whole diagnostic picture, in one file.
+     *
+     * Built to be handed to somebody else — which is the entire reason for the
+     * second scrub. Everything in here has supposedly been cleaned already;
+     * `warnings` is what says so out loud rather than assuming it.
+     */
+    if (request.method === 'GET' && path === '/api/activity/export') {
+      const hours = Math.min(Math.max(Number(url.searchParams.get('hours') ?? 24) || 24, 1), 168);
+      const [lines, summary, missions, runs, changes] = await Promise.all([
+        store.recentActivity(db, userId, { sinceHours: hours, limit: 20_000 }),
+        store.activitySummary(db, userId, hours),
+        store.listMissions(db, userId),
+        store.recentRuns(db, userId, 200),
+        store.recentObservations(db, userId, 200),
+      ]);
+
+      // The two values this Hub knows are secret. Neither should ever appear in
+      // a log line; both are removed by value in case one ever does.
+      const secrets = [env.INGEST_TOKEN, env.APP_PASSWORD].filter(
+        (v): v is string => typeof v === 'string' && v.length > 0,
+      );
+      const clean = (text: string): string => scrub(text ?? '', secrets);
+
+      const byLevel: Record<string, number> = {};
+      const byKind: Record<string, number> = {};
+      const scrubbed = lines.map((l) => {
+        byLevel[l.level] = (byLevel[l.level] ?? 0) + 1;
+        byKind[l.kind] = (byKind[l.kind] ?? 0) + 1;
+        return { ...l, message: clean(l.message), detail: clean(l.detail) };
+      });
+
+      const bundle = {
+        generatedAt: now,
+        windowHours: hours,
+        note:
+          'Scrubbed twice: once on the machine that produced each line, once here on the ' +
+          'way out. Contains no credentials, no addresses and no account identifiers. ' +
+          'It does say what you are watching and what it costs.',
+        counts: { lines: scrubbed.length, byLevel, byKind },
+        summary,
+        missions: missions.map((m) => ({
+          id: m.id,
+          product: clean(m.productName ?? ''),
+          retailer: m.retailer,
+          enabled: m.enabled,
+          armed: m.armed,
+          ceiling: m.ceiling,
+          quantity: m.quantity,
+          checkEverySeconds: m.checkEverySeconds,
+          state: m.state,
+          price: m.price,
+          lastCheckedAt: m.lastCheckedAt,
+        })),
+        runs: runs.map((r) => ({ ...r, reason: clean(r.reason ?? '') })),
+        changes: changes.map((c) => ({ ...c, note: clean(c.note ?? '') })),
+        lines: scrubbed,
+      };
+
+      // Ask the question from the reader's side rather than asserting the
+      // answer. If anything still looks like it should not be here, the file
+      // says so at the top instead of being quietly wrong.
+      const warnings = looksSensitive(JSON.stringify(bundle));
+
+      return new Response(JSON.stringify({ ...bundle, warnings }, null, 2), {
+        headers: {
+          'Content-Type': 'application/json; charset=utf-8',
+          'Content-Disposition': `attachment; filename="watcher-activity-${now.slice(0, 10)}.json"`,
+        },
+      });
+    }
+
     /**
      * What the Watcher polls: enabled missions, with their mandate attached —
      * and the account settings, because the mandate is not complete without
@@ -589,6 +718,11 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
         new: fresh.length,
         announced: toAnnounce.length,
         seeded: isFirstSweep,
+        // What was new, by name. The caller cannot work this out for itself —
+        // "new" is a question about everything ever seen, and the Watcher is a
+        // process that restarts. Empty on a first sweep, which is the point of
+        // seeding silently rather than announcing a whole catalogue.
+        names: toAnnounce.map((i) => i.name),
       });
     }
 

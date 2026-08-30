@@ -35,6 +35,17 @@ export class Browser {
   private readonly config: Config;
   private readonly persona: Persona;
 
+  /**
+   * Somewhere to say that Chrome went away and came back.
+   *
+   * This used to be invisible, and invisible is how it cost five hours: the
+   * context died, every check failed identically, and the loop went on
+   * reporting "1 checked" all evening. The recovery below is the fix; this
+   * hook is what makes the recovery *legible* afterwards, which is a different
+   * requirement and the one a log exists to serve.
+   */
+  onEvent: (level: 'info' | 'warn', message: string) => void = () => {};
+
   constructor(config: Config, persona: Persona = 'watch') {
     this.config = config;
     this.persona = persona;
@@ -114,6 +125,7 @@ export class Browser {
     // about each failure, and producing nothing. Observed doing exactly that.
     this.context.on('close', () => {
       this.context = null;
+      this.onEvent('warn', 'Chrome closed — the next check will start a fresh one');
     });
 
     return this.context;
@@ -127,6 +139,7 @@ export class Browser {
       // browser dies between opening it and using it. One retry, on a
       // genuinely fresh context — if that fails too, the error is real.
       if (!/closed|disconnected|crashed/i.test((err as Error).message)) throw err;
+      this.onEvent('warn', `Chrome had gone (${(err as Error).message}) — starting a fresh one`);
       this.context = null;
       return this.newPage();
     }

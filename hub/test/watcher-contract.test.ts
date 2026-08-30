@@ -13,6 +13,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
+import { existsSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+
 import { TestDb } from './pg.ts';
 import { createHandler } from '../src/app.ts';
 import type { Env } from '../src/types.ts';
@@ -306,7 +309,13 @@ test('settings default to the safe direction, not to nothing', async () => {
   // than assume.
   const { db } = await withMission();
   const { body } = await call(db, 'GET', '/api/settings');
-  assert.deepEqual(body.settings, { taxRate: 0, shippingAllowance: 0 });
+  assert.equal(body.settings.taxRate, 0);
+  assert.equal(body.settings.shippingAllowance, 0);
+  // And the newer half of the mandate, which must also default to "no rule"
+  // rather than to an accidental window that silently stops all watching.
+  assert.equal(body.settings.activeFrom, '');
+  assert.equal(body.settings.activeUntil, '');
+  assert.equal(body.settings.paused, false);
 });
 
 test('settings round-trip through the API', async () => {
@@ -346,4 +355,62 @@ test('one setting can be changed without clearing the other', async () => {
   const { body } = await call(db, 'GET', '/api/settings');
   assert.equal(body.settings.taxRate, 0.07, 'a partial save must not blank what it omits');
   assert.equal(body.settings.shippingAllowance, 8);
+});
+
+// ── The fourth endpoint: the activity log ────────────────────────────────────
+
+/**
+ * Driven by the *real* Watcher classes, not by a hand-written request.
+ *
+ * Everything above names the fields watcher/src/hub.ts destructures, which
+ * catches a rename on the Hub's side. This catches the other direction: it
+ * imports the Watcher's own Activity and Hub, points their fetch at this
+ * handler, and asserts the line survives the whole round trip. If either side
+ * changes the shape, this stops compiling or stops passing.
+ */
+const watcherSrc = resolve(import.meta.dirname, '..', '..', 'watcher', 'src');
+const haveWatcher = existsSync(join(watcherSrc, 'activity.ts'));
+
+test('THE WATCHER OWN CODE CAN POST A LOG LINE THIS HUB ACCEPTS', async (t) => {
+  if (!haveWatcher) return t.skip('the Watcher is not checked out beside the Hub');
+
+  const { Activity } = await import(join(watcherSrc, 'activity.ts'));
+  const { Hub } = await import(join(watcherSrc, 'hub.ts'));
+
+  const db = await TestDb.create();
+  const handler = createHandler(db, env);
+
+  const hub = new Hub({
+    url: 'https://hub.test',
+    token: TOKEN,
+    fetchImpl: ((input: RequestInfo, init?: RequestInit) =>
+      handler(new Request(input as string, init))) as typeof fetch,
+  });
+
+  // No dir: this test is about the wire, and a temp directory it never reads
+  // is one more thing to clean up.
+  const log = new Activity({ sink: hub, secrets: [TOKEN], batchSize: 1 });
+  log.record({
+    kind: 'check',
+    level: 'error',
+    retailer: 'Target',
+    ms: 1180,
+    state: 'unknown',
+    message: `could not read ${TARGET_URL}?visitor_id=018F2A9C3B4D5E6F7A8B`,
+  });
+
+  const { sent } = await log.flush(true);
+  assert.equal(sent, 1, 'the Hub rejected what the Watcher actually sends');
+
+  const exported = await call(db, 'GET', '/api/activity/export');
+  assert.equal(exported.status, 200);
+  assert.equal(exported.body.counts.lines, 1);
+
+  const [line] = exported.body.lines;
+  assert.equal(line.retailer, 'Target', 'the retailer did not survive the wire');
+  assert.equal(line.level, 'error');
+  assert.equal(line.ms, 1180);
+  assert.ok(line.message.includes('target.com'), 'the diagnosis did not survive');
+  assert.ok(!line.message.includes('018F2A9C3B4D5E6F7A8B'), 'the visitor id survived, and must not');
+  assert.deepEqual(exported.body.warnings, []);
 });

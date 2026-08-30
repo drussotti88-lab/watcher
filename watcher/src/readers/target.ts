@@ -31,7 +31,7 @@
  */
 import type { StockState, Confidence } from '../types.ts';
 import type { ProductRead } from './types.ts';
-import { unknownRead, firstParty, decodeEntities } from './types.ts';
+import { unknownRead, firstParty, decodeEntities, type Seller } from './types.ts';
 
 /**
  * Target's availability vocabulary, from the recorded responses.
@@ -98,13 +98,21 @@ export function productNodes(body: unknown, tcin: string): Record<string, unknow
 }
 
 /** Merge the price response and the fulfillment response into one reading. */
-export function readTargetBodies(bodies: unknown[], tcin: string): ProductRead {
+export function readTargetBodies(
+  bodies: unknown[],
+  tcin: string,
+  now: number = Date.now(),
+): ProductRead {
   let name = '';
   let price: number | null = null;
   let shippingStatus = '';
   let quantity: number | null = null;
   let pickup = false;
   let sawProduct = false;
+  let streetDate: string | null = null;
+  let orderLimit: number | null = null;
+  let preOrderQuantity: number | null = null;
+  let seller: Seller = firstParty('Target');
 
   for (const body of bodies) {
     for (const product of productNodes(body, tcin)) {
@@ -114,6 +122,55 @@ export function readTargetBodies(bodies: unknown[], tcin: string): ProductRead {
       const desc = item ? asRecord(item.product_description) : null;
       const title = desc ? String(desc.title ?? '') : '';
       if (title && !name) name = decodeEntities(title.replace(/<[^>]+>/g, '')).trim();
+
+      // ── The on-sale date, which Target states outright ────────────────
+      //
+      // `item.mmbv_content.street_date` is present on an item weeks before it
+      // can be bought, on the PDP and on every search result. It is the answer
+      // to "is something we are waiting for about to be stocked": not a
+      // quantity creeping up — there is no such thing, the count is 0 until
+      // the moment it is not — but the retailer's own published date.
+      //
+      // It was being thrown away. Everything downstream of here already had
+      // somewhere to put it.
+      if (item) {
+        const mmbv = asRecord(item.mmbv_content);
+        const street = mmbv ? String(mmbv.street_date ?? '') : '';
+        if (/^\d{4}-\d{2}-\d{2}$/.test(street)) streetDate = street;
+
+        // How many one customer may have. Worth reading in its own right, and
+        // it explains the quantity: the promise count is clamped to this, so
+        // an "available 20" against a limit of 20 means *at least* 20, while
+        // 9 against a limit of 20 means nine.
+        const itemFulfil = asRecord(item.fulfillment);
+        if (itemFulfil) {
+          const lim = Number(itemFulfil.purchase_limit);
+          if (Number.isFinite(lim) && lim > 0) orderLimit = lim;
+
+          // ── Target has a marketplace, and this reader used to deny it ────
+          //
+          // The comment here read "Target has no marketplace: everything on
+          // target.com is sold by Target", and every listing was reported as
+          // first-party on that basis. It is not true — Target Plus exists,
+          // and `is_marketplace` appears 43 times in one captured search
+          // response, on listings at $179 to $279 against a $50 box.
+          //
+          // The consequence was not cosmetic. `sellerPolicy: 'retailer_only'`
+          // is the guard that stops an armed mission buying from a reseller,
+          // and it works by comparing seller.kind. A reader that says
+          // 'retailer' for everything defeats that guard completely, on the
+          // one retailer where the resellers are the only things in stock.
+          if (itemFulfil.is_marketplace === true) {
+            seller = { kind: 'marketplace', name: '' };
+          }
+        }
+
+        // Who the marketplace seller actually is, when it says.
+        const vendors = Array.isArray(item.product_vendors) ? item.product_vendors : [];
+        const vendor = vendors.length ? asRecord(vendors[0]) : null;
+        const vendorName = vendor ? String(vendor.vendor_name ?? '').trim() : '';
+        if (vendorName && seller.kind === 'marketplace') seller = { kind: 'marketplace', name: vendorName };
+      }
 
       const p = asRecord(product.price);
       if (p) {
@@ -136,6 +193,18 @@ export function readTargetBodies(bodies: unknown[], tcin: string): ProductRead {
           const store = asRecord(raw);
           const op = store ? asRecord(store.order_pickup) : null;
           if (op && stockFromStatus(String(op.availability_status ?? '')) === 'in') pickup = true;
+
+          // A separate counter from the shipping one, and the only number in
+          // this whole response that can move *before* a drop goes live: an
+          // allocation loaded against a store ahead of the street date. It is
+          // zero everywhere we have looked so far, which is worth knowing
+          // rather than assuming, so it is recorded rather than judged on.
+          if (store) {
+            const pq = Number(store.pre_order_location_available_to_promise_quantity);
+            if (Number.isFinite(pq)) {
+              preOrderQuantity = Math.max(preOrderQuantity ?? 0, pq);
+            }
+          }
         }
       }
     }
@@ -157,9 +226,36 @@ export function readTargetBodies(bodies: unknown[], tcin: string): ProductRead {
   if (state !== 'unknown' && price !== null && !contradiction) confidence = 'exact';
   else if (state !== 'unknown' && !contradiction) confidence = 'inferred';
 
+  // ── Not released yet, versus released and sold out ────────────────────────
+  //
+  // Two states the old reader could not tell apart, and they call for opposite
+  // behaviour: one is worth waiting for on a known date, the other is a race
+  // that already happened.
+  //
+  // `isPreOrder` stays false when the item cannot be bought. It means "you may
+  // order this ahead of release", and saying so about something with no buy
+  // button would be a lie the decision layer acts on. An unreleased item is
+  // described by its release date, which is the honest version.
+  const daysOut =
+    streetDate === null
+      ? null
+      : Math.ceil((Date.parse(streetDate + 'T00:00:00Z') - now) / 86400_000);
+  const unreleased = daysOut !== null && daysOut > 0 && state !== 'in';
+
   const notes: string[] = [];
   if (shippingStatus) notes.push(`shipping ${shippingStatus}`);
   if (quantity !== null) notes.push(`atp ${quantity}`);
+  if (orderLimit !== null) notes.push(`limit ${orderLimit}`);
+  if (streetDate) {
+    notes.push(
+      unreleased ? `on sale ${streetDate} (${daysOut}d away)` : `street date ${streetDate}`,
+    );
+  }
+  // Only worth a note when it is not zero. Zero is the entire history of this
+  // field so far, and a note on every line saying so is noise.
+  if (preOrderQuantity !== null && preOrderQuantity > 0) {
+    notes.push(`PRE-ORDER STOCK ${preOrderQuantity}`);
+  }
   if (pickup) notes.push('pickup available');
   if (contradiction) notes.push('IN_STOCK with zero available — refusing to call it in stock');
   if (!shippingStatus) notes.push('no shipping availability in the captured responses');
@@ -170,11 +266,13 @@ export function readTargetBodies(bodies: unknown[], tcin: string): ProductRead {
     state: contradiction ? 'unknown' : state,
     confidence,
     availableQuantity: quantity,
-    orderLimit: null,
+    orderLimit,
     pickupAvailable: pickup,
-    // Target has no marketplace: everything on target.com is sold by Target.
-    seller: firstParty('Target'),
-    preOrder: { isPreOrder: false, releaseDate: null },
+    seller,
+    preOrder: {
+      isPreOrder: state === 'in' && daysOut !== null && daysOut > 0,
+      releaseDate: streetDate,
+    },
     note: notes.join('; '),
   };
 }

@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 import { judge, pass, type ReadFn } from '../src/watch.ts';
 import { Pacer, nextUp, DEFAULT_PACING, type Pacing } from '../src/rate.ts';
 import type { Browser } from '../src/browser.ts';
+import { DEFAULT_SETTINGS } from '../src/hub.ts';
 import type { Hub, Mission, ObservationOut, RunOut, Settings } from '../src/hub.ts';
 import type { Reading } from '../src/read.ts';
 
@@ -199,6 +200,7 @@ test('a would-be purchase is declined honestly, with the total', () => {
 // ── The ceiling means item + tax ─────────────────────────────────────────────
 
 const taxed = (rate: number, shipping = 0): Settings => ({
+  ...DEFAULT_SETTINGS,
   taxRate: rate,
   shippingAllowance: shipping,
 });

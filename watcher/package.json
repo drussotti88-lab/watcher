@@ -10,6 +10,8 @@
   "scripts": {
     "watch": "node --experimental-strip-types src/index.ts watch",
     "once": "node --experimental-strip-types src/index.ts once",
+    "scan": "node --experimental-strip-types src/index.ts scan",
+    "discover": "node --experimental-strip-types src/index.ts discover",
     "signin": "node --experimental-strip-types src/index.ts signin",
     "probe": "node --experimental-strip-types src/index.ts probe",
     "browser": "node --experimental-strip-types src/index.ts browser",

@@ -311,10 +311,19 @@ ${FONTS}<style>${STYLE}</style></head>
     </form>
   </div>
 
+  <div class="card" id="paused-banner" hidden
+       style="border-color:rgba(240,131,107,.35); background:rgba(240,131,107,.08)">
+    <div class="name">Everything is paused</div>
+    <div class="meta">
+      The Watcher is looking at nothing. Turn it back on under Settings → When to watch.
+    </div>
+  </div>
+
   <div class="tabs">
     <button class="tab on" data-tab="missions">Missions<span class="count" id="c-missions"></span></button>
     <button class="tab" data-tab="products">Products<span class="count" id="c-products"></span></button>
     <button class="tab" data-tab="activity">Activity<span class="count" id="c-activity"></span></button>
+    <button class="tab" data-tab="finds">Finds<span class="count" id="c-finds"></span></button>
     <button class="tab" data-tab="settings">Settings</button>
   </div>
 
@@ -343,6 +352,18 @@ ${FONTS}<style>${STYLE}</style></head>
 
     <h2>Stock and price changes</h2>
     <div class="card" id="changes-card"></div>
+  </section>
+
+  <section id="tab-finds" hidden>
+    <h2 style="margin-top:0">What the sweep turned up</h2>
+    <p class="sub" style="margin:-6px 0 14px">
+      A sweep proposes; you decide. <strong>Keep</strong> makes it a product with
+      a listing you can watch — it does not arm anything, and it never will:
+      a machine's guess and a decision about money are two different things.
+      <strong>Forget</strong> means never offer this again, and is remembered,
+      so the next sweep will not re-suggest it.
+    </p>
+    <div id="finds-list"></div>
   </section>
 
   <section id="tab-settings" hidden>
@@ -377,6 +398,84 @@ ${FONTS}<style>${STYLE}</style></head>
           <span class="msg" id="settings-msg"></span>
         </div>
       </form>
+    </div>
+
+    <h2>When to watch</h2>
+    <p class="sub" style="margin:-6px 0 14px">
+      Target runs its scheduled drops in the small hours, so polling all
+      afternoon is traffic spent on a page that will not change — and traffic is
+      the one thing that earns a challenge, which would take the Watcher off the
+      air at three in the morning when it matters. Leave both blank to watch
+      around the clock.
+    </p>
+    <div class="card">
+      <form class="stack" id="hours-form">
+        <label class="f" style="flex-direction:row; align-items:center; gap:9px">
+          <input type="checkbox" name="paused" style="width:auto; margin:0">
+          <span>Pause everything</span>
+        </label>
+        <p class="sub" style="margin:-6px 0 4px">
+          The master switch. Stops all watching without unpicking a single
+          mission, which is the honest way to switch a system off.
+        </p>
+        <div class="grid2">
+          <label class="f">Watch from
+            <span class="hint">24-hour, e.g. 02:30</span>
+            <input type="text" name="activeFrom" placeholder="" maxlength="5">
+          </label>
+          <label class="f">Until
+            <span class="hint">a window may cross midnight</span>
+            <input type="text" name="activeUntil" placeholder="" maxlength="5">
+          </label>
+        </div>
+        <label class="f">Timezone
+          <span class="hint">e.g. America/Chicago — blank uses the Watcher's own clock</span>
+          <input type="text" name="timezone" placeholder="">
+        </label>
+        <p class="sub" style="margin:0">
+          Two things always wake it regardless: pressing <strong>Check now</strong>
+          on a card, and a product whose release date is today. A quiet-hours
+          rule that swallowed either would make the button a liar.
+        </p>
+        <div class="actions">
+          <button type="submit" class="primary">Save hours</button>
+          <span class="msg" id="hours-msg"></span>
+        </div>
+      </form>
+    </div>
+
+    <h2>Diagnostics</h2>
+    <p class="sub" style="margin:-6px 0 14px">
+      Every check the Watcher makes is written down — the ones that worked as
+      well as the ones that did not, because a failure only means something
+      next to the checks around it. This is how "it's failing a lot" turns
+      into which retailer, how often, and with what error.
+    </p>
+    <div class="card">
+      <div class="grid2">
+        <label class="f">How much history
+          <span class="hint">seven days is all that is kept</span>
+          <select id="diag-hours">
+            <option value="6">the last 6 hours</option>
+            <option value="24" selected>the last 24 hours</option>
+            <option value="72">the last 3 days</option>
+            <option value="168">everything kept (7 days)</option>
+          </select>
+        </label>
+      </div>
+      <div class="actions">
+        <button class="primary" id="diag-download">Download activity log</button>
+        <span class="msg" id="diag-msg"></span>
+      </div>
+      <p class="sub" style="margin:0">
+        <strong>In it:</strong> what was checked, when, what the page said, how
+        long it took, and every error in full.
+        <strong>Not in it:</strong> your token, your password, your address or
+        postcode, your email, your account name, or the visitor id Target puts
+        in its URLs — those are taken out on your own machine before the line is
+        written down, and taken out again here on the way out. Nothing leaves
+        until you press the button.
+      </p>
     </div>
   </section>
   <dialog id="add-dialog">
@@ -508,6 +607,30 @@ async function withButton(button, busyText, msgNode, fn) {
     button.disabled = false;
     button.textContent = original;
   }
+}
+
+/**
+ * Days until this drops, or null when that is not a question worth asking.
+ *
+ * Null for no date, and null once the date has passed — a countdown that has
+ * gone negative is worse than no countdown, because it still looks like news.
+ *
+ * Deliberately regex-free: split on the dashes and check the parts. See the
+ * backslash trap at the top of this file — a date-matching regex is exactly
+ * the shape that arrives here mangled and still parses. Writing this comment
+ * is in fact how it caught me for the fifth time, since the escaped regex I
+ * put in the prose was eaten the same way the real one would have been.
+ */
+function dropsIn(m) {
+  if (!m.releaseDate || m.state === 'in') return null;
+  const parts = String(m.releaseDate).slice(0, 10).split('-');
+  if (parts.length !== 3) return null;
+  const at = Date.UTC(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+  if (!isFinite(at)) return null;
+  const today = new Date();
+  const midnight = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
+  const days = Math.round((at - midnight) / 86400000);
+  return days >= 0 && days <= 120 ? days : null;
 }
 
 /**
@@ -646,6 +769,20 @@ function missionCard(m) {
   if (m.isPreOrder) {
     flags.appendChild(el('span', 'pill s-queue',
       'preorder' + (m.releaseDate ? ' · ' + m.releaseDate : '')));
+  }
+  // The one thing on this card that looks forwards.
+  //
+  // Target publishes an on-sale date weeks ahead, on an item that is plainly
+  // out of stock. Nothing else here answers "is this about to happen" — the
+  // stock count cannot, it is zero until the moment it is not — so a bare OUT
+  // OF STOCK pill on something dropping on Tuesday reads exactly like one on
+  // something that sold out in March.
+  const drop = dropsIn(m);
+  if (drop !== null) {
+    flags.appendChild(el('span', 'pill flag',
+      drop === 0 ? 'DROPS TODAY' :
+      drop === 1 ? 'drops tomorrow' :
+      'drops in ' + drop + ' days · ' + m.releaseDate));
   }
   if (m.note) {
     const note = el('div', 'meta', m.note);
@@ -1166,9 +1303,118 @@ function render() {
     sf.querySelector('[name=shippingAllowance]').value = st.shippingAllowance || '';
   }
 
+  renderFinds();
+
+  const hf = document.getElementById('hours-form');
+  if (document.activeElement !== hf.querySelector('[name=activeFrom]')) {
+    hf.querySelector('[name=activeFrom]').value = st.activeFrom || '';
+  }
+  if (document.activeElement !== hf.querySelector('[name=activeUntil]')) {
+    hf.querySelector('[name=activeUntil]').value = st.activeUntil || '';
+  }
+  if (document.activeElement !== hf.querySelector('[name=timezone]')) {
+    hf.querySelector('[name=timezone]').value = st.timezone || '';
+  }
+  hf.querySelector('[name=paused]').checked = !!st.paused;
+
+  // Say it where it cannot be missed, not only on the tab nobody opens.
+  const banner = document.getElementById('paused-banner');
+  banner.hidden = !st.paused;
+
   document.getElementById('c-missions').textContent = DATA.missions.length || '';
   document.getElementById('c-products').textContent = DATA.products.length || '';
   document.getElementById('c-activity').textContent = DATA.runs.length || '';
+  document.getElementById('c-finds').textContent = (DATA.discoveries || []).length || '';
+}
+
+/**
+ * The review list.
+ *
+ * Sorted so the ones the sweep was confident about come first and the ones it
+ * wants a person for come after — the whole reason 'unsure' exists is that
+ * showing you a poster collection costs two seconds and dropping a real drop
+ * costs the drop, so the uncertain ones are shown, just not shown first.
+ */
+function renderFinds() {
+  const list = document.getElementById('finds-list');
+  list.textContent = '';
+  const finds = (DATA.discoveries || []).slice().sort((a, b) => {
+    const rank = (d) => (d.confidence === 'sealed' ? 0 : 1);
+    if (rank(a) !== rank(b)) return rank(a) - rank(b);
+    return String(a.name).localeCompare(String(b.name));
+  });
+
+  if (finds.length === 0) {
+    const empty = el('div', 'card');
+    empty.appendChild(el('div', 'name', 'Nothing waiting'));
+    empty.appendChild(el('div', 'meta',
+      'Run a sweep on the machine that watches: npm run discover'));
+    list.appendChild(empty);
+    return;
+  }
+
+  for (const d of finds) {
+    const card = el('div', 'card');
+    const row = el('div', 'row');
+    const left = el('div', 'grow');
+
+    left.appendChild(el('div', 'name', d.name || 'unnamed'));
+    const facts = [];
+    if (d.kind) facts.push(d.kind);
+    if (d.price) facts.push(money(d.price));
+    if (d.foundBy) facts.push('found by "' + d.foundBy + '"');
+    left.appendChild(el('div', 'meta', facts.join(' · ')));
+
+    const tags = el('div', 'tags');
+    if (d.confidence === 'unsure') {
+      tags.appendChild(el('span', 'pill s-unknown', 'not sure — your call'));
+    }
+    if (d.alreadyHave) {
+      tags.appendChild(el('span', 'pill info', 'already on your list'));
+    }
+    if (tags.children.length) left.appendChild(tags);
+
+    if (d.url) {
+      const link = document.createElement('a');
+      link.href = d.url;
+      link.target = '_blank';
+      link.rel = 'noreferrer';
+      link.className = 'meta';
+      link.textContent = 'open at the retailer';
+      const wrap = el('div', 'meta');
+      wrap.appendChild(link);
+      left.appendChild(wrap);
+    }
+
+    const actions = el('div', 'actions');
+    actions.style.marginTop = '10px';
+
+    const keep = el('button', 'small primary', 'Keep');
+    keep.addEventListener('click', async (e) => {
+      await withButton(e.target, 'Keeping…', null, async () => {
+        await api('POST', '/api/discoveries/' + d.id + '/keep');
+        load();
+        return 'kept — it is a product now, watching nothing yet';
+      });
+    });
+
+    const forget = el('button', 'small', 'Forget');
+    forget.addEventListener('click', async (e) => {
+      await withButton(e.target, 'Forgetting…', null, async () => {
+        await api('POST', '/api/discoveries/' + d.id + '/forget');
+        load();
+        return 'forgotten — it will not be offered again';
+      });
+    });
+
+    actions.appendChild(keep);
+    actions.appendChild(forget);
+    left.appendChild(actions);
+
+    row.appendChild(left);
+    card.appendChild(row);
+    list.appendChild(card);
+  }
 }
 
 async function load() {
@@ -1222,7 +1468,7 @@ document.getElementById('product-form').addEventListener('submit', async (e) => 
 for (const tab of document.querySelectorAll('.tab')) {
   tab.addEventListener('click', () => {
     for (const t of document.querySelectorAll('.tab')) t.classList.toggle('on', t === tab);
-    for (const name of ['missions', 'products', 'activity', 'settings']) {
+    for (const name of ['missions', 'products', 'activity', 'finds', 'settings']) {
       document.getElementById('tab-' + name).hidden = name !== tab.dataset.tab;
     }
   });
@@ -1261,6 +1507,58 @@ document.getElementById('settings-form').addEventListener('submit', async (e) =>
     });
     load();
     return 'saved — applies to every mission';
+  });
+});
+
+document.getElementById('diag-download').addEventListener('click', async (e) => {
+  const hours = document.getElementById('diag-hours').value;
+  const msg = document.getElementById('diag-msg');
+  await withButton(e.target, 'Collecting…', msg, async () => {
+    const res = await fetch('/api/activity/export?hours=' + hours, { credentials: 'same-origin' });
+    if (!res.ok) throw new Error('the Hub said ' + res.status);
+    const text = await res.text();
+    const data = JSON.parse(text);
+
+    // Saved from the text already in hand rather than by pointing a link at
+    // the endpoint. Same bytes the checks below ran against, and it works on a
+    // phone, where navigating to a JSON URL opens a viewer instead of saving.
+    const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'watcher-activity-' + new Date().toISOString().slice(0, 10) + '.json';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+
+    if (data.warnings && data.warnings.length) {
+      // The export checks its own output and says so rather than going quiet.
+      // If this ever fires, the file is still yours — just do not pass it on.
+      return 'saved ' + data.counts.lines + ' lines, but check it first: ' + data.warnings.join(', ');
+    }
+    const errors = (data.counts.byLevel && data.counts.byLevel.error) || 0;
+    return 'saved ' + data.counts.lines + ' lines' + (errors ? ', ' + errors + ' of them failures' : '');
+  });
+});
+
+document.getElementById('hours-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const form = e.target;
+  const f = fields(form);
+  const msg = document.getElementById('hours-msg');
+  await withButton(form.querySelector('button[type=submit]'), 'Saving…', msg, async () => {
+    await api('POST', '/api/settings', {
+      paused: !!f.paused,
+      activeFrom: f.activeFrom || '',
+      activeUntil: f.activeUntil || '',
+      timezone: f.timezone || '',
+    });
+    load();
+    return f.paused
+      ? 'paused — the Watcher will look at nothing until you turn this off'
+      : f.activeFrom
+        ? 'saved — watching ' + f.activeFrom + ' to ' + f.activeUntil
+        : 'saved — watching around the clock';
   });
 });
 

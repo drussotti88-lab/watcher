@@ -362,8 +362,9 @@ async function knownIds(db2, userId, sourceId) {
 async function recordDiscoveries(db2, userId, sourceId, items, announce2) {
   if (items.length === 0) return [];
   const statements = items.map((item) => ({
-    text: `INSERT INTO discoveries (user_id, source_id, external_id, url, name, price, announced)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)
+    text: `INSERT INTO discoveries
+             (user_id, source_id, external_id, url, name, price, announced, kind, confidence, found_by)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
            ON CONFLICT (user_id, source_id, external_id) DO NOTHING`,
     params: [
       userId,
@@ -372,7 +373,10 @@ async function recordDiscoveries(db2, userId, sourceId, items, announce2) {
       item.url,
       item.name,
       item.price ?? null,
-      !announce2
+      !announce2,
+      item.kind ?? "",
+      item.confidence ?? "",
+      item.foundBy ?? ""
     ]
   }));
   await db2.batch(statements);
@@ -582,7 +586,23 @@ async function userByTokenHash(db2, tokenHash) {
   );
   return Number(rows[0]?.id ?? 0);
 }
-var DEFAULT_SETTINGS = { taxRate: 0, shippingAllowance: 0 };
+var DEFAULT_SETTINGS = {
+  taxRate: 0,
+  shippingAllowance: 0,
+  activeFrom: "",
+  activeUntil: "",
+  timezone: "",
+  paused: false
+};
+function isClockTime(v) {
+  if (v === "") return true;
+  const parts = v.split(":");
+  if (parts.length !== 2) return false;
+  const h = Number(parts[0]);
+  const m = Number(parts[1]);
+  if (!Number.isInteger(h) || !Number.isInteger(m)) return false;
+  return h >= 0 && h <= 23 && m >= 0 && m <= 59 && parts[0].length === 2 && parts[1].length === 2;
+}
 function validateSettings(s) {
   if (s.taxRate !== void 0) {
     if (!Number.isFinite(s.taxRate) || s.taxRate < 0) return "a tax rate cannot be negative";
@@ -595,6 +615,25 @@ function validateSettings(s) {
       return "a shipping allowance cannot be negative";
     }
     if (s.shippingAllowance > 100) return "that shipping allowance looks like a typo";
+  }
+  for (const key of ["activeFrom", "activeUntil"]) {
+    if (s[key] !== void 0 && !isClockTime(String(s[key]))) {
+      return `${key} must be a 24-hour time like 02:30, or blank for no restriction`;
+    }
+  }
+  if (s.timezone !== void 0 && String(s.timezone) !== "") {
+    try {
+      new Intl.DateTimeFormat("en-US", { timeZone: String(s.timezone) });
+    } catch {
+      return `"${s.timezone}" is not a timezone this server knows`;
+    }
+  }
+  const from = s.activeFrom;
+  const until = s.activeUntil;
+  if (from !== void 0 && until !== void 0) {
+    if (from === "" !== (until === "")) {
+      return "set both ends of the window, or neither";
+    }
   }
   return null;
 }
@@ -610,16 +649,31 @@ async function getSettings(db2, userId) {
     const n = Number(raw);
     return Number.isFinite(n) && n >= 0 ? n : fallback;
   };
+  const text = (k, fallback) => {
+    const raw = map.get(k);
+    return raw === void 0 ? fallback : String(raw);
+  };
   return {
     taxRate: num2("taxRate", DEFAULT_SETTINGS.taxRate),
-    shippingAllowance: num2("shippingAllowance", DEFAULT_SETTINGS.shippingAllowance)
+    shippingAllowance: num2("shippingAllowance", DEFAULT_SETTINGS.shippingAllowance),
+    activeFrom: isClockTime(text("activeFrom", "")) ? text("activeFrom", "") : "",
+    activeUntil: isClockTime(text("activeUntil", "")) ? text("activeUntil", "") : "",
+    timezone: text("timezone", ""),
+    paused: text("paused", "") === "true"
   };
 }
 async function setSettings(db2, userId, patch) {
   const problem = validateSettings(patch);
   if (problem) throw new Error(problem);
   const statements = [];
-  for (const key of ["taxRate", "shippingAllowance"]) {
+  for (const key of [
+    "taxRate",
+    "shippingAllowance",
+    "activeFrom",
+    "activeUntil",
+    "timezone",
+    "paused"
+  ]) {
     const value = patch[key];
     if (value === void 0) continue;
     statements.push({
@@ -864,7 +918,8 @@ async function recordObservation(db2, userId, obs) {
   );
   if (!owns.length) throw new Error("that listing does not belong to you");
   const prior = await db2.query(
-    "SELECT state, price, seller_kind FROM watch_state WHERE user_id = $1 AND listing_id = $2",
+    `SELECT state, price, seller_kind, available_quantity
+       FROM watch_state WHERE user_id = $1 AND listing_id = $2`,
     [userId, obs.listingId]
   );
   const before = prior[0] ?? null;
@@ -872,7 +927,10 @@ async function recordObservation(db2, userId, obs) {
   const previousPrice = before ? toPrice(before.price) : null;
   const price = obs.price ?? null;
   const sellerKind = obs.sellerKind ?? "unknown";
-  const changed = !isFirst && (before.state !== obs.state || previousPrice !== price || before.seller_kind !== sellerKind);
+  const previousQuantity = before && before.available_quantity !== null && before.available_quantity !== void 0 ? Number(before.available_quantity) : null;
+  const quantity = obs.availableQuantity ?? null;
+  const crossedZero = !previousQuantity && quantity !== null && quantity > 0 || previousQuantity !== null && previousQuantity > 0 && quantity === 0;
+  const changed = !isFirst && (before.state !== obs.state || previousPrice !== price || before.seller_kind !== sellerKind || crossedZero);
   await db2.query(
     `INSERT INTO watch_state (
        user_id, listing_id, state, confidence, price, seller_kind, seller_name,
@@ -983,6 +1041,184 @@ async function recentObservations(db2, userId, limit = 50) {
     note: String(r.note ?? ""),
     at: r.at ? new Date(String(r.at)).toISOString() : ""
   }));
+}
+var LEVELS = /* @__PURE__ */ new Set(["info", "warn", "error"]);
+var KINDS = /* @__PURE__ */ new Set(["check", "pass", "hub", "browser", "startup"]);
+async function recordActivity(db2, userId, lines) {
+  const usable = lines.filter((l) => l && KINDS.has(l.kind) && typeof l.message === "string");
+  if (usable.length === 0) return { written: 0, rejected: lines.length };
+  const values = [];
+  const params = [userId];
+  for (const l of usable) {
+    const base = params.length;
+    values.push(
+      `($1, $${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}, $${base + 8}, $${base + 9}, $${base + 10}, $${base + 11}, $${base + 12})`
+    );
+    params.push(
+      l.at && !Number.isNaN(Date.parse(l.at)) ? new Date(l.at).toISOString() : (/* @__PURE__ */ new Date()).toISOString(),
+      l.kind,
+      LEVELS.has(l.level ?? "") ? l.level : "info",
+      (l.retailer ?? "").slice(0, 40),
+      Number.isInteger(l.missionId) ? l.missionId : null,
+      Number.isInteger(l.listingId) ? l.listingId : null,
+      (l.state ?? "").slice(0, 20),
+      typeof l.price === "number" && Number.isFinite(l.price) ? l.price : null,
+      Number.isInteger(l.ms) ? l.ms : null,
+      Number.isInteger(l.availableQuantity) ? l.availableQuantity : null,
+      // A runaway stack trace must not become a megabyte row.
+      (l.message ?? "").slice(0, 2e3),
+      (l.detail ?? "").slice(0, 4e3)
+    );
+  }
+  await db2.query(
+    `INSERT INTO activity
+       (user_id, at, kind, level, retailer, mission_id, listing_id, state, price, ms,
+        available_quantity, message, detail)
+     VALUES ${values.join(", ")}`,
+    params
+  );
+  return { written: usable.length, rejected: lines.length - usable.length };
+}
+var ACTIVITY_DAYS = 7;
+var ACTIVITY_MAX_ROWS = 5e4;
+async function pruneActivity(db2, userId) {
+  const old = await db2.query(
+    `DELETE FROM activity
+      WHERE user_id = $1 AND at < now() - ($2 || ' days')::interval
+      RETURNING id`,
+    [userId, String(ACTIVITY_DAYS)]
+  );
+  const over = await db2.query(
+    `DELETE FROM activity
+      WHERE user_id = $1
+        AND id <= COALESCE(
+          (SELECT id FROM activity WHERE user_id = $1 ORDER BY id DESC OFFSET $2 LIMIT 1), -1)
+      RETURNING id`,
+    [userId, ACTIVITY_MAX_ROWS]
+  );
+  return old.length + over.length;
+}
+function toActivity(r) {
+  return {
+    id: Number(r.id),
+    at: r.at ? new Date(String(r.at)).toISOString() : "",
+    kind: String(r.kind ?? ""),
+    level: String(r.level ?? "info"),
+    retailer: String(r.retailer ?? ""),
+    missionId: r.mission_id === null || r.mission_id === void 0 ? null : Number(r.mission_id),
+    listingId: r.listing_id === null || r.listing_id === void 0 ? null : Number(r.listing_id),
+    state: String(r.state ?? ""),
+    price: toPrice(r.price),
+    ms: r.ms === null || r.ms === void 0 ? null : Number(r.ms),
+    availableQuantity: r.available_quantity === null || r.available_quantity === void 0 ? null : Number(r.available_quantity),
+    message: String(r.message ?? ""),
+    detail: String(r.detail ?? "")
+  };
+}
+async function recentActivity(db2, userId, opts = {}) {
+  const hours = Math.min(Math.max(opts.sinceHours ?? 24, 1), ACTIVITY_DAYS * 24);
+  const limit = Math.min(Math.max(opts.limit ?? 2e3, 1), 2e4);
+  const where = opts.level === "error" ? `AND level = 'error'` : opts.level === "warn" ? `AND level IN ('warn', 'error')` : "";
+  const rows = await db2.query(
+    `SELECT * FROM activity
+      WHERE user_id = $1 AND at > now() - ($2 || ' hours')::interval ${where}
+      ORDER BY at DESC, id DESC
+      LIMIT $3`,
+    [userId, String(hours), limit]
+  );
+  return rows.map(toActivity);
+}
+async function activitySummary(db2, userId, sinceHours = 24) {
+  const hours = Math.min(Math.max(sinceHours, 1), ACTIVITY_DAYS * 24);
+  const rows = await db2.query(
+    `SELECT retailer,
+            COUNT(*)                                          AS checks,
+            COUNT(*) FILTER (WHERE level = 'error')           AS failures,
+            COUNT(*) FILTER (WHERE state = 'in')              AS in_stock,
+            PERCENTILE_DISC(0.5) WITHIN GROUP (ORDER BY ms)   AS median_ms
+       FROM activity
+      WHERE user_id = $1 AND kind = 'check' AND at > now() - ($2 || ' hours')::interval
+      GROUP BY retailer
+      ORDER BY checks DESC`,
+    [userId, String(hours)]
+  );
+  return rows.map((r) => ({
+    retailer: String(r.retailer ?? ""),
+    checks: Number(r.checks ?? 0),
+    failures: Number(r.failures ?? 0),
+    inStock: Number(r.in_stock ?? 0),
+    medianMs: r.median_ms === null || r.median_ms === void 0 ? null : Number(r.median_ms)
+  }));
+}
+function toDiscovery(r) {
+  return {
+    id: Number(r.id),
+    sourceId: String(r.source_id ?? ""),
+    externalId: String(r.external_id ?? ""),
+    name: String(r.name ?? ""),
+    url: String(r.url ?? ""),
+    price: toPrice(r.price),
+    kind: String(r.kind ?? ""),
+    confidence: String(r.confidence ?? ""),
+    foundBy: String(r.found_by ?? ""),
+    status: String(r.status ?? "new"),
+    firstSeenAt: r.first_seen_at ? new Date(String(r.first_seen_at)).toISOString() : "",
+    alreadyHave: Boolean(r.already_have)
+  };
+}
+async function discoveriesToReview(db2, userId, limit = 200) {
+  const rows = await db2.query(
+    `SELECT d.*,
+            EXISTS (
+              SELECT 1 FROM listings l
+               WHERE l.user_id = d.user_id AND l.external_id = d.external_id
+            ) AS already_have
+       FROM discoveries d
+      WHERE d.user_id = $1 AND d.status = 'new'
+      ORDER BY d.first_seen_at DESC, d.id DESC
+      LIMIT $2`,
+    [userId, Math.min(Math.max(limit, 1), 500)]
+  );
+  return rows.map(toDiscovery);
+}
+async function getDiscovery(db2, userId, id) {
+  const rows = await db2.query(
+    `SELECT *, false AS already_have FROM discoveries WHERE user_id = $1 AND id = $2`,
+    [userId, id]
+  );
+  return rows.length ? toDiscovery(rows[0]) : null;
+}
+async function forgetDiscovery(db2, userId, id) {
+  const rows = await db2.query(
+    `UPDATE discoveries SET status = 'forgotten', decided_at = now()
+      WHERE user_id = $1 AND id = $2 AND status = 'new'
+      RETURNING id`,
+    [userId, id]
+  );
+  return rows.length > 0;
+}
+async function keepDiscovery(db2, userId, id) {
+  const found = await getDiscovery(db2, userId, id);
+  if (!found) throw new Error("no such discovery");
+  if (found.status !== "new") throw new Error(`this one was already ${found.status}`);
+  const source = await getSource(db2, userId, found.sourceId);
+  const retailer = source?.retailer ?? "Target";
+  const product = await upsertProduct(db2, userId, {
+    name: found.name,
+    msrp: found.price ?? null
+  });
+  const listing = await addListing(db2, userId, {
+    productKey: product.key,
+    retailer,
+    externalId: found.externalId,
+    url: found.url
+  });
+  await db2.query(
+    `UPDATE discoveries SET status = 'kept', decided_at = now(), product_key = $3
+      WHERE user_id = $1 AND id = $2`,
+    [userId, id, product.key]
+  );
+  return { productKey: product.key, listingId: listing.id };
 }
 
 // src/discover.ts
@@ -1251,6 +1487,56 @@ async function identify(request, env2, lookup) {
   return NOBODY;
 }
 
+// src/scrub.ts
+var MARK = "[redacted]";
+var SENSITIVE_KEY = "(?:token|secret|password|passwd|pwd|auth|authorization|session|sid|cookie|api_?key|key|card|cvv|cvc|account|visitor|visitor_?id|guest|guest_?id|zip|zip_?code|postal|postcode|address|addr|phone|tel|ssn|latitude|longitude|lat|lon|lng)";
+var OCTET = "(?:25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)";
+var IPV4 = new RegExp(`\\b${OCTET}(?:\\.${OCTET}){3}\\b`, "g");
+var OPAQUE_ID = /\b(?=[A-Za-z0-9]{24,}\b)(?=(?:[^0-9]*[0-9]){4})(?=(?:[^A-Za-z]*[A-Za-z]){4})[A-Za-z0-9]{24,}\b/g;
+function literal(s) {
+  return new RegExp(s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+}
+function scrub(input, secrets = []) {
+  if (!input) return "";
+  let s = String(input);
+  for (const secret of secrets) {
+    if (typeof secret === "string" && secret.length >= 8) s = s.replace(literal(secret), MARK);
+  }
+  s = s.replace(/\b(set-cookie|cookie)\s*:\s*[^\n]*/gi, `$1: ${MARK}`);
+  s = s.replace(/\b(bearer|basic|token)\s+[A-Za-z0-9._~+/=-]{6,}/gi, `$1 ${MARK}`);
+  s = s.replace(/(https?:\/\/[^\s"'<>]*?)\?[^\s"'<>]*/gi, `$1?${MARK}`);
+  s = s.replace(
+    new RegExp(`\\b${SENSITIVE_KEY}\\s*=\\s*[^&\\s"'<>,;)]+`, "gi"),
+    (m) => `${m.split("=")[0]}=${MARK}`
+  );
+  s = s.replace(
+    new RegExp(`("${SENSITIVE_KEY}"\\s*:\\s*)(?:"[^"]*"|-?[\\d.]+|true|false|null)`, "gi"),
+    `$1"${MARK}"`
+  );
+  s = s.replace(/([A-Za-z]:[\\/]+Users[\\/]+)[^\\/\s"'<>]+/gi, `$1${MARK}`);
+  s = s.replace(/(\/(?:home|Users)\/)[^/\s"'<>]+/g, `$1${MARK}`);
+  s = s.replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, MARK);
+  s = s.replace(/\b(?:\+?1[-. ]?)?\(?\d{3}\)?[-. ]\d{3}[-. ]\d{4}\b/g, MARK);
+  s = s.replace(IPV4, MARK);
+  s = s.replace(OPAQUE_ID, MARK);
+  s = s.replace(/\b([A-Z]{2})\s+\d{5}(?:-\d{4})?\b/g, `$1 ${MARK}`);
+  return s;
+}
+function looksSensitive(text) {
+  const found = [];
+  const check = (label, re) => {
+    if (re.test(text)) found.push(label);
+  };
+  check("email", /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/);
+  check("ip address", new RegExp(`\\b${OCTET}(?:\\.${OCTET}){3}\\b`));
+  check("bearer token", /\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{6,}/i);
+  check("cookie header", /\b(set-)?cookie\s*:\s*(?!\[redacted\])\S/i);
+  check("user path", /[A-Za-z]:[\\/]+Users[\\/]+(?!\[redacted\])[^\\/\s"'<>]+/i);
+  check("opaque id", new RegExp(OPAQUE_ID.source));
+  check("query string", /https?:\/\/[^\s"'<>]*\?(?!\[redacted\])\S/i);
+  return found;
+}
+
 // src/page.ts
 function esc(s) {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -1516,10 +1802,19 @@ ${FONTS}<style>${STYLE}</style></head>
     </form>
   </div>
 
+  <div class="card" id="paused-banner" hidden
+       style="border-color:rgba(240,131,107,.35); background:rgba(240,131,107,.08)">
+    <div class="name">Everything is paused</div>
+    <div class="meta">
+      The Watcher is looking at nothing. Turn it back on under Settings \u2192 When to watch.
+    </div>
+  </div>
+
   <div class="tabs">
     <button class="tab on" data-tab="missions">Missions<span class="count" id="c-missions"></span></button>
     <button class="tab" data-tab="products">Products<span class="count" id="c-products"></span></button>
     <button class="tab" data-tab="activity">Activity<span class="count" id="c-activity"></span></button>
+    <button class="tab" data-tab="finds">Finds<span class="count" id="c-finds"></span></button>
     <button class="tab" data-tab="settings">Settings</button>
   </div>
 
@@ -1548,6 +1843,18 @@ ${FONTS}<style>${STYLE}</style></head>
 
     <h2>Stock and price changes</h2>
     <div class="card" id="changes-card"></div>
+  </section>
+
+  <section id="tab-finds" hidden>
+    <h2 style="margin-top:0">What the sweep turned up</h2>
+    <p class="sub" style="margin:-6px 0 14px">
+      A sweep proposes; you decide. <strong>Keep</strong> makes it a product with
+      a listing you can watch \u2014 it does not arm anything, and it never will:
+      a machine's guess and a decision about money are two different things.
+      <strong>Forget</strong> means never offer this again, and is remembered,
+      so the next sweep will not re-suggest it.
+    </p>
+    <div id="finds-list"></div>
   </section>
 
   <section id="tab-settings" hidden>
@@ -1582,6 +1889,84 @@ ${FONTS}<style>${STYLE}</style></head>
           <span class="msg" id="settings-msg"></span>
         </div>
       </form>
+    </div>
+
+    <h2>When to watch</h2>
+    <p class="sub" style="margin:-6px 0 14px">
+      Target runs its scheduled drops in the small hours, so polling all
+      afternoon is traffic spent on a page that will not change \u2014 and traffic is
+      the one thing that earns a challenge, which would take the Watcher off the
+      air at three in the morning when it matters. Leave both blank to watch
+      around the clock.
+    </p>
+    <div class="card">
+      <form class="stack" id="hours-form">
+        <label class="f" style="flex-direction:row; align-items:center; gap:9px">
+          <input type="checkbox" name="paused" style="width:auto; margin:0">
+          <span>Pause everything</span>
+        </label>
+        <p class="sub" style="margin:-6px 0 4px">
+          The master switch. Stops all watching without unpicking a single
+          mission, which is the honest way to switch a system off.
+        </p>
+        <div class="grid2">
+          <label class="f">Watch from
+            <span class="hint">24-hour, e.g. 02:30</span>
+            <input type="text" name="activeFrom" placeholder="" maxlength="5">
+          </label>
+          <label class="f">Until
+            <span class="hint">a window may cross midnight</span>
+            <input type="text" name="activeUntil" placeholder="" maxlength="5">
+          </label>
+        </div>
+        <label class="f">Timezone
+          <span class="hint">e.g. America/Chicago \u2014 blank uses the Watcher's own clock</span>
+          <input type="text" name="timezone" placeholder="">
+        </label>
+        <p class="sub" style="margin:0">
+          Two things always wake it regardless: pressing <strong>Check now</strong>
+          on a card, and a product whose release date is today. A quiet-hours
+          rule that swallowed either would make the button a liar.
+        </p>
+        <div class="actions">
+          <button type="submit" class="primary">Save hours</button>
+          <span class="msg" id="hours-msg"></span>
+        </div>
+      </form>
+    </div>
+
+    <h2>Diagnostics</h2>
+    <p class="sub" style="margin:-6px 0 14px">
+      Every check the Watcher makes is written down \u2014 the ones that worked as
+      well as the ones that did not, because a failure only means something
+      next to the checks around it. This is how "it's failing a lot" turns
+      into which retailer, how often, and with what error.
+    </p>
+    <div class="card">
+      <div class="grid2">
+        <label class="f">How much history
+          <span class="hint">seven days is all that is kept</span>
+          <select id="diag-hours">
+            <option value="6">the last 6 hours</option>
+            <option value="24" selected>the last 24 hours</option>
+            <option value="72">the last 3 days</option>
+            <option value="168">everything kept (7 days)</option>
+          </select>
+        </label>
+      </div>
+      <div class="actions">
+        <button class="primary" id="diag-download">Download activity log</button>
+        <span class="msg" id="diag-msg"></span>
+      </div>
+      <p class="sub" style="margin:0">
+        <strong>In it:</strong> what was checked, when, what the page said, how
+        long it took, and every error in full.
+        <strong>Not in it:</strong> your token, your password, your address or
+        postcode, your email, your account name, or the visitor id Target puts
+        in its URLs \u2014 those are taken out on your own machine before the line is
+        written down, and taken out again here on the way out. Nothing leaves
+        until you press the button.
+      </p>
     </div>
   </section>
   <dialog id="add-dialog">
@@ -1713,6 +2098,30 @@ async function withButton(button, busyText, msgNode, fn) {
     button.disabled = false;
     button.textContent = original;
   }
+}
+
+/**
+ * Days until this drops, or null when that is not a question worth asking.
+ *
+ * Null for no date, and null once the date has passed \u2014 a countdown that has
+ * gone negative is worse than no countdown, because it still looks like news.
+ *
+ * Deliberately regex-free: split on the dashes and check the parts. See the
+ * backslash trap at the top of this file \u2014 a date-matching regex is exactly
+ * the shape that arrives here mangled and still parses. Writing this comment
+ * is in fact how it caught me for the fifth time, since the escaped regex I
+ * put in the prose was eaten the same way the real one would have been.
+ */
+function dropsIn(m) {
+  if (!m.releaseDate || m.state === 'in') return null;
+  const parts = String(m.releaseDate).slice(0, 10).split('-');
+  if (parts.length !== 3) return null;
+  const at = Date.UTC(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+  if (!isFinite(at)) return null;
+  const today = new Date();
+  const midnight = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
+  const days = Math.round((at - midnight) / 86400000);
+  return days >= 0 && days <= 120 ? days : null;
 }
 
 /**
@@ -1851,6 +2260,20 @@ function missionCard(m) {
   if (m.isPreOrder) {
     flags.appendChild(el('span', 'pill s-queue',
       'preorder' + (m.releaseDate ? ' \xB7 ' + m.releaseDate : '')));
+  }
+  // The one thing on this card that looks forwards.
+  //
+  // Target publishes an on-sale date weeks ahead, on an item that is plainly
+  // out of stock. Nothing else here answers "is this about to happen" \u2014 the
+  // stock count cannot, it is zero until the moment it is not \u2014 so a bare OUT
+  // OF STOCK pill on something dropping on Tuesday reads exactly like one on
+  // something that sold out in March.
+  const drop = dropsIn(m);
+  if (drop !== null) {
+    flags.appendChild(el('span', 'pill flag',
+      drop === 0 ? 'DROPS TODAY' :
+      drop === 1 ? 'drops tomorrow' :
+      'drops in ' + drop + ' days \xB7 ' + m.releaseDate));
   }
   if (m.note) {
     const note = el('div', 'meta', m.note);
@@ -2371,9 +2794,118 @@ function render() {
     sf.querySelector('[name=shippingAllowance]').value = st.shippingAllowance || '';
   }
 
+  renderFinds();
+
+  const hf = document.getElementById('hours-form');
+  if (document.activeElement !== hf.querySelector('[name=activeFrom]')) {
+    hf.querySelector('[name=activeFrom]').value = st.activeFrom || '';
+  }
+  if (document.activeElement !== hf.querySelector('[name=activeUntil]')) {
+    hf.querySelector('[name=activeUntil]').value = st.activeUntil || '';
+  }
+  if (document.activeElement !== hf.querySelector('[name=timezone]')) {
+    hf.querySelector('[name=timezone]').value = st.timezone || '';
+  }
+  hf.querySelector('[name=paused]').checked = !!st.paused;
+
+  // Say it where it cannot be missed, not only on the tab nobody opens.
+  const banner = document.getElementById('paused-banner');
+  banner.hidden = !st.paused;
+
   document.getElementById('c-missions').textContent = DATA.missions.length || '';
   document.getElementById('c-products').textContent = DATA.products.length || '';
   document.getElementById('c-activity').textContent = DATA.runs.length || '';
+  document.getElementById('c-finds').textContent = (DATA.discoveries || []).length || '';
+}
+
+/**
+ * The review list.
+ *
+ * Sorted so the ones the sweep was confident about come first and the ones it
+ * wants a person for come after \u2014 the whole reason 'unsure' exists is that
+ * showing you a poster collection costs two seconds and dropping a real drop
+ * costs the drop, so the uncertain ones are shown, just not shown first.
+ */
+function renderFinds() {
+  const list = document.getElementById('finds-list');
+  list.textContent = '';
+  const finds = (DATA.discoveries || []).slice().sort((a, b) => {
+    const rank = (d) => (d.confidence === 'sealed' ? 0 : 1);
+    if (rank(a) !== rank(b)) return rank(a) - rank(b);
+    return String(a.name).localeCompare(String(b.name));
+  });
+
+  if (finds.length === 0) {
+    const empty = el('div', 'card');
+    empty.appendChild(el('div', 'name', 'Nothing waiting'));
+    empty.appendChild(el('div', 'meta',
+      'Run a sweep on the machine that watches: npm run discover'));
+    list.appendChild(empty);
+    return;
+  }
+
+  for (const d of finds) {
+    const card = el('div', 'card');
+    const row = el('div', 'row');
+    const left = el('div', 'grow');
+
+    left.appendChild(el('div', 'name', d.name || 'unnamed'));
+    const facts = [];
+    if (d.kind) facts.push(d.kind);
+    if (d.price) facts.push(money(d.price));
+    if (d.foundBy) facts.push('found by "' + d.foundBy + '"');
+    left.appendChild(el('div', 'meta', facts.join(' \xB7 ')));
+
+    const tags = el('div', 'tags');
+    if (d.confidence === 'unsure') {
+      tags.appendChild(el('span', 'pill s-unknown', 'not sure \u2014 your call'));
+    }
+    if (d.alreadyHave) {
+      tags.appendChild(el('span', 'pill info', 'already on your list'));
+    }
+    if (tags.children.length) left.appendChild(tags);
+
+    if (d.url) {
+      const link = document.createElement('a');
+      link.href = d.url;
+      link.target = '_blank';
+      link.rel = 'noreferrer';
+      link.className = 'meta';
+      link.textContent = 'open at the retailer';
+      const wrap = el('div', 'meta');
+      wrap.appendChild(link);
+      left.appendChild(wrap);
+    }
+
+    const actions = el('div', 'actions');
+    actions.style.marginTop = '10px';
+
+    const keep = el('button', 'small primary', 'Keep');
+    keep.addEventListener('click', async (e) => {
+      await withButton(e.target, 'Keeping\u2026', null, async () => {
+        await api('POST', '/api/discoveries/' + d.id + '/keep');
+        load();
+        return 'kept \u2014 it is a product now, watching nothing yet';
+      });
+    });
+
+    const forget = el('button', 'small', 'Forget');
+    forget.addEventListener('click', async (e) => {
+      await withButton(e.target, 'Forgetting\u2026', null, async () => {
+        await api('POST', '/api/discoveries/' + d.id + '/forget');
+        load();
+        return 'forgotten \u2014 it will not be offered again';
+      });
+    });
+
+    actions.appendChild(keep);
+    actions.appendChild(forget);
+    left.appendChild(actions);
+
+    row.appendChild(left);
+    card.appendChild(row);
+    list.appendChild(card);
+  }
 }
 
 async function load() {
@@ -2427,7 +2959,7 @@ document.getElementById('product-form').addEventListener('submit', async (e) => 
 for (const tab of document.querySelectorAll('.tab')) {
   tab.addEventListener('click', () => {
     for (const t of document.querySelectorAll('.tab')) t.classList.toggle('on', t === tab);
-    for (const name of ['missions', 'products', 'activity', 'settings']) {
+    for (const name of ['missions', 'products', 'activity', 'finds', 'settings']) {
       document.getElementById('tab-' + name).hidden = name !== tab.dataset.tab;
     }
   });
@@ -2466,6 +2998,58 @@ document.getElementById('settings-form').addEventListener('submit', async (e) =>
     });
     load();
     return 'saved \u2014 applies to every mission';
+  });
+});
+
+document.getElementById('diag-download').addEventListener('click', async (e) => {
+  const hours = document.getElementById('diag-hours').value;
+  const msg = document.getElementById('diag-msg');
+  await withButton(e.target, 'Collecting\u2026', msg, async () => {
+    const res = await fetch('/api/activity/export?hours=' + hours, { credentials: 'same-origin' });
+    if (!res.ok) throw new Error('the Hub said ' + res.status);
+    const text = await res.text();
+    const data = JSON.parse(text);
+
+    // Saved from the text already in hand rather than by pointing a link at
+    // the endpoint. Same bytes the checks below ran against, and it works on a
+    // phone, where navigating to a JSON URL opens a viewer instead of saving.
+    const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'watcher-activity-' + new Date().toISOString().slice(0, 10) + '.json';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+
+    if (data.warnings && data.warnings.length) {
+      // The export checks its own output and says so rather than going quiet.
+      // If this ever fires, the file is still yours \u2014 just do not pass it on.
+      return 'saved ' + data.counts.lines + ' lines, but check it first: ' + data.warnings.join(', ');
+    }
+    const errors = (data.counts.byLevel && data.counts.byLevel.error) || 0;
+    return 'saved ' + data.counts.lines + ' lines' + (errors ? ', ' + errors + ' of them failures' : '');
+  });
+});
+
+document.getElementById('hours-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const form = e.target;
+  const f = fields(form);
+  const msg = document.getElementById('hours-msg');
+  await withButton(form.querySelector('button[type=submit]'), 'Saving\u2026', msg, async () => {
+    await api('POST', '/api/settings', {
+      paused: !!f.paused,
+      activeFrom: f.activeFrom || '',
+      activeUntil: f.activeUntil || '',
+      timezone: f.timezone || '',
+    });
+    load();
+    return f.paused
+      ? 'paused \u2014 the Watcher will look at nothing until you turn this off'
+      : f.activeFrom
+        ? 'saved \u2014 watching ' + f.activeFrom + ' to ' + f.activeUntil
+        : 'saved \u2014 watching around the clock';
   });
 });
 
@@ -2739,15 +3323,16 @@ function createHandler(db2, env2) {
       return html(dashboardPage());
     }
     if (request.method === "GET" && path === "/api/dashboard") {
-      const [missions, runs, changes, products, listings, settings] = await Promise.all([
+      const [missions, runs, changes, products, listings, settings, discoveries] = await Promise.all([
         listMissions(db2, userId),
         recentRuns(db2, userId, 40),
         recentObservations(db2, userId, 40),
         listProducts(db2, userId),
         listListings(db2, userId),
-        getSettings(db2, userId)
+        getSettings(db2, userId),
+        discoveriesToReview(db2, userId)
       ]);
-      return json({ missions, runs, changes, products, listings, settings, now });
+      return json({ missions, runs, changes, products, listings, settings, discoveries, now });
     }
     if (request.method === "GET" && path.startsWith("/api/missions/") && path.endsWith("/runs")) {
       const id = Number(path.split("/")[3]);
@@ -2882,6 +3467,84 @@ function createHandler(db2, env2) {
       } catch (err) {
         return json({ error: err.message }, 400);
       }
+    }
+    if (request.method === "GET" && path === "/api/discoveries") {
+      return json({ discoveries: await discoveriesToReview(db2, userId) });
+    }
+    if (request.method === "POST" && path.startsWith("/api/discoveries/") && path.endsWith("/keep")) {
+      const id = Number(path.split("/")[3]);
+      if (!Number.isInteger(id)) return json({ error: "bad discovery id" }, 400);
+      try {
+        return json({ kept: await keepDiscovery(db2, userId, id) });
+      } catch (err) {
+        return json({ error: err.message }, 400);
+      }
+    }
+    if (request.method === "POST" && path.startsWith("/api/discoveries/") && path.endsWith("/forget")) {
+      const id = Number(path.split("/")[3]);
+      if (!Number.isInteger(id)) return json({ error: "bad discovery id" }, 400);
+      const done = await forgetDiscovery(db2, userId, id);
+      if (!done) return json({ error: "no such discovery, or it was already decided" }, 404);
+      return json({ forgotten: id });
+    }
+    if (request.method === "POST" && path === "/api/activity") {
+      const b = await body();
+      if (!b || !Array.isArray(b.lines)) return json({ error: "need lines[]" }, 400);
+      const lines = b.lines.slice(0, 500);
+      const result = await recordActivity(db2, userId, lines);
+      const pruned = await pruneActivity(db2, userId);
+      return json({ ...result, pruned });
+    }
+    if (request.method === "GET" && path === "/api/activity/export") {
+      const hours = Math.min(Math.max(Number(url.searchParams.get("hours") ?? 24) || 24, 1), 168);
+      const [lines, summary, missions, runs, changes] = await Promise.all([
+        recentActivity(db2, userId, { sinceHours: hours, limit: 2e4 }),
+        activitySummary(db2, userId, hours),
+        listMissions(db2, userId),
+        recentRuns(db2, userId, 200),
+        recentObservations(db2, userId, 200)
+      ]);
+      const secrets = [env2.INGEST_TOKEN, env2.APP_PASSWORD].filter(
+        (v) => typeof v === "string" && v.length > 0
+      );
+      const clean = (text) => scrub(text ?? "", secrets);
+      const byLevel = {};
+      const byKind = {};
+      const scrubbed = lines.map((l) => {
+        byLevel[l.level] = (byLevel[l.level] ?? 0) + 1;
+        byKind[l.kind] = (byKind[l.kind] ?? 0) + 1;
+        return { ...l, message: clean(l.message), detail: clean(l.detail) };
+      });
+      const bundle = {
+        generatedAt: now,
+        windowHours: hours,
+        note: "Scrubbed twice: once on the machine that produced each line, once here on the way out. Contains no credentials, no addresses and no account identifiers. It does say what you are watching and what it costs.",
+        counts: { lines: scrubbed.length, byLevel, byKind },
+        summary,
+        missions: missions.map((m) => ({
+          id: m.id,
+          product: clean(m.productName ?? ""),
+          retailer: m.retailer,
+          enabled: m.enabled,
+          armed: m.armed,
+          ceiling: m.ceiling,
+          quantity: m.quantity,
+          checkEverySeconds: m.checkEverySeconds,
+          state: m.state,
+          price: m.price,
+          lastCheckedAt: m.lastCheckedAt
+        })),
+        runs: runs.map((r) => ({ ...r, reason: clean(r.reason ?? "") })),
+        changes: changes.map((c) => ({ ...c, note: clean(c.note ?? "") })),
+        lines: scrubbed
+      };
+      const warnings = looksSensitive(JSON.stringify(bundle));
+      return new Response(JSON.stringify({ ...bundle, warnings }, null, 2), {
+        headers: {
+          "Content-Type": "application/json; charset=utf-8",
+          "Content-Disposition": `attachment; filename="watcher-activity-${now.slice(0, 10)}.json"`
+        }
+      });
     }
     if (request.method === "GET" && path === "/api/missions/active") {
       const [missions, settings] = await Promise.all([
@@ -3027,7 +3690,12 @@ function createHandler(db2, env2) {
         received: clean.length,
         new: fresh.length,
         announced: toAnnounce.length,
-        seeded: isFirstSweep
+        seeded: isFirstSweep,
+        // What was new, by name. The caller cannot work this out for itself —
+        // "new" is a question about everything ever seen, and the Watcher is a
+        // process that restarts. Empty on a first sweep, which is the point of
+        // seeding silently rather than announcing a whole catalogue.
+        names: toAnnounce.map((i) => i.name)
       });
     }
     if ((request.method === "POST" || request.method === "GET") && path === "/probe") {

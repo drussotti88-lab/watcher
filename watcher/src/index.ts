@@ -11,9 +11,59 @@ import { probeAll, renderProbe, PROBE_TARGETS } from './probe.ts';
 import { inspectUrl, renderInspection } from './inspect.ts';
 import { Hub } from './hub.ts';
 import { Pacer } from './rate.ts';
+import { isAwake, overrides } from './hours.ts';
 import { pass } from './watch.ts';
+import {
+  scanTargetSearch,
+  renderScan,
+  candidates,
+  toDiscovered,
+  renderDiscover,
+} from './scan.ts';
+import { Activity } from './activity.ts';
 
-const COMMANDS = ['watch', 'once', 'probe', 'browser', 'signin', 'inspect', 'help'] as const;
+/**
+ * What to sweep when nothing is named.
+ *
+ * One query cannot find what one query does not rank for. Target's search is
+ * loose and personalised — it put an action figure first for "elite trainer
+ * box" — so the way to see the catalogue is to ask several narrow questions
+ * rather than one broad one, and let the discovery table union the answers.
+ *
+ * The last entry is deliberately the broadest: it is the one that can turn up
+ * a product form nobody has thought of, which is the entire point of a
+ * discovery feed as opposed to a watchlist.
+ */
+const DEFAULT_QUERIES = [
+  'pokemon elite trainer box',
+  'pokemon booster box',
+  'pokemon booster bundle',
+  'pokemon booster pack',
+  'pokemon build and battle box',
+  'pokemon ex box',
+  'pokemon premium collection',
+  'pokemon ultra premium collection',
+  'pokemon upc',
+  'pokemon spc',
+  'pokemon tin',
+  'pokemon blister pack',
+  'pokemon trading card game',
+];
+
+const searchUrl = (query: string): string =>
+  'https://www.target.com/s?searchTerm=' + encodeURIComponent(query);
+
+const COMMANDS = [
+  'watch',
+  'once',
+  'scan',
+  'discover',
+  'probe',
+  'browser',
+  'signin',
+  'inspect',
+  'help',
+] as const;
 type Command = (typeof COMMANDS)[number];
 
 function help(): void {
@@ -24,6 +74,18 @@ function help(): void {
                      whatever is due, and reports what it saw. Ctrl+C to stop.
 
   npm run once       One pass, then exit. Use this first.
+
+  npm run scan "<target search url>"
+                     Reads a whole Target category in one request and sorts it
+                     into what is worth watching. Says which items Target has
+                     scheduled, which have stock sitting in a store while the
+                     site still says no, and which are resellers wearing a
+                     Target URL. Changes nothing — it is a way of looking.
+
+  npm run discover   The same scan, remembered. Keeps only sealed Pokémon TCG
+                     sold by Target, hands it to the Hub, and tells you what
+                     was not there last time. The first run is the baseline
+                     and announces nothing.
 
   npm run probe      Can this machine see the three retailers at all?
 
@@ -67,6 +129,30 @@ async function runPasses(once: boolean): Promise<void> {
   const browser = new Browser(config, 'watch');
   const pacer = new Pacer();
 
+  // The log. Its own token goes in as a known secret so that even a Hub error
+  // that quotes the Authorization header back at us cannot write it down.
+  const activity = new Activity({
+    sink: hub,
+    secrets: [config.hub.token],
+    dir: 'logs',
+  });
+
+  browser.onEvent = (level, message) => {
+    activity.record({ kind: 'browser', level, message });
+    console.log(`  ${timestamp()}  ${message}`);
+  };
+
+  // Once per run: what this machine is, so a failure that turns out to be a
+  // Chrome upgrade or a Node version is answerable without asking.
+  activity.record({
+    kind: 'startup',
+    message: `watcher started, checking every ${config.intervalSec}s`,
+    detail:
+      `node ${process.version} · ${process.platform}/${process.arch} · ` +
+      `chrome channel ${config.browser.channel}${config.browser.headed ? ' (headed)' : ''} · ` +
+      `hub ${hub.configured ? 'configured' : 'missing'}`,
+  });
+
   console.log(`\n  Watching via ${config.hub.url}`);
   console.log(`  Browser profile: ${browser.profileDir} (signed out, deliberately)`);
   if (!once) console.log(`  Ctrl+C to stop.\n`);
@@ -83,16 +169,45 @@ async function runPasses(once: boolean): Promise<void> {
       // looking at pages — we keep watching the last list it gave us, and the
       // readings buffer until it comes back.
       const { missions, stale, reason } = await hub.missionsOrCached();
-      if (stale) console.log(`  ${timestamp()}  ${reason || 'the Hub did not answer'}`);
+      if (stale) {
+        const said = reason || 'the Hub did not answer';
+        console.log(`  ${timestamp()}  ${said}`);
+        activity.record({ kind: 'hub', level: 'warn', message: said });
+      }
+
+      // ── Should we be looking at all? ──────────────────────────────────
+      //
+      // The Hub call above is cheap and stays: it is how a settings change or a
+      // "check now" reaches a sleeping Watcher. What quiet hours switch off is
+      // the expensive half — opening real pages at a retailer that is not going
+      // to change them.
+      const sleep_ = isAwake(hub.settings);
+      const why = sleep_.awake ? '' : overrides(missions, new Date().toISOString().slice(0, 10));
+      if (!sleep_.awake && !why) {
+        console.log(`  ${timestamp()}  ${sleep_.reason}`);
+        activity.record({ kind: 'pass', message: sleep_.reason });
+        await activity.flush(once);
+        if (once) break;
+        // Capped, so a change of mind in the app is picked up in minutes rather
+        // than at dawn.
+        await sleep(Math.min(sleep_.opensInMs ?? 300_000, 300_000));
+        continue;
+      }
+      if (!sleep_.awake && why) {
+        console.log(`  ${timestamp()}  outside watching hours, but ${why} — looking anyway`);
+      }
 
       if (missions.length === 0) {
-        console.log(
-          `  ${timestamp()}  ${stale ? 'nothing to fall back on — skipping this pass' : 'no active missions — add one in the app'}`,
-        );
+        const why = stale
+          ? 'nothing to fall back on — skipping this pass'
+          : 'no active missions — add one in the app';
+        console.log(`  ${timestamp()}  ${why}`);
+        activity.record({ kind: 'pass', level: stale ? 'warn' : 'info', message: why });
       } else {
         const result = await pass(missions, pacer, {
           browser,
           hub,
+          activity,
           log: (line) => console.log(line),
         });
         const parts = [`${result.checked} checked`];
@@ -107,13 +222,31 @@ async function runPasses(once: boolean): Promise<void> {
         if (result.nextDueInMs !== null) {
           parts.push(`nothing due — next in ${Math.ceil(result.nextDueInMs / 1000)}s`);
         }
+        if (activity.backlog) parts.push(`${activity.backlog} log lines queued`);
+        if (activity.lost) parts.push(`${activity.lost} log lines dropped`);
+        if (activity.fileError) parts.push(`log file: ${activity.fileError}`);
         console.log(`  ${timestamp()}  ${parts.join(' · ')}`);
+
+        // The summary line, kept. This is the row that gives every check row
+        // around it its meaning: one failure among nine successes is a page
+        // being slow, and nine failures out of nine is something else.
+        activity.record({
+          kind: 'pass',
+          level: result.failed > 0 && result.failed === result.checked ? 'error' : 'info',
+          message: parts.join(' · '),
+          detail: result.blocked.join('; '),
+        });
       }
+
+      // Force on the last pass so a `once` run, or a Ctrl+C, does not leave
+      // the most interesting lines sitting in memory.
+      await activity.flush(once || stopped);
 
       if (once) break;
       await sleep(config.intervalSec * 1000);
     } while (!stopped);
   } finally {
+    await activity.flush(true);
     await browser.close();
   }
 }
@@ -154,6 +287,121 @@ async function main(): Promise<void> {
       console.log('\n  Opening a real Chrome and visiting each retailer…');
       console.log('  (a window will appear — that is the point; let it work)\n');
       console.log(renderProbe(await probeAll(browser)));
+      return;
+    }
+
+    if (command === 'scan') {
+      const url = process.argv[3];
+      if (!url || url.slice(0, 4) !== 'http') {
+        console.error(`
+  Give me a Target search URL:
+
+    npm run scan "https://www.target.com/s?searchTerm=pokemon+elite+trainer+box"
+
+  Target only, for now. It is the one of the three that publishes an on-sale
+  date and a per-store count, so it is the only one where a scan can say
+  anything the product page could not.
+`);
+        process.exitCode = 1;
+        return;
+      }
+      console.log('\n  Opening it — this uses the signed-out watch profile…');
+      const result = await scanTargetSearch(browser, url);
+      console.log(renderScan(result));
+      if (result.challenged || result.note) process.exitCode = 1;
+      return;
+    }
+
+    if (command === 'discover') {
+      const queries = process.argv.slice(3).filter(Boolean);
+      const plan = queries.length ? queries : DEFAULT_QUERIES;
+      if (!config.hub.url || !config.hub.token) {
+        console.error(`
+  Discovery needs the Hub — "new" is a question about everything ever seen,
+  and this process restarts. Set hub.url and hub.token in ${CONFIG_PATH}.
+`);
+        process.exitCode = 1;
+        return;
+      }
+
+      console.log(`
+  Sweeping ${plan.length} ${plan.length === 1 ? 'query' : 'queries'} — signed-out watch profile.
+  Paced at one page every 20s or so, which is the same budget watching uses.
+`);
+
+      const hub = new Hub({ url: config.hub.url, token: config.hub.token });
+      const all = new Map<string, ReturnType<typeof candidates>[number]>();
+      let stopped = false;
+      let lastScan = null as Awaited<ReturnType<typeof scanTargetSearch>> | null;
+
+      for (const [i, query] of plan.entries()) {
+        if (i > 0) {
+          // The same politeness the watching loop keeps. A sweep that hammers
+          // ten searches back to back is the thing that earns a challenge, and
+          // a challenge costs the next four hours of watching too.
+          await sleep(20_000 + Math.floor(Math.random() * 8_000));
+        }
+        process.stdout.write(`  ${query} … `);
+        const scan = await scanTargetSearch(browser, searchUrl(query));
+        lastScan = scan;
+
+        if (scan.challenged) {
+          console.log('challenged — stopping the sweep here');
+          stopped = true;
+          break;
+        }
+        if (scan.note) {
+          console.log(scan.note);
+          continue;
+        }
+
+        const found = candidates(scan.verdicts, query);
+        for (const c of found) {
+          // First query to find something gets the credit, so `found_by` names
+          // the narrowest query that works rather than the last one that ran.
+          if (!all.has(c.row.tcin)) all.set(c.row.tcin, c);
+        }
+        console.log(`${scan.verdicts.length} results, ${found.length} kept`);
+      }
+
+      const found = [...all.values()];
+      let fresh: string[] = [];
+      let received = 0;
+      let seeded = false;
+      let error = '';
+      if (found.length > 0) {
+        try {
+          const result = await hub.ingest('target-tcg', found.map(toDiscovered));
+          fresh = result.names ?? [];
+          received = result.received;
+          seeded = result.seeded;
+        } catch (err) {
+          error = (err as Error).message;
+        }
+      }
+
+      console.log(
+        renderDiscover({
+          scan: lastScan ?? {
+            url: `${plan.length} queries`,
+            verdicts: [],
+            challenged: false,
+            challengeReason: '',
+            bodies: 0,
+            ms: 0,
+            note: '',
+          },
+          candidates: found,
+          fresh,
+          received,
+          seeded,
+          error,
+        }),
+      );
+      if (found.length > 0 && !error) {
+        console.log('  Review them in the app, under Finds.\n');
+      }
+      if (stopped || error) process.exitCode = 1;
       return;
     }
 

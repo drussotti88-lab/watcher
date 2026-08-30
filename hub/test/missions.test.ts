@@ -559,3 +559,164 @@ test('an empty name from a failed read changes nothing', async () => {
 
   assert.equal((await store.listProducts(db, USER))[0]!.name, before);
 });
+
+// ── Stock appearing, and the question it exists to answer ────────────────────
+//
+// "Will we see the count go up before a drop?" On all three retailers today the
+// answer is no — the number is 0 or absent while out of stock and appears with
+// the drop, not before it. But that is an observation about how three websites
+// behave this month, not a law, and it was being asserted rather than measured:
+// a quantity moving while the state stayed 'out' wrote no history row at all.
+//
+// These tests make the question answerable from data.
+
+test('A COUNT APPEARING FROM NOTHING IS AN EVENT, EVEN WHILE STILL OUT OF STOCK', async () => {
+  const { db, listingId } = await withMission();
+  await store.recordObservation(db, USER, { listingId, state: 'out', availableQuantity: 0 });
+
+  const outcome = await store.recordObservation(db, USER, {
+    listingId,
+    state: 'out',
+    availableQuantity: 40,
+  });
+
+  assert.equal(outcome.changed, true, 'inventory appeared and nothing recorded it');
+  const history = await store.recentObservations(db, USER, 10);
+  assert.equal(history.length, 2, 'the appearance should be in the history, not only the latest row');
+});
+
+test('a count going to zero is an event too', async () => {
+  // The end of a drop. Worth a row for the same reason the start is.
+  const { db, listingId } = await withMission();
+  await store.recordObservation(db, USER, { listingId, state: 'in', availableQuantity: 12 });
+  const outcome = await store.recordObservation(db, USER, {
+    listingId,
+    state: 'in',
+    availableQuantity: 0,
+  });
+  assert.equal(outcome.changed, true);
+});
+
+test('THE STEPS IN BETWEEN ARE NOT EVENTS', async () => {
+  // A live drop ticks 20, 18, 14, 9. A row for each is the flood this table
+  // exists to prevent — that time series belongs in the activity log, which
+  // records every check by design.
+  const { db, listingId } = await withMission();
+  await store.recordObservation(db, USER, { listingId, state: 'in', availableQuantity: 20 });
+
+  for (const q of [18, 14, 9]) {
+    const outcome = await store.recordObservation(db, USER, {
+      listingId,
+      state: 'in',
+      availableQuantity: q,
+    });
+    assert.equal(outcome.changed, false, `${q} should not be an event on its own`);
+  }
+  assert.equal((await store.recentObservations(db, USER, 10)).length, 1);
+});
+
+test('a retailer that never states a count does not look like a change', async () => {
+  // Pokemon Center gives availability and no number, ever. Null must not read
+  // as "the count went away".
+  const { db, listingId } = await withMission();
+  await store.recordObservation(db, USER, { listingId, state: 'out' });
+  const outcome = await store.recordObservation(db, USER, { listingId, state: 'out' });
+  assert.equal(outcome.changed, false);
+});
+
+// ── Keeping and forgetting ───────────────────────────────────────────────────
+
+async function withDiscovery(): Promise<{ db: TestDb; id: number }> {
+  const db = await TestDb.create();
+  await db.query(
+    `INSERT INTO sources (id, label, retailer, kind, url, via, config, enabled, seeded)
+     VALUES ('target-tcg', 'Target TCG', 'Target', 'watcher', '', 'watcher',
+             '{"filters":["pokemon"]}'::jsonb, true, true)`,
+  );
+  await store.recordDiscoveries(db, USER, 'target-tcg', [
+    {
+      externalId: '1010892076',
+      name: 'Pokemon 30th Celebration Elite Trainer Box',
+      url: 'https://www.target.com/p/-/A-1010892076',
+      price: 69.99,
+      kind: 'elite trainer box',
+      confidence: 'sealed',
+      foundBy: 'pokemon elite trainer box',
+    },
+  ], true);
+  const [found] = await store.discoveriesToReview(db, USER);
+  return { db, id: found!.id };
+}
+
+test('a sweep result waits for a decision, carrying what the sweep thought', async () => {
+  const { db } = await withDiscovery();
+  const [found] = await store.discoveriesToReview(db, USER);
+  assert.equal(found!.status, 'new');
+  assert.equal(found!.kind, 'elite trainer box');
+  assert.equal(found!.confidence, 'sealed');
+  assert.equal(found!.foundBy, 'pokemon elite trainer box');
+  assert.equal(found!.alreadyHave, false);
+});
+
+test('KEEPING MAKES SOMETHING WATCHABLE AND NOTHING ARMED', async () => {
+  // The safety property of the whole feature. A sweep is a machine's guess;
+  // spending is a decision. Keeping creates a product and a listing, and stops.
+  const { db, id } = await withDiscovery();
+  const kept = await store.keepDiscovery(db, USER, id);
+
+  const products = await store.listProducts(db, USER);
+  const listings = await store.listListings(db, USER);
+  const missions = await store.listMissions(db, USER);
+
+  assert.equal(products.length, 1);
+  assert.equal(listings.length, 1);
+  assert.equal(listings[0]!.externalId, '1010892076');
+  assert.equal(kept.productKey, products[0]!.key);
+  assert.equal(missions.length, 0, 'no mission — and therefore nothing that can spend');
+});
+
+test('a kept find leaves the review list', async () => {
+  const { db, id } = await withDiscovery();
+  await store.keepDiscovery(db, USER, id);
+  assert.equal((await store.discoveriesToReview(db, USER)).length, 0);
+});
+
+test('FORGETTING IS REMEMBERED, SO THE NEXT SWEEP DOES NOT RE-OFFER IT', async () => {
+  // The property that makes the feed usable. Without it, every sweep re-offers
+  // the thirty things already rejected and the feed becomes noise.
+  const { db, id } = await withDiscovery();
+  assert.equal(await store.forgetDiscovery(db, USER, id), true);
+  assert.equal((await store.discoveriesToReview(db, USER)).length, 0);
+
+  // The same sweep runs again and finds the same thing.
+  const known = await store.knownIds(db, USER, 'target-tcg');
+  assert.ok(known.has('1010892076'), 'a forgotten row is still a row that has been seen');
+});
+
+test('a decision cannot be made twice', async () => {
+  const { db, id } = await withDiscovery();
+  await store.forgetDiscovery(db, USER, id);
+  assert.equal(await store.forgetDiscovery(db, USER, id), false);
+  await assert.rejects(() => store.keepDiscovery(db, USER, id), /already forgotten/);
+});
+
+test('a find you already watch says so rather than hiding', async () => {
+  const { db, id } = await withDiscovery();
+  await store.keepDiscovery(db, USER, id);
+
+  await store.recordDiscoveries(db, USER, 'target-tcg', [
+    { externalId: '1010892076', name: 'the same box again', url: 'u', price: 69.99 },
+  ], true);
+  // The unique key means it is the same row, already decided, so it does not
+  // come back. That is the desired behaviour and worth pinning.
+  assert.equal((await store.discoveriesToReview(db, USER)).length, 0);
+});
+
+test('MY FINDS ARE NOT YOUR FINDS', async () => {
+  const { db, id } = await withDiscovery();
+  await db.query("INSERT INTO users (id, handle) VALUES (2, 'other') ON CONFLICT DO NOTHING");
+
+  assert.equal((await store.discoveriesToReview(db, 2)).length, 0);
+  assert.equal(await store.forgetDiscovery(db, 2, id), false);
+  await assert.rejects(() => store.keepDiscovery(db, 2, id), /no such discovery/);
+});

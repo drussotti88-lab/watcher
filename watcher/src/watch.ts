@@ -25,6 +25,7 @@ import type { Browser } from './browser.ts';
 import { DEFAULT_SETTINGS, type Hub, type Mission, type ObservationOut, type RunOut, type Settings } from './hub.ts';
 import { Pacer, isDue, nextUp } from './rate.ts';
 import { readListing, type Reading } from './read.ts';
+import type { Activity } from './activity.ts';
 import { unknownRead } from './readers/types.ts';
 
 export interface Verdict {
@@ -227,6 +228,11 @@ export interface WatchDeps {
   log?: (line: string) => void;
   /** Defaults to the real one. Overridden in tests. */
   read?: ReadFn;
+  /**
+   * Where the per-check log goes. Optional so every existing test still
+   * constructs a pass without one, and so a Watcher with no Hub still runs.
+   */
+  activity?: Activity;
 }
 
 export interface PassResult {
@@ -289,6 +295,40 @@ export async function pass(missions: Mission[], pacer: Pacer, deps: WatchDeps): 
     result.checked += 1;
 
     const { observation, run } = judge(mission, reading, deps.hub.settings);
+
+    // One line per check, whether or not anything happened. This is the half
+    // that runs deliberately counter to the rest of the file: a run row is
+    // written only when something changed, because a history of ten thousand
+    // "still out of stock" is unreadable. A *diagnostic* log is the opposite —
+    // a failure at 14:02 means one thing when the checks around it succeeded
+    // and something else entirely when they did not, and you cannot tell which
+    // from the failures alone.
+    deps.activity?.record({
+      kind: 'check',
+      level: reading.challenged
+        ? 'warn'
+        : reading.confidence === 'unknown' && reading.state === 'unknown'
+          ? 'error'
+          : 'info',
+      retailer: mission.retailer,
+      missionId: mission.id,
+      listingId: mission.listingId,
+      state: reading.state,
+      price: reading.price,
+      ms: reading.ms,
+      availableQuantity: reading.availableQuantity,
+      message: run
+        ? `${run.outcome}: ${run.reason}`
+        : `${reading.state}${reading.price === null ? '' : ` at $${reading.price.toFixed(2)}`}`,
+      detail: [
+        reading.note,
+        reading.challenged ? `challenge: ${reading.challengeReason}` : '',
+        `confidence ${reading.confidence}`,
+        reading.seller.kind === 'unknown' ? '' : `seller ${reading.seller.kind}`,
+      ]
+        .filter(Boolean)
+        .join(' · '),
+    });
 
     if (reading.challenged) {
       const until = pacer.challenged(mission.retailer, now());

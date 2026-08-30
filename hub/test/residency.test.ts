@@ -117,10 +117,26 @@ test('EVERY QUERY THAT TOUCHES AN OWNED TABLE FILTERS ON THE OWNER', async () =>
   // easy to understand is a guard people keep.
   const src = await read('src/store.ts');
 
+  // Derived from the schema, not typed out here. A hand-kept list is a guard
+  // that silently stops guarding the day somebody adds a table and forgets to
+  // add it to the list — which is exactly when you need it. Every table with a
+  // user_id column is an owned table, by definition.
+  const schema = await read('schema.sql');
+  // Two places to look, because ownership arrived after most of these tables
+  // existed: a column declared in the CREATE, or one bolted on by an ALTER.
   const owned = [
-    'sources', 'products', 'aliases', 'discoveries', 'events', 'listings',
-    'missions', 'settings', 'mission_runs', 'watch_state', 'observations',
+    ...[...schema.matchAll(/CREATE TABLE IF NOT EXISTS (\w+) \(([\s\S]*?)\n\);/g)]
+      .filter((m) => /\buser_id\b/.test(m[2]!))
+      .map((m) => m[1]!),
+    ...[...schema.matchAll(/ALTER TABLE (\w+) ADD COLUMN IF NOT EXISTS user_id\b/g)].map(
+      (m) => m[1]!,
+    ),
   ];
+
+  assert.ok(owned.length >= 12, `expected to have found the owned tables, got ${owned.join(', ')}`);
+  for (const expected of ['products', 'missions', 'observations', 'activity']) {
+    assert.ok(owned.includes(expected), `${expected} should be an owned table`);
+  }
 
   const statements = [
     ...src.matchAll(/`([^`]*?(?:SELECT|INSERT|UPDATE|DELETE)[^`]*?)`/gis),

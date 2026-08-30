@@ -10,7 +10,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Hub, type ObservationOut, type RunOut } from '../src/hub.ts';
+import { Hub, DEFAULT_SETTINGS, type ObservationOut, type RunOut } from '../src/hub.ts';
 
 interface Call {
   method: string;
@@ -369,13 +369,13 @@ test('settings arrive with the missions and are kept', async () => {
     { body: { missions: [], settings: { taxRate: 0.0975, shippingAllowance: 9.99 } } },
   ]);
   await hub.missions();
-  assert.deepEqual(hub.settings, { taxRate: 0.0975, shippingAllowance: 9.99 });
+  assert.deepEqual(hub.settings, { ...DEFAULT_SETTINGS, taxRate: 0.0975, shippingAllowance: 9.99 });
 });
 
 test('settings default to the safe direction before the Hub has spoken', async () => {
   // No tax estimate, and postage must be free. Both refuse rather than assume.
   const hub = new Hub({ url: 'https://hub.test', token: 'tok' });
-  assert.deepEqual(hub.settings, { taxRate: 0, shippingAllowance: 0 });
+  assert.deepEqual(hub.settings, { ...DEFAULT_SETTINGS, taxRate: 0, shippingAllowance: 0 });
 });
 
 test('A HALF-ANSWER DOES NOT SILENTLY RESET THE TAX RATE', async () => {
@@ -397,5 +397,5 @@ test('a negative rate from the wire is clamped, not trusted', async () => {
     { body: { missions: [], settings: { taxRate: -1, shippingAllowance: -5 } } },
   ]);
   await hub.missions();
-  assert.deepEqual(hub.settings, { taxRate: 0, shippingAllowance: 0 });
+  assert.deepEqual(hub.settings, { ...DEFAULT_SETTINGS, taxRate: 0, shippingAllowance: 0 });
 });

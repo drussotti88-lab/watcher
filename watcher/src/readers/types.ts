@@ -101,7 +101,14 @@ export function unknownRead(note: string, name = ''): ProductRead {
   };
 }
 
-/** Pokémon Center and Target sell their own stock; there is no marketplace. */
+/**
+ * A seller that is the retailer itself.
+ *
+ * Pokémon Center only. This used to say "and Target", and that was wrong in a
+ * way that mattered: target.com carries Target Plus marketplace listings, and
+ * `item.fulfillment.is_marketplace` appears 43 times in a single captured
+ * search response. See the note at the top of target.ts.
+ */
 export function firstParty(name: string): Seller {
   return { kind: 'retailer', name };
 }
