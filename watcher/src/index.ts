@@ -254,13 +254,22 @@ async function runPasses(once: boolean): Promise<void> {
         // a query finishes before the next one starts, and capped, because a
         // broad query can run to fourteen pages and the point is coverage of
         // what is new, not a full crawl.
+        // Stop as soon as a page yields nothing.
+        //
+        // Results come back by relevance, so the sealed product clusters at the
+        // front and everything after it is merchandise. Measured, not assumed:
+        // page two of "pokemon elite trainer box", filtered to Target's own
+        // stock, is twenty-four items of band-aids, paper plates, bed sheets
+        // and throw pillows, and the classifier rejected all of them correctly.
+        // Paging deeper spends the retailer's patience on party napkins.
         const more = scan.total !== null && offset + PAGE_SIZE < scan.total;
-        if (more && page < MAX_PAGES) {
+        if (more && page < MAX_PAGES && found.length > 0) {
           sweepPlan.unshift({ query, offset: offset + PAGE_SIZE });
           line += ` · ${scan.total} total, fetching p${page + 1}`;
         } else if (scan.total !== null) {
           line += ` · ${scan.total} total`;
-          if (more) line += `, stopping at p${MAX_PAGES}`;
+          if (more && found.length === 0) line += ', nothing on this page — next query';
+          else if (more) line += `, stopping at p${MAX_PAGES}`;
         }
         if (found.length > 0) {
           // shift() has already run, so an empty plan means this was the last
