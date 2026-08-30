@@ -48,9 +48,32 @@ the windows: stopping properly lets it finish the check it's on, close Chrome
 and send the last of its log. Killing it does none of that, and Chrome comes
 back next time complaining it didn't shut down correctly.
 
-On a Mac the three files end in `.command`. If double-clicking does nothing, open
+On a Mac the files end in `.command`. If double-clicking does nothing, open
 Terminal, type `chmod +x ` (with the space), drag the folder in, and press
 return.
+
+## Optional — starting it automatically
+
+**4 — Start automatically.** Your app only updates while the Watcher is
+running, so after a restart it's off until somebody notices, and restocks often
+land at three in the morning. This makes it start when you log in.
+
+It tells you exactly what it changes before it changes anything, and it needs
+you to type `yes`. What it actually does:
+
+- Windows: writes one small file into **your own** Startup folder.
+- macOS: adds one login item to your own account.
+
+No administrator rights, nothing installed system-wide, nothing hidden — it's
+one readable file and the window prints its full path. It runs only when *you*
+log in, as you. It still cannot spend money; there's no checkout in this
+program at all.
+
+**5 — Stop starting automatically** undoes it, and so does deleting that file
+yourself. Neither one stops a Watcher that's already running — use **3** for
+that.
+
+If you'd rather decide day by day, skip both and keep using **2**.
 
 ## Using it
 

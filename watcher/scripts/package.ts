@@ -107,9 +107,9 @@ function main(): void {
   // An empty archive is a silent failure mode, not a hypothetical one — see
   // the note on git() above. Refuse rather than hand over a zip with nothing
   // in it and a message saying it worked.
-  if (launchers < 6) {
+  if (launchers < 10) {
     console.error(
-      `\n  Only ${launchers} launchers in the zip, expected 6.` +
+      `\n  Only ${launchers} launchers in the zip, expected 10.` +
         `\n  A tester who has to type npm commands is one who does not finish.\n`,
     );
     process.exit(1);

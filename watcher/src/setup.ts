@@ -263,6 +263,10 @@ export async function runSetup(): Promise<void> {
   It opens a Chrome window and leaves it open. That window is signed out on
   purpose — it does the looking and nothing else, and it never touches an
   account with a card in it.
+
+  Optional: "4 - Start automatically" makes it start when you log in, so a
+  restart does not quietly leave you watching nothing. It explains exactly what
+  it changes before it changes anything, and "5" undoes it.
 `);
   } finally {
     rl.close();
