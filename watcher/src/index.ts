@@ -21,6 +21,7 @@ import {
   toDiscovered,
   renderDiscover,
 } from './scan.ts';
+import { searchUrl } from './readers/target-search.ts';
 import { Activity } from './activity.ts';
 
 /**
@@ -52,15 +53,6 @@ const DEFAULT_QUERIES = [
 ];
 
 /**
- * Whose budget a sweep spends.
- *
- * Must be spelled exactly as missions spell it, or the sweep and the watching
- * would each think they had the retailer to themselves and between them poll
- * at twice the intended rate.
- */
-const SWEEP_RETAILER = 'Target';
-
-/**
  * How to stop the Watcher without killing it.
  *
  * Ctrl+C works when you are sitting at the window. Nothing did when you were
@@ -74,35 +66,21 @@ const SWEEP_RETAILER = 'Target';
  */
 const STOP_FILE = 'logs/.stop';
 
-/**
- * Target's own facet id for "Sold by: Target".
- *
- * Read off the search response rather than guessed: `d_sellers_all` lists
- * `dq4mn = Target` alongside the marketplace sellers. Applying it is the
- * difference between five useful results in twenty-four and twenty-four.
- *
- * Nineteen of every twenty-four results for "pokemon booster box" were Target
- * Plus resellers, and the sweep threw every one of them away *after* paying
- * for the page. Now the page is not paid for.
- */
-const SOLD_BY_TARGET = 'dq4mn';
-
 /** How many pages deep to go per query. */
 const MAX_PAGES = 3;
 
 /** Results per page, as Target's own request declares it. */
 const PAGE_SIZE = 24;
 
-const searchUrl = (query: string, offset = 0): string => {
-  const params = new URLSearchParams({
-    searchTerm: query,
-    facetedValue: SOLD_BY_TARGET,
-  });
-  // Nao is the offset the storefront uses. Absent means the first page, and a
-  // zero would be harmless but noisy in the log.
-  if (offset > 0) params.set('Nao', String(offset));
-  return 'https://www.target.com/s?' + params.toString();
-};
+/**
+ * Whose budget a sweep spends.
+ *
+ * Must be spelled exactly as missions spell it, or the sweep and the watching
+ * would each think they had the retailer to themselves and between them poll
+ * at twice the intended rate.
+ */
+const SWEEP_RETAILER = 'Target';
+
 
 const COMMANDS = [
   'watch',

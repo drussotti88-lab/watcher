@@ -374,3 +374,55 @@ export function rankScan(rows: ScanRow[], now: number = Date.now()): ScanVerdict
       return a.row.tcin.localeCompare(b.row.tcin);
     });
 }
+
+// ── Where to point the sweep ─────────────────────────────────────────────────
+
+/**
+ * Target's own facet id for "Sold by: Target".
+ *
+ * Read off the search response rather than guessed: `d_sellers_all` lists
+ * `dq4mn = Target` alongside the marketplace sellers. Applying it is the
+ * difference between five useful results in twenty-four and twenty-four.
+ */
+export const SOLD_BY_TARGET = 'dq4mn';
+
+/**
+ * The whole filter, taken from the URL Roberto actually uses.
+ *
+ * Three codes joined by Z, which is how Target concatenates facets. What each
+ * one does was measured on "pokemon elite trainer box" rather than guessed:
+ *
+ *   dq4mn   sold by Target. Drop it and 17 marketplace resellers appear.
+ *   tkle6   the Collectible Trading Cards category, and the one that earns its
+ *           place: with it that query returns 9 results, without it 25 — and
+ *           the 16 it removes are Halloween costumes, action figures, a tutu
+ *           and a Pokéball mood light. Every sealed product survives.
+ *   569t0   include out of stock. It changed nothing on that query, because
+ *           nothing there was fully out of stock — and it is kept precisely
+ *           because of that. A product that has sold out is the one we most
+ *           need to keep seeing; a filter that quietly hid it would not be
+ *           noticed until the drop we were waiting for dropped out of the
+ *           sweep.
+ *
+ * The saving is not only noise. 9 results instead of 25 is fewer pages fetched
+ * per query, which is budget the watching gets back.
+ */
+export const CATEGORY_FILTER = `569t0Z${SOLD_BY_TARGET}Ztkle6`;
+
+/**
+ * The search URL for one query, one page deep.
+ *
+ * Lives here rather than in the CLI so it can be tested. It was wrong once —
+ * silently, for days, returning costumes — and the symptom Roberto saw was
+ * "the sweep isn't finding anything", which is a long way from the cause.
+ */
+export function searchUrl(query: string, offset = 0): string {
+  const params = new URLSearchParams({
+    searchTerm: query,
+    facetedValue: CATEGORY_FILTER,
+  });
+  // Nao is the offset the storefront uses. Absent means the first page, and a
+  // zero would be harmless but noisy in the log.
+  if (offset > 0) params.set('Nao', String(offset));
+  return `https://www.target.com/s?${params.toString()}`;
+}

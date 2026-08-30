@@ -17,6 +17,7 @@ import {
   rankScan,
   searchMeta,
   thumbnail,
+  searchUrl,
   type ScanRow,
 } from '../src/readers/target-search.ts';
 import {
@@ -450,4 +451,31 @@ test('the picture travels to the Hub with the rest of the find', () => {
   const [first] = candidates(rankScan(rows, CAPTURE_DAY));
   const item = toDiscovered(first!);
   assert.match(item.imageUrl, /scene7\.com/);
+});
+
+test('the sweep URL asks for Target stock, trading cards, and out-of-stock items', () => {
+  const url = new URL(searchUrl('pokemon booster box'));
+  assert.equal(url.origin + url.pathname, 'https://www.target.com/s');
+  assert.equal(url.searchParams.get('searchTerm'), 'pokemon booster box');
+
+  // Order matters to nobody, presence matters to everybody. Asserted one facet
+  // at a time so a broken one names itself, rather than failing as a single
+  // unreadable string comparison.
+  const facets = (url.searchParams.get('facetedValue') ?? '').split('Z');
+  assert.ok(facets.includes('dq4mn'), 'sold by Target');
+  assert.ok(facets.includes('tkle6'), 'collectible trading cards');
+  assert.ok(facets.includes('569t0'), 'include out of stock');
+});
+
+test('the sweep URL leaves the offset off the first page and names it on the rest', () => {
+  assert.equal(new URL(searchUrl('pokemon tin')).searchParams.get('Nao'), null);
+  assert.equal(new URL(searchUrl('pokemon tin', 0)).searchParams.get('Nao'), null);
+  assert.equal(new URL(searchUrl('pokemon tin', 24)).searchParams.get('Nao'), '24');
+});
+
+test('the sweep URL encodes a query rather than pasting it in', () => {
+  // The accent and the spaces both have to survive the trip.
+  const url = new URL(searchUrl('pokémon elite trainer box'));
+  assert.equal(url.searchParams.get('searchTerm'), 'pokémon elite trainer box');
+  assert.ok(!url.search.includes(' '), 'no raw spaces in the query string');
 });
