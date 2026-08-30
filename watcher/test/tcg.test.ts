@@ -207,3 +207,23 @@ test('a mini tin is its own kind, not a tin', () => {
   assert.equal(classifyTcg('Pokemon TCG: Fire Stacking Tin').kind, 'tin');
   assert.equal(classifyTcg('Pokemon TCG: V Heroes Tin (Espeon V)').kind, 'tin');
 });
+
+test('ULTRA PREMIUM BOX IS THE SAME THING AS ULTRA PREMIUM COLLECTION', () => {
+  // Walmart's name for the 151 UPC. The classifier rejected it outright —
+  // "Pokémon, but nothing says cards" — throwing away a $119 sealed product
+  // for saying box where the others say collection.
+  assert.equal(classifyTcg('POKEMON SV3-5 151 ULTRA PREMIUM BOX').verdict, 'sealed');
+  assert.equal(
+    classifyTcg('POKEMON SV3-5 151 ULTRA PREMIUM BOX').kind,
+    'ultra premium collection',
+  );
+  assert.equal(
+    classifyTcg('Pokemon Charizard ex Super Premium Box').kind,
+    'super premium collection',
+  );
+  // And the spelling everyone else uses still works.
+  assert.equal(
+    classifyTcg('Pokemon TCG Ultra Premium Collection Charizard').kind,
+    'ultra premium collection',
+  );
+});

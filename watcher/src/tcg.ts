@@ -106,7 +106,13 @@ const SEALED: { term: string; kind: string }[] = [
   { term: 'booster pack', kind: 'booster pack' },
   { term: 'ultra premium collection', kind: 'ultra premium collection' },
   { term: 'ultra-premium collection', kind: 'ultra premium collection' },
+  // "ULTRA PREMIUM BOX" is what Walmart calls the 151 UPC, and the classifier
+  // was rejecting it outright — a $119 sealed product thrown away for saying
+  // box where the others say collection.
+  { term: 'ultra premium box', kind: 'ultra premium collection' },
+  { term: 'ultra-premium box', kind: 'ultra premium collection' },
   { term: 'super premium collection', kind: 'super premium collection' },
+  { term: 'super premium box', kind: 'super premium collection' },
   { term: 'premium collection', kind: 'premium collection' },
   { term: 'knock out collection', kind: 'collection box' },
   { term: 'ex box', kind: 'ex box' },
