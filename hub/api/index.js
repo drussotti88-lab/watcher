@@ -1676,7 +1676,21 @@ h3 { font: 700 14px/1.4 var(--display); margin: 0 0 8px; letter-spacing: -0.01em
 .sub { color: var(--muted); font-size: 13px; }
 a { color: var(--accent); text-underline-offset: 2px; }
 
-.tabs { display: flex; gap: 2px; margin: 18px 0 16px; border-bottom: 1px solid var(--line); }
+/*
+ * Tabs wrap rather than run off the edge.
+ *
+ * Five tabs with their counts are wider than a phone, and the fifth was simply
+ * gone \u2014 not scrolled, not clipped with an affordance, just off the right-hand
+ * side with nothing to say it was there. Horizontal scrolling would hide it
+ * just as well for anyone who does not think to swipe a tab strip, so they
+ * wrap: two short rows beat one row with a secret.
+ */
+.tabs { display: flex; flex-wrap: wrap; gap: 2px; margin: 18px 0 16px;
+        border-bottom: 1px solid var(--line); }
+@media (max-width: 520px) {
+  .tab { padding: 9px 11px; font-size: 13.5px; }
+  .tab .count { margin-left: 4px; }
+}
 .tab { padding: 9px 16px; cursor: pointer; border: none; background: none;
        font: 500 14px/1.4 var(--sans); color: var(--muted);
        border-bottom: 2px solid transparent; border-radius: 0; }
@@ -1685,6 +1699,12 @@ a { color: var(--accent); text-underline-offset: 2px; }
 .tab .count { font-family: var(--mono); font-size: 12px; opacity: .6; margin-left: 6px; }
 
 .bar { display: flex; gap: 10px; align-items: center; margin-bottom: 18px; flex-wrap: wrap; }
+/* The spacer that right-aligns Sign out is only worth having when there is
+   room for it. On a narrow screen it pushes Sign out onto a line of its own. */
+@media (max-width: 520px) {
+  .bar .grow { display: none; }
+  .bar button, .bar .btn { padding: 8px 12px; }
+}
 button, .btn {
   font: 600 14px/1.4 var(--sans); padding: 8px 15px; border-radius: var(--r-ctl);
   cursor: pointer; border: 1px solid var(--line-strong); background: var(--panel-2);
@@ -2936,10 +2956,19 @@ function render() {
   toggle.textContent = st.paused ? 'Turn watcher on' : 'Turn watcher off';
   toggle.className = st.paused ? 'primary' : '';
 
+  // The sweep button says which of three things is true, because "queued" for
+  // forty minutes reads as stuck. A sweep is thirteen queries reported one at a
+  // time, so between pressing and finishing there is a long middle where the
+  // honest word is "sweeping", with how far along it is.
   const sweepBtn = document.getElementById('sweep-now');
   const sweep = DATA.sweep || {};
+  const running = String(sweep.lastStatus || '').indexOf('sweeping') === 0;
   sweepBtn.disabled = !!sweep.queued;
-  sweepBtn.textContent = sweep.queued ? 'sweep queued' : 'Run Target sweep';
+  sweepBtn.textContent = !sweep.queued
+    ? 'Run Target sweep'
+    : running
+      ? sweep.lastStatus
+      : 'sweep queued';
   sweepBtn.title = sweep.lastSweptAt
     ? 'last swept ' + ago(sweep.lastSweptAt) + (sweep.lastStatus ? ' \u2014 ' + sweep.lastStatus : '')
     : 'never swept';
@@ -3732,8 +3761,12 @@ function createHandler(db2, env2) {
         activeMissions(db2, userId),
         getSettings(db2, userId)
       ]);
+      const state = await sweepState(db2, userId, SWEEP_SOURCE, settings.sweepEveryHours);
       const sweep = {
         due: await sweepDue(db2, userId, SWEEP_SOURCE, settings.sweepEveryHours),
+        // Asked for by hand, as opposed to falling due. The Watcher jumps the
+        // queue for one of these: somebody is watching the button.
+        manual: state.queued,
         sourceId: SWEEP_SOURCE
       };
       return json({ missions, settings, sweep });
@@ -3855,16 +3888,9 @@ function createHandler(db2, env2) {
         await attachIdentity(db2, userId, sourceId, source.retailer, item);
       }
       const complete = body2.final !== false;
-      await finishSweep(
-        db2,
-        userId,
-        sourceId,
-        isFirstSweep ? `seeded ${fresh.length} via watcher` : `watcher: ${fresh.length} new`,
-        clean.length,
-        true,
-        0,
-        complete
-      );
+      const left = Number(body2.remaining);
+      const status = complete ? isFirstSweep ? `seeded ${fresh.length} via watcher` : `watcher: ${fresh.length} new` : `sweeping \u2014 ${Number.isFinite(left) && left > 0 ? left : "?"} to go`;
+      await finishSweep(db2, userId, sourceId, status, clean.length, true, 0, complete);
       if (toAnnounce.length > 0) {
         await announce(env2.DISCORD_WEBHOOK_URL, source.label, source.retailer, toAnnounce, now);
         await markAnnounced(

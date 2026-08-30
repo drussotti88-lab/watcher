@@ -560,8 +560,12 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       ]);
       // Whether to sweep is answered here rather than on the Watcher, because
       // the Watcher restarts and the Hub remembers. See store.isSweepDue.
+      const state = await store.sweepState(db, userId, SWEEP_SOURCE, settings.sweepEveryHours);
       const sweep = {
         due: await store.sweepDue(db, userId, SWEEP_SOURCE, settings.sweepEveryHours),
+        // Asked for by hand, as opposed to falling due. The Watcher jumps the
+        // queue for one of these: somebody is watching the button.
+        manual: state.queued,
         sourceId: SWEEP_SOURCE,
       };
       return json({ missions, settings, sweep });
@@ -695,7 +699,13 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
      * { "sourceId": "target-tcg", "items": [{ externalId, name, url, price }] }
      */
     if (request.method === 'POST' && path === '/ingest') {
-      let body: { sourceId?: string; items?: Discovered[]; final?: boolean };
+      let body: {
+        sourceId?: string;
+        items?: Discovered[];
+        final?: boolean;
+        /** Queries still to run in this sweep. Drives the progress the page shows. */
+        remaining?: number;
+      };
       try {
         body = (await request.json()) as typeof body;
       } catch {
@@ -728,16 +738,13 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       // last one finishes it — see the note on finishSweep. Absent means true,
       // so a caller that posts once (the CLI, a curl by hand) still completes.
       const complete = body.final !== false;
-      await store.finishSweep(
-        db,
-        userId,
-        sourceId,
-        isFirstSweep ? `seeded ${fresh.length} via watcher` : `watcher: ${fresh.length} new`,
-        clean.length,
-        true,
-        0,
-        complete,
-      );
+      const left = Number(body.remaining);
+      const status = complete
+        ? isFirstSweep
+          ? `seeded ${fresh.length} via watcher`
+          : `watcher: ${fresh.length} new`
+        : `sweeping — ${Number.isFinite(left) && left > 0 ? left : '?'} to go`;
+      await store.finishSweep(db, userId, sourceId, status, clean.length, true, 0, complete);
 
       if (toAnnounce.length > 0) {
         await announce(env.DISCORD_WEBHOOK_URL, source.label, source.retailer, toAnnounce, now);

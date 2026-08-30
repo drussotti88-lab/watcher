@@ -1423,3 +1423,32 @@ test('zero available is still shown, and is not a floor', async () => {
   assert.match(text, /0 available/);
   assert.ok(!text.includes('0+ available'));
 });
+
+test('THE SWEEP BUTTON SAYS SWEEPING WHILE IT IS SWEEPING', async () => {
+  // A sweep is thirteen queries reported one at a time. "queued" for forty
+  // minutes reads as stuck, which is how a working feature gets reported as
+  // broken.
+  const h = await boot(withSweep({ queued: true, lastStatus: 'sweeping — 9 to go' }));
+  assert.equal($(h, '#sweep-now').textContent, 'sweeping — 9 to go');
+  assert.equal($(h, '#sweep-now').disabled, true);
+});
+
+test('before it starts it still says queued', async () => {
+  const h = await boot(withSweep({ queued: true, lastStatus: 'watcher: 2 new' }));
+  assert.equal($(h, '#sweep-now').textContent, 'sweep queued');
+});
+
+test('and when it is over it offers another', async () => {
+  const h = await boot(withSweep({ queued: false, lastStatus: 'watcher: 2 new' }));
+  assert.equal($(h, '#sweep-now').textContent, 'Run Target sweep');
+  assert.equal($(h, '#sweep-now').disabled, false);
+});
+
+test('THE TABS WRAP RATHER THAN RUNNING OFF THE EDGE', async () => {
+  // Five tabs and their counts are wider than a phone, and the fifth was
+  // simply gone — no scrollbar, no affordance, just off the right-hand side.
+  const h = await boot();
+  const style = h.doc.querySelector('style').textContent;
+  const tabs = /\.tabs \{([^}]*)\}/.exec(style)?.[1] ?? '';
+  assert.match(tabs, /flex-wrap:\s*wrap/);
+});

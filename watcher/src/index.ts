@@ -308,6 +308,7 @@ async function runPasses(once: boolean): Promise<void> {
             'target-tcg',
             found.map(toDiscovered),
             sweepPlan.length === 0,
+            sweepPlan.length,
           );
           const fresh = result.names ?? [];
           if (result.seeded) line += ' (baseline)';
@@ -385,6 +386,11 @@ async function runPasses(once: boolean): Promise<void> {
       // cost, and the alternative is another piece of state to keep honest.
       if (sweepPlan.length === 0 && hub.sweepDue) {
         sweepPlan = DEFAULT_QUERIES.map((query) => ({ query, offset: 0 }));
+        // Pressed by hand means somebody is looking at the button. Take the
+        // next turn rather than waiting for one — the alternation exists to
+        // stop a background sweep starving the watching, not to make a person
+        // wait three minutes for the thing they just asked for.
+        if (hub.sweepManual) sweepTurn = false;
         console.log(`  ${timestamp()}  sweep due — ${sweepPlan.length} queries, one page per turn`);
         activity.record({
           kind: 'sweep',

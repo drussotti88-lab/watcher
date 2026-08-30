@@ -150,10 +150,16 @@ export class Hub {
   }
 
   private sweepIsDue = false;
+  private sweepIsManual = false;
 
   /** Does the Hub want the catalogue swept? Stale between polls, deliberately. */
   get sweepDue(): boolean {
     return this.sweepIsDue;
+  }
+
+  /** Was it asked for by hand? Somebody is watching the button, so hurry. */
+  get sweepManual(): boolean {
+    return this.sweepIsManual;
   }
 
   constructor(opts: HubOptions) {
@@ -237,7 +243,7 @@ export class Hub {
     const data = await this.call<{
       missions: Mission[];
       settings?: Settings;
-      sweep?: { due?: boolean };
+      sweep?: { due?: boolean; manual?: boolean };
     } | null>('GET', '/api/missions/active');
     if (!data || !Array.isArray(data.missions)) {
       // An empty or shapeless body is not "you have no missions". Treating it
@@ -269,6 +275,7 @@ export class Hub {
     // restarts — sometimes twice in a minute while something is being fixed —
     // and a restart must not mean another sweep.
     this.sweepIsDue = data.sweep?.due === true;
+    this.sweepIsManual = data.sweep?.manual === true;
 
     this.cached = missions;
     this.cachedAt = now;
@@ -409,6 +416,8 @@ export class Hub {
     items: { externalId: string; name: string; url: string; price: number | null }[],
     /** False while more queries of the same sweep are still to come. */
     final = true,
+    /** How many queries are left, so the page can show progress. */
+    remaining = 0,
   ): Promise<{
     received: number;
     new: number;
@@ -416,7 +425,7 @@ export class Hub {
     seeded: boolean;
     names?: string[];
   }> {
-    return this.call('POST', '/ingest', { sourceId, items, final });
+    return this.call('POST', '/ingest', { sourceId, items, final, remaining });
   }
 
   /**
