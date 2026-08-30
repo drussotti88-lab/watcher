@@ -32,7 +32,7 @@ import { scrub } from './scrub.ts';
 
 export interface ActivityLine {
   at?: string;
-  kind: 'check' | 'pass' | 'hub' | 'browser' | 'startup';
+  kind: 'check' | 'pass' | 'hub' | 'browser' | 'startup' | 'sweep';
   level?: 'info' | 'warn' | 'error';
   retailer?: string;
   missionId?: number | null;

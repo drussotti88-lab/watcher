@@ -328,6 +328,7 @@ function toSource(row) {
     seeded: row.seeded === true,
     cursor: Number(row.cursor ?? 0),
     lastSweptAt: row.last_swept_at ? String(row.last_swept_at) : null,
+    sweepNowAt: row.sweep_now_at ? String(row.sweep_now_at) : null,
     lastStatus: String(row.last_status ?? ""),
     lastCount: Number(row.last_count ?? 0)
   };
@@ -422,7 +423,10 @@ async function finishSweep(db2, userId, sourceId, status, count, seeded, cursor 
   await db2.query(
     `UPDATE sources
         SET last_swept_at = now(), last_status = $1, last_count = $2,
-            seeded = $3, cursor = $4
+            seeded = $3, cursor = $4,
+            -- Cleared by finishing, never by asking. A sweep that was requested
+            -- and never ran stays queued instead of being quietly dropped.
+            sweep_now_at = NULL
       WHERE user_id = $5 AND id = $6`,
     [status.slice(0, 300), count, seeded, cursor, userId, sourceId]
   );
@@ -592,7 +596,8 @@ var DEFAULT_SETTINGS = {
   activeFrom: "",
   activeUntil: "",
   timezone: "",
-  paused: false
+  paused: false,
+  sweepEveryHours: 24
 };
 function isClockTime(v) {
   if (v === "") return true;
@@ -628,6 +633,12 @@ function validateSettings(s) {
       return `"${s.timezone}" is not a timezone this server knows`;
     }
   }
+  if (s.sweepEveryHours !== void 0) {
+    if (!Number.isFinite(s.sweepEveryHours) || s.sweepEveryHours < 0) {
+      return "a sweep interval cannot be negative \u2014 use 0 to stop sweeping";
+    }
+    if (s.sweepEveryHours > 24 * 30) return "that sweep interval is longer than a month";
+  }
   const from = s.activeFrom;
   const until = s.activeUntil;
   if (from !== void 0 && until !== void 0) {
@@ -659,7 +670,8 @@ async function getSettings(db2, userId) {
     activeFrom: isClockTime(text("activeFrom", "")) ? text("activeFrom", "") : "",
     activeUntil: isClockTime(text("activeUntil", "")) ? text("activeUntil", "") : "",
     timezone: text("timezone", ""),
-    paused: text("paused", "") === "true"
+    paused: text("paused", "") === "true",
+    sweepEveryHours: num2("sweepEveryHours", DEFAULT_SETTINGS.sweepEveryHours)
   };
 }
 async function setSettings(db2, userId, patch) {
@@ -672,7 +684,8 @@ async function setSettings(db2, userId, patch) {
     "activeFrom",
     "activeUntil",
     "timezone",
-    "paused"
+    "paused",
+    "sweepEveryHours"
   ]) {
     const value = patch[key];
     if (value === void 0) continue;
@@ -1043,7 +1056,7 @@ async function recentObservations(db2, userId, limit = 50) {
   }));
 }
 var LEVELS = /* @__PURE__ */ new Set(["info", "warn", "error"]);
-var KINDS = /* @__PURE__ */ new Set(["check", "pass", "hub", "browser", "startup"]);
+var KINDS = /* @__PURE__ */ new Set(["check", "pass", "hub", "browser", "startup", "sweep"]);
 async function recordActivity(db2, userId, lines) {
   const usable = lines.filter((l) => l && KINDS.has(l.kind) && typeof l.message === "string");
   if (usable.length === 0) return { written: 0, rejected: lines.length };
@@ -1219,6 +1232,37 @@ async function keepDiscovery(db2, userId, id) {
     [userId, id, product.key]
   );
   return { productKey: product.key, listingId: listing.id };
+}
+function isSweepDue(lastSweptAt, everyHours, now = Date.now()) {
+  if (!Number.isFinite(everyHours) || everyHours <= 0) return false;
+  if (!lastSweptAt) return true;
+  const last = Date.parse(lastSweptAt);
+  if (!Number.isFinite(last)) return true;
+  return now - last >= everyHours * 36e5;
+}
+async function sweepDue(db2, userId, sourceId, everyHours, now = Date.now()) {
+  const source = await getSource(db2, userId, sourceId);
+  if (!source || !source.enabled) return false;
+  if (source.sweepNowAt) return true;
+  return isSweepDue(source.lastSweptAt, everyHours, now);
+}
+async function requestSweep(db2, userId, sourceId) {
+  const rows = await db2.query(
+    `UPDATE sources SET sweep_now_at = now()
+      WHERE user_id = $1 AND id = $2 AND enabled = true
+      RETURNING id`,
+    [userId, sourceId]
+  );
+  return rows.length > 0;
+}
+async function sweepState(db2, userId, sourceId, everyHours) {
+  const source = await getSource(db2, userId, sourceId);
+  if (!source) return { queued: false, lastSweptAt: null, lastStatus: "" };
+  return {
+    queued: Boolean(source.sweepNowAt),
+    lastSweptAt: source.lastSweptAt,
+    lastStatus: source.lastStatus ?? ""
+  };
 }
 
 // src/discover.ts
@@ -1820,6 +1864,8 @@ ${FONTS}<style>${STYLE}</style></head>
 
   <div class="bar">
     <button id="add-open" class="primary">Add product</button>
+    <button id="sweep-now">Run Target sweep</button>
+    <button id="watcher-toggle">Turn watcher off</button>
     <button id="refresh">Refresh</button>
     <label class="check sub"><input type="checkbox" id="auto" checked> auto every 30s</label>
     <span class="grow"></span>
@@ -2812,6 +2858,22 @@ function render() {
   const banner = document.getElementById('paused-banner');
   banner.hidden = !st.paused;
 
+  // The two buttons that change what the Watcher is doing, labelled with the
+  // action rather than the state. "Turn watcher on" when it is off is
+  // unambiguous; a toggle labelled "Paused" leaves you guessing whether that
+  // is the current state or what pressing it will do.
+  const toggle = document.getElementById('watcher-toggle');
+  toggle.textContent = st.paused ? 'Turn watcher on' : 'Turn watcher off';
+  toggle.className = st.paused ? 'primary' : '';
+
+  const sweepBtn = document.getElementById('sweep-now');
+  const sweep = DATA.sweep || {};
+  sweepBtn.disabled = !!sweep.queued;
+  sweepBtn.textContent = sweep.queued ? 'sweep queued' : 'Run Target sweep';
+  sweepBtn.title = sweep.lastSweptAt
+    ? 'last swept ' + ago(sweep.lastSweptAt) + (sweep.lastStatus ? ' \u2014 ' + sweep.lastStatus : '')
+    : 'never swept';
+
   document.getElementById('c-missions').textContent = DATA.missions.length || '';
   document.getElementById('c-products').textContent = DATA.products.length || '';
   document.getElementById('c-activity').textContent = DATA.runs.length || '';
@@ -3032,6 +3094,29 @@ document.getElementById('diag-download').addEventListener('click', async (e) => 
   });
 });
 
+document.getElementById('sweep-now').addEventListener('click', async (e) => {
+  await withButton(e.target, 'Queueing\u2026', null, async () => {
+    await api('POST', '/api/sweep-now');
+    load();
+    return 'queued \u2014 the Watcher sweeps a query per pass from here';
+  });
+});
+
+document.getElementById('watcher-toggle').addEventListener('click', async (e) => {
+  const turningOff = !(DATA.settings && DATA.settings.paused);
+  // Only ever asked on the way to stopping. Starting something is not the
+  // decision worth interrupting; stopping the thing that is meant to catch a
+  // drop is.
+  if (turningOff && !confirm('Stop all watching? Nothing will be checked until you turn it back on.')) {
+    return;
+  }
+  await withButton(e.target, turningOff ? 'Stopping\u2026' : 'Starting\u2026', null, async () => {
+    await api('POST', '/api/settings', { paused: turningOff });
+    load();
+    return turningOff ? 'watcher off' : 'watcher on';
+  });
+});
+
 document.getElementById('hours-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const form = e.target;
@@ -3226,6 +3311,7 @@ self.addEventListener('fetch', (event) => {
 `;
 
 // src/app.ts
+var SWEEP_SOURCE = "target-tcg";
 function json(body, status = 200) {
   return new Response(JSON.stringify(body, null, 2), {
     status,
@@ -3332,7 +3418,18 @@ function createHandler(db2, env2) {
         getSettings(db2, userId),
         discoveriesToReview(db2, userId)
       ]);
-      return json({ missions, runs, changes, products, listings, settings, discoveries, now });
+      const sweep = await sweepState(db2, userId, SWEEP_SOURCE, settings.sweepEveryHours);
+      return json({
+        missions,
+        runs,
+        changes,
+        products,
+        listings,
+        settings,
+        discoveries,
+        sweep,
+        now
+      });
     }
     if (request.method === "GET" && path.startsWith("/api/missions/") && path.endsWith("/runs")) {
       const id = Number(path.split("/")[3]);
@@ -3468,6 +3565,16 @@ function createHandler(db2, env2) {
         return json({ error: err.message }, 400);
       }
     }
+    if (request.method === "POST" && path === "/api/sweep-now") {
+      const asked = await requestSweep(db2, userId, SWEEP_SOURCE);
+      if (!asked) {
+        return json(
+          { error: `no enabled source "${SWEEP_SOURCE}" \u2014 run db:seed on the Hub` },
+          404
+        );
+      }
+      return json({ queued: true, sourceId: SWEEP_SOURCE });
+    }
     if (request.method === "GET" && path === "/api/discoveries") {
       return json({ discoveries: await discoveriesToReview(db2, userId) });
     }
@@ -3551,7 +3658,11 @@ function createHandler(db2, env2) {
         activeMissions(db2, userId),
         getSettings(db2, userId)
       ]);
-      return json({ missions, settings });
+      const sweep = {
+        due: await sweepDue(db2, userId, SWEEP_SOURCE, settings.sweepEveryHours),
+        sourceId: SWEEP_SOURCE
+      };
+      return json({ missions, settings, sweep });
     }
     if (request.method === "POST" && path === "/api/runs") {
       const b = await body();

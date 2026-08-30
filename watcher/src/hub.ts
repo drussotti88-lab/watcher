@@ -54,6 +54,8 @@ export interface Settings {
   timezone: string;
   /** The master switch. True means look at nothing. */
   paused: boolean;
+  /** How often to sweep the catalogue. Hours; 0 means never. */
+  sweepEveryHours: number;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -63,6 +65,7 @@ export const DEFAULT_SETTINGS: Settings = {
   activeUntil: '',
   timezone: '',
   paused: false,
+  sweepEveryHours: 24,
 };
 
 export interface ObservationOut {
@@ -146,6 +149,13 @@ export class Hub {
     return this.settingsValue;
   }
 
+  private sweepIsDue = false;
+
+  /** Does the Hub want the catalogue swept? Stale between polls, deliberately. */
+  get sweepDue(): boolean {
+    return this.sweepIsDue;
+  }
+
   constructor(opts: HubOptions) {
     this.base = opts.url.replace(/\/+$/, '');
     this.token = opts.token;
@@ -224,10 +234,11 @@ export class Hub {
 
   /** What to watch. Throws when the Hub is unreachable — the caller decides. */
   async missions(now: number = Date.now()): Promise<Mission[]> {
-    const data = await this.call<{ missions: Mission[]; settings?: Settings } | null>(
-      'GET',
-      '/api/missions/active',
-    );
+    const data = await this.call<{
+      missions: Mission[];
+      settings?: Settings;
+      sweep?: { due?: boolean };
+    } | null>('GET', '/api/missions/active');
     if (!data || !Array.isArray(data.missions)) {
       // An empty or shapeless body is not "you have no missions". Treating it
       // as that would empty the watchlist and go quiet, which looks exactly
@@ -249,8 +260,16 @@ export class Hub {
         activeUntil: typeof incoming.activeUntil === 'string' ? incoming.activeUntil : '',
         timezone: typeof incoming.timezone === 'string' ? incoming.timezone : '',
         paused: incoming.paused === true,
+        sweepEveryHours: Number.isFinite(incoming.sweepEveryHours)
+          ? Math.max(0, incoming.sweepEveryHours)
+          : DEFAULT_SETTINGS.sweepEveryHours,
       };
     }
+    // Whether a sweep is due is the Hub's answer, not ours. This process
+    // restarts — sometimes twice in a minute while something is being fixed —
+    // and a restart must not mean another sweep.
+    this.sweepIsDue = data.sweep?.due === true;
+
     this.cached = missions;
     this.cachedAt = now;
     return missions;

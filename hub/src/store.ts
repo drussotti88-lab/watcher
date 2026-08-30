@@ -78,6 +78,7 @@ function toSource(row: Record<string, unknown>): SourceRow {
     seeded: row.seeded === true,
     cursor: Number(row.cursor ?? 0),
     lastSweptAt: row.last_swept_at ? String(row.last_swept_at) : null,
+    sweepNowAt: row.sweep_now_at ? String(row.sweep_now_at) : null,
     lastStatus: String(row.last_status ?? ''),
     lastCount: Number(row.last_count ?? 0),
   };
@@ -247,7 +248,10 @@ export async function finishSweep(
   await db.query(
     `UPDATE sources
         SET last_swept_at = now(), last_status = $1, last_count = $2,
-            seeded = $3, cursor = $4
+            seeded = $3, cursor = $4,
+            -- Cleared by finishing, never by asking. A sweep that was requested
+            -- and never ran stays queued instead of being quietly dropped.
+            sweep_now_at = NULL
       WHERE user_id = $5 AND id = $6`,
     [status.slice(0, 300), count, seeded, cursor, userId, sourceId],
   );
@@ -622,6 +626,14 @@ export interface Settings {
    * rebuilding them later.
    */
   paused: boolean;
+  /**
+   * How often to sweep the catalogue for new listings. Hours; 0 means never.
+   *
+   * A day is the right order of magnitude: Target adds a SKU weeks before it
+   * is buyable, so nothing is lost by finding out tomorrow, and sweeping more
+   * often spends requests on a catalogue that has not changed.
+   */
+  sweepEveryHours: number;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -631,6 +643,7 @@ export const DEFAULT_SETTINGS: Settings = {
   activeUntil: '',
   timezone: '',
   paused: false,
+  sweepEveryHours: 24,
 };
 
 /** HH:MM, 24-hour, or blank. Deliberately strict: a half-parsed time is worse. */
@@ -673,6 +686,12 @@ export function validateSettings(s: Partial<Settings>): string | null {
       return `"${s.timezone}" is not a timezone this server knows`;
     }
   }
+  if (s.sweepEveryHours !== undefined) {
+    if (!Number.isFinite(s.sweepEveryHours) || s.sweepEveryHours < 0) {
+      return 'a sweep interval cannot be negative — use 0 to stop sweeping';
+    }
+    if (s.sweepEveryHours > 24 * 30) return 'that sweep interval is longer than a month';
+  }
   // One end of a window without the other is a half-configured rule, and the
   // safe reading of it is not obvious — so it is refused rather than guessed.
   const from = s.activeFrom;
@@ -710,6 +729,7 @@ export async function getSettings(db: Sql, userId: number): Promise<Settings> {
     activeUntil: isClockTime(text('activeUntil', '')) ? text('activeUntil', '') : '',
     timezone: text('timezone', ''),
     paused: text('paused', '') === 'true',
+    sweepEveryHours: num('sweepEveryHours', DEFAULT_SETTINGS.sweepEveryHours),
   };
 }
 
@@ -729,6 +749,7 @@ export async function setSettings(
     'activeUntil',
     'timezone',
     'paused',
+    'sweepEveryHours',
   ] as const) {
     const value = patch[key];
     if (value === undefined) continue;
@@ -1379,7 +1400,7 @@ export async function recentObservations(db: Sql, userId: number, limit = 50): P
 export interface ActivityIn {
   /** When it happened on the Watcher's clock, not when it arrived here. */
   at?: string;
-  kind: 'check' | 'pass' | 'hub' | 'browser' | 'startup';
+  kind: 'check' | 'pass' | 'hub' | 'browser' | 'startup' | 'sweep';
   level?: 'info' | 'warn' | 'error';
   retailer?: string;
   missionId?: number | null;
@@ -1400,7 +1421,7 @@ export interface ActivityRow extends Required<Omit<ActivityIn, 'at'>> {
 }
 
 const LEVELS = new Set(['info', 'warn', 'error']);
-const KINDS = new Set(['check', 'pass', 'hub', 'browser', 'startup']);
+const KINDS = new Set(['check', 'pass', 'hub', 'browser', 'startup', 'sweep']);
 
 /**
  * Write a batch of activity.
@@ -1697,4 +1718,72 @@ export async function keepDiscovery(
     [userId, id, product.key],
   );
   return { productKey: product.key, listingId: listing.id };
+}
+
+
+// ─── When the catalogue is next worth sweeping ───────────────────────────────
+
+/**
+ * Is a sweep due?
+ *
+ * Pure, and deliberately the Hub's decision rather than the Watcher's. The
+ * Watcher is a process that restarts — sometimes several times an hour while
+ * something is being fixed — and a restart must not mean another sweep. The
+ * Hub already records when the last one finished, so it is the only thing that
+ * can answer this without being wrong after a reboot.
+ */
+export function isSweepDue(
+  lastSweptAt: string | null,
+  everyHours: number,
+  now: number = Date.now(),
+): boolean {
+  if (!Number.isFinite(everyHours) || everyHours <= 0) return false;
+  if (!lastSweptAt) return true;
+  const last = Date.parse(lastSweptAt);
+  if (!Number.isFinite(last)) return true;
+  return now - last >= everyHours * 3600_000;
+}
+
+/** The same question, against a real source. Returns false for a source that does not exist. */
+export async function sweepDue(
+  db: Sql,
+  userId: number,
+  sourceId: string,
+  everyHours: number,
+  now: number = Date.now(),
+): Promise<boolean> {
+  const source = await getSource(db, userId, sourceId);
+  if (!source || !source.enabled) return false;
+  // Asked for by hand beats the schedule, and beats sweeping being switched
+  // off entirely — pressing the button is a clearer statement of intent than
+  // any setting.
+  if (source.sweepNowAt) return true;
+  return isSweepDue(source.lastSweptAt, everyHours, now);
+}
+
+/** Ask for a sweep on the next pass. */
+export async function requestSweep(db: Sql, userId: number, sourceId: string): Promise<boolean> {
+  const rows = await db.query<{ id: string }>(
+    `UPDATE sources SET sweep_now_at = now()
+      WHERE user_id = $1 AND id = $2 AND enabled = true
+      RETURNING id`,
+    [userId, sourceId],
+  );
+  return rows.length > 0;
+}
+
+/** What the page needs to render the sweep button and say when it last ran. */
+export async function sweepState(
+  db: Sql,
+  userId: number,
+  sourceId: string,
+  everyHours: number,
+): Promise<{ queued: boolean; lastSweptAt: string | null; lastStatus: string }> {
+  const source = await getSource(db, userId, sourceId);
+  if (!source) return { queued: false, lastSweptAt: null, lastStatus: '' };
+  return {
+    queued: Boolean(source.sweepNowAt),
+    lastSweptAt: source.lastSweptAt,
+    lastStatus: source.lastStatus ?? '',
+  };
 }

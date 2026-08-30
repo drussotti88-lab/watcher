@@ -522,3 +522,11 @@ ALTER TABLE discoveries ADD COLUMN IF NOT EXISTS found_by TEXT NOT NULL DEFAULT 
 
 CREATE INDEX IF NOT EXISTS discoveries_review_idx
   ON discoveries (user_id, status, first_seen_at DESC);
+
+-- Asking for a sweep by hand.
+--
+-- Same shape as missions.check_now_at, and for the same reason: a request is a
+-- fact with a time on it, not a boolean somebody has to remember to clear. The
+-- Watcher clears it by finishing, so a sweep that never ran stays queued rather
+-- than being silently forgotten.
+ALTER TABLE sources ADD COLUMN IF NOT EXISTS sweep_now_at TIMESTAMPTZ;

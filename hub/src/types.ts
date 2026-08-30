@@ -57,6 +57,8 @@ export interface SourceRow {
   seeded: boolean;
   cursor: number;
   lastSweptAt: string | null;
+  /** A sweep was asked for by hand and has not run yet. */
+  sweepNowAt: string | null;
   lastStatus: string;
   lastCount: number;
 }

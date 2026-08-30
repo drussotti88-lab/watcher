@@ -329,6 +329,8 @@ ${FONTS}<style>${STYLE}</style></head>
 
   <div class="bar">
     <button id="add-open" class="primary">Add product</button>
+    <button id="sweep-now">Run Target sweep</button>
+    <button id="watcher-toggle">Turn watcher off</button>
     <button id="refresh">Refresh</button>
     <label class="check sub"><input type="checkbox" id="auto" checked> auto every 30s</label>
     <span class="grow"></span>
@@ -1321,6 +1323,22 @@ function render() {
   const banner = document.getElementById('paused-banner');
   banner.hidden = !st.paused;
 
+  // The two buttons that change what the Watcher is doing, labelled with the
+  // action rather than the state. "Turn watcher on" when it is off is
+  // unambiguous; a toggle labelled "Paused" leaves you guessing whether that
+  // is the current state or what pressing it will do.
+  const toggle = document.getElementById('watcher-toggle');
+  toggle.textContent = st.paused ? 'Turn watcher on' : 'Turn watcher off';
+  toggle.className = st.paused ? 'primary' : '';
+
+  const sweepBtn = document.getElementById('sweep-now');
+  const sweep = DATA.sweep || {};
+  sweepBtn.disabled = !!sweep.queued;
+  sweepBtn.textContent = sweep.queued ? 'sweep queued' : 'Run Target sweep';
+  sweepBtn.title = sweep.lastSweptAt
+    ? 'last swept ' + ago(sweep.lastSweptAt) + (sweep.lastStatus ? ' — ' + sweep.lastStatus : '')
+    : 'never swept';
+
   document.getElementById('c-missions').textContent = DATA.missions.length || '';
   document.getElementById('c-products').textContent = DATA.products.length || '';
   document.getElementById('c-activity').textContent = DATA.runs.length || '';
@@ -1538,6 +1556,29 @@ document.getElementById('diag-download').addEventListener('click', async (e) => 
     }
     const errors = (data.counts.byLevel && data.counts.byLevel.error) || 0;
     return 'saved ' + data.counts.lines + ' lines' + (errors ? ', ' + errors + ' of them failures' : '');
+  });
+});
+
+document.getElementById('sweep-now').addEventListener('click', async (e) => {
+  await withButton(e.target, 'Queueing…', null, async () => {
+    await api('POST', '/api/sweep-now');
+    load();
+    return 'queued — the Watcher sweeps a query per pass from here';
+  });
+});
+
+document.getElementById('watcher-toggle').addEventListener('click', async (e) => {
+  const turningOff = !(DATA.settings && DATA.settings.paused);
+  // Only ever asked on the way to stopping. Starting something is not the
+  // decision worth interrupting; stopping the thing that is meant to catch a
+  // drop is.
+  if (turningOff && !confirm('Stop all watching? Nothing will be checked until you turn it back on.')) {
+    return;
+  }
+  await withButton(e.target, turningOff ? 'Stopping…' : 'Starting…', null, async () => {
+    await api('POST', '/api/settings', { paused: turningOff });
+    load();
+    return turningOff ? 'watcher off' : 'watcher on';
   });
 });
 

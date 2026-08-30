@@ -100,7 +100,11 @@ async function boot(
         text: async () => JSON.stringify(value),
       };
     };
-    win.confirm = () => true;
+    win.__confirms = [];
+    win.confirm = (msg: string) => {
+      win.__confirms.push(msg);
+      return true;
+    };
 
     // jsdom implements neither, and the download button needs both. Recording
     // what was handed to createObjectURL is also how the test reads the file
@@ -1274,4 +1278,93 @@ test('the page says what still wakes it', async () => {
   const text = $(h, '#tab-settings').textContent;
   assert.match(text, /Check now/);
   assert.match(text, /release date is today/);
+});
+
+
+// ── The two buttons in the bar ───────────────────────────────────────────────
+
+const withSweep = (over: Record<string, unknown> = {}, settings: Record<string, unknown> = {}): unknown => {
+  const base = JSON.parse(JSON.stringify(DASHBOARD));
+  base.settings = { taxRate: 0, shippingAllowance: 0, activeFrom: '', activeUntil: '', timezone: '', paused: false, sweepEveryHours: 24, ...settings };
+  base.sweep = { queued: false, lastSweptAt: null, lastStatus: '', ...over };
+  return base;
+};
+
+test('THE TOGGLE IS LABELLED WITH THE ACTION, NOT THE STATE', async () => {
+  // A button that says "Paused" leaves you guessing whether that is what it
+  // is or what it will do. These say what pressing them does.
+  const running = await boot(withSweep({}, { paused: false }));
+  assert.equal($(running, '#watcher-toggle').textContent, 'Turn watcher off');
+
+  const stopped = await boot(withSweep({}, { paused: true }));
+  assert.equal($(stopped, '#watcher-toggle').textContent, 'Turn watcher on');
+});
+
+test('turning the watcher off asks first, and then says so', async () => {
+  const h = await boot(withSweep({}, { paused: false }));
+  h.reply('POST /api/settings', { settings: {} });
+
+  $(h, '#watcher-toggle').click();
+  await h.settle();
+
+  const asked = (h.dom.window as any).__confirms;
+  assert.equal(asked.length, 1, 'stopping everything should ask first');
+  assert.match(asked[0], /Stop all watching/);
+
+  const call = h.calls.find((c) => c.path === '/api/settings');
+  assert.ok(call, 'the toggle did nothing');
+  assert.equal(call.body.paused, true);
+});
+
+test('TURNING IT BACK ON DOES NOT ASK — STARTING IS NOT THE RISKY DIRECTION', async () => {
+  // Interrupting someone to confirm that they want the thing switched on is
+  // noise. Interrupting them before switching off the thing meant to catch a
+  // drop is not.
+  const h = await boot(withSweep({}, { paused: true }));
+  h.reply('POST /api/settings', { settings: {} });
+
+  $(h, '#watcher-toggle').click();
+  await h.settle();
+
+  assert.deepEqual((h.dom.window as any).__confirms, [], 'it should not have asked');
+  assert.equal(h.calls.find((c) => c.path === '/api/settings').body.paused, false);
+});
+
+test('THE SWEEP BUTTON QUEUES A SWEEP', async () => {
+  const h = await boot(withSweep());
+  h.reply('POST /api/sweep-now', { queued: true, sourceId: 'target-tcg' });
+
+  $(h, '#sweep-now').click();
+  await h.settle();
+
+  assert.ok(h.calls.some((c) => c.path === '/api/sweep-now' && c.method === 'POST'));
+});
+
+test('an already-queued sweep cannot be queued twice', async () => {
+  // Pressing it again would do no harm, but a button that looks pressable
+  // when nothing more will happen invites pressing it repeatedly and
+  // wondering why nothing changes.
+  const h = await boot(withSweep({ queued: true }));
+  assert.equal($(h, '#sweep-now').disabled, true);
+  assert.equal($(h, '#sweep-now').textContent, 'sweep queued');
+});
+
+test('the button says when the catalogue was last swept', async () => {
+  const h = await boot(
+    withSweep({ lastSweptAt: new Date(Date.now() - 3600_000).toISOString(), lastStatus: 'watcher: 2 new' }),
+  );
+  const title = $(h, '#sweep-now').title;
+  assert.match(title, /last swept/);
+  assert.match(title, /2 new/);
+});
+
+test('a dashboard with no sweep block still renders the bar', async () => {
+  // The Hub and the Watcher deploy separately; an older payload must not take
+  // the page down.
+  const base = JSON.parse(JSON.stringify(DASHBOARD));
+  base.settings = { taxRate: 0, shippingAllowance: 0, paused: false };
+  delete base.sweep;
+  const h = await boot(base);
+  assert.equal($(h, '#sweep-now').disabled, false);
+  assert.equal($(h, '#sweep-now').textContent, 'Run Target sweep');
 });

@@ -50,6 +50,15 @@ const DEFAULT_QUERIES = [
   'pokemon trading card game',
 ];
 
+/**
+ * Whose budget a sweep spends.
+ *
+ * Must be spelled exactly as missions spell it, or the sweep and the watching
+ * would each think they had the retailer to themselves and between them poll
+ * at twice the intended rate.
+ */
+const SWEEP_RETAILER = 'Target';
+
 const searchUrl = (query: string): string =>
   'https://www.target.com/s?searchTerm=' + encodeURIComponent(query);
 
@@ -157,6 +166,9 @@ async function runPasses(once: boolean): Promise<void> {
   console.log(`  Browser profile: ${browser.profileDir} (signed out, deliberately)`);
   if (!once) console.log(`  Ctrl+C to stop.\n`);
 
+  /** Queries still to run in the current sweep. Empty means none in progress. */
+  let sweepPlan: string[] = [];
+
   let stopped = false;
   process.on('SIGINT', () => {
     stopped = true;
@@ -236,6 +248,75 @@ async function runPasses(once: boolean): Promise<void> {
           message: parts.join(' · '),
           detail: result.blocked.join('; '),
         });
+      }
+
+      // ── Sweeping the catalogue, one query at a time ───────────────────
+      //
+      // Not a five-minute block once a day. One query per pass, sharing this
+      // browser and this pacer, so a sweep can never delay a check by more
+      // than a single page load and needs no politeness rules of its own.
+      //
+      // Watching wins ties: if the pass above just spent Target's budget, the
+      // sweep waits for the next pass. Filling the gaps is the whole idea.
+      //
+      // The plan lives in memory. A restart part-way through therefore defers
+      // the remaining queries to the next window rather than resuming — a mild
+      // cost, and the alternative is another piece of state to keep honest.
+      if (sweepPlan.length === 0 && hub.sweepDue) {
+        sweepPlan = [...DEFAULT_QUERIES];
+        console.log(`  ${timestamp()}  sweep due — ${sweepPlan.length} queries, one per pass`);
+        activity.record({
+          kind: 'sweep',
+          message: `sweep starting: ${sweepPlan.length} queries, one per pass`,
+        });
+      }
+
+      if (sweepPlan.length > 0 && pacer.waitMs(SWEEP_RETAILER, Date.now()) <= 0) {
+        const query = sweepPlan.shift() as string;
+        pacer.record(SWEEP_RETAILER, Date.now());
+        const scan = await scanTargetSearch(browser, searchUrl(query));
+
+        if (scan.challenged) {
+          // Standing down is about the retailer, not about this query. Drop
+          // the rest of the plan rather than walking into the same wall
+          // thirteen times.
+          const until = pacer.challenged(SWEEP_RETAILER, Date.now());
+          const mins = Math.round((until - Date.now()) / 60000);
+          sweepPlan = [];
+          console.log(`  ${timestamp()}  sweep challenged — standing down ${mins}m`);
+          activity.record({
+            kind: 'sweep',
+            level: 'warn',
+            retailer: SWEEP_RETAILER,
+            message: `challenged during sweep — standing down ${mins}m, plan abandoned`,
+          });
+        } else if (scan.note) {
+          console.log(`  ${timestamp()}  sweep "${query}": ${scan.note}`);
+          activity.record({
+            kind: 'sweep',
+            level: 'error',
+            retailer: SWEEP_RETAILER,
+            ms: scan.ms,
+            message: `sweep "${query}" failed: ${scan.note}`,
+          });
+        } else {
+          const found = candidates(scan.verdicts, query);
+          let line = `sweep "${query}": ${scan.verdicts.length} results, ${found.length} kept`;
+          if (found.length > 0) {
+            const result = await hub.ingest('target-tcg', found.map(toDiscovered));
+            const fresh = result.names ?? [];
+            if (result.seeded) line += ' (baseline)';
+            else if (fresh.length) line += ` — NEW: ${fresh.join(', ')}`;
+          }
+          if (sweepPlan.length) line += ` · ${sweepPlan.length} queries left`;
+          console.log(`  ${timestamp()}  ${line}`);
+          activity.record({
+            kind: 'sweep',
+            retailer: SWEEP_RETAILER,
+            ms: scan.ms,
+            message: line,
+          });
+        }
       }
 
       // Force on the last pass so a `once` run, or a Ctrl+C, does not leave

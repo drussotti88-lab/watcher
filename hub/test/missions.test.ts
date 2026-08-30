@@ -720,3 +720,100 @@ test('MY FINDS ARE NOT YOUR FINDS', async () => {
   assert.equal(await store.forgetDiscovery(db, 2, id), false);
   await assert.rejects(() => store.keepDiscovery(db, 2, id), /no such discovery/);
 });
+
+// ── When a sweep is due ──────────────────────────────────────────────────────
+//
+// Deliberately the Hub's decision. The Watcher restarts — sometimes twice a
+// minute while something is being fixed — and a restart must not mean another
+// sweep of the whole catalogue.
+
+test('a source that has never been swept is due immediately', () => {
+  assert.equal(store.isSweepDue(null, 24, Date.parse('2026-08-30T00:00:00Z')), true);
+});
+
+test('a sweep from an hour ago is not due on a daily schedule', () => {
+  const hourAgo = '2026-08-29T23:00:00Z';
+  assert.equal(store.isSweepDue(hourAgo, 24, Date.parse('2026-08-30T00:00:00Z')), false);
+});
+
+test('a sweep from yesterday is due', () => {
+  const yesterday = '2026-08-28T23:00:00Z';
+  assert.equal(store.isSweepDue(yesterday, 24, Date.parse('2026-08-30T00:00:00Z')), true);
+});
+
+test('ZERO HOURS MEANS NEVER, NOT ALWAYS', () => {
+  // The failure that would sweep the catalogue every ninety seconds forever.
+  assert.equal(store.isSweepDue(null, 0, Date.now()), false);
+  assert.equal(store.isSweepDue('2020-01-01T00:00:00Z', 0, Date.now()), false);
+});
+
+test('an unreadable timestamp is treated as never swept, not as just swept', () => {
+  // Failing towards doing the work. The opposite would be a sweep that
+  // silently never runs again.
+  assert.equal(store.isSweepDue('not a date', 24, Date.now()), true);
+});
+
+// ── Asking by hand ───────────────────────────────────────────────────────────
+
+async function withSource(): Promise<TestDb> {
+  const db = await TestDb.create();
+  await db.query(
+    `INSERT INTO sources (id, label, retailer, kind, url, via, config, enabled, seeded)
+     VALUES ('target-tcg', 'Target TCG', 'Target', 'watcher', '', 'watcher',
+             '{"filters":["pokemon"]}'::jsonb, true, true)`,
+  );
+  return db;
+}
+
+test('THE BUTTON BEATS THE SCHEDULE', async () => {
+  // Swept a minute ago, so nothing is due — but pressing the button is a
+  // clearer statement of intent than any interval.
+  const db = await withSource();
+  await store.finishSweep(db, USER, 'target-tcg', 'ok', 5, true);
+  assert.equal(await store.sweepDue(db, USER, 'target-tcg', 24), false);
+
+  await store.requestSweep(db, USER, 'target-tcg');
+  assert.equal(await store.sweepDue(db, USER, 'target-tcg', 24), true);
+});
+
+test('the button works even when sweeping is switched off entirely', async () => {
+  const db = await withSource();
+  await store.finishSweep(db, USER, 'target-tcg', 'ok', 5, true);
+  await store.requestSweep(db, USER, 'target-tcg');
+  assert.equal(await store.sweepDue(db, USER, 'target-tcg', 0), true);
+});
+
+test('A REQUEST IS CLEARED BY FINISHING, NEVER BY ASKING', async () => {
+  // A sweep that was requested and never ran must stay queued. Clearing on
+  // read would drop it silently the first time the Watcher was asleep.
+  const db = await withSource();
+  await store.requestSweep(db, USER, 'target-tcg');
+
+  assert.equal(await store.sweepDue(db, USER, 'target-tcg', 24), true);
+  assert.equal(await store.sweepDue(db, USER, 'target-tcg', 24), true, 'still queued after a read');
+
+  await store.finishSweep(db, USER, 'target-tcg', 'watcher: 3 new', 20, true);
+  assert.equal((await store.sweepState(db, USER, 'target-tcg', 24)).queued, false);
+});
+
+test('a disabled source is never swept, by hand or by schedule', async () => {
+  const db = await withSource();
+  await db.query("UPDATE sources SET enabled = false WHERE user_id = $1 AND id = 'target-tcg'", [USER]);
+  assert.equal(await store.requestSweep(db, USER, 'target-tcg'), false);
+  assert.equal(await store.sweepDue(db, USER, 'target-tcg', 24), false);
+});
+
+test('a source that does not exist is not an error, just not due', async () => {
+  const db = await TestDb.create();
+  assert.equal(await store.sweepDue(db, USER, 'nope', 24), false);
+  assert.deepEqual(await store.sweepState(db, USER, 'nope', 24), {
+    queued: false, lastSweptAt: null, lastStatus: '',
+  });
+});
+
+test('MY SWEEP REQUEST IS NOT YOURS', async () => {
+  const db = await withSource();
+  await db.query("INSERT INTO users (id, handle) VALUES (2, 'other') ON CONFLICT DO NOTHING");
+  assert.equal(await store.requestSweep(db, 2, 'target-tcg'), false);
+  assert.equal(await store.sweepDue(db, 2, 'target-tcg', 24), false);
+});

@@ -33,6 +33,15 @@ import { loginPage, dashboardPage } from './page.ts';
 import { identifyListing } from './parsers/identify.ts';
 import { MANIFEST, SERVICE_WORKER, iconResponse } from './pwa.ts';
 
+/**
+ * The source a Watcher-side sweep reports into.
+ *
+ * One name, in one place. The Watcher posts here and the Hub reads its
+ * last_swept_at to decide when the next one is due, so the two must agree —
+ * and a typo would mean sweeping forever because nothing ever recorded one.
+ */
+const SWEEP_SOURCE = 'target-tcg';
+
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body, null, 2), {
     status,
@@ -186,7 +195,10 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
           store.getSettings(db, userId),
           store.discoveriesToReview(db, userId),
         ]);
-      return json({ missions, runs, changes, products, listings, settings, discoveries, now });
+      const sweep = await store.sweepState(db, userId, SWEEP_SOURCE, settings.sweepEveryHours);
+      return json({
+        missions, runs, changes, products, listings, settings, discoveries, sweep, now,
+      });
     }
 
     /** A single mission's whole run history. */
@@ -404,6 +416,18 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
     // and nothing more: no mission, nothing armed. A machine's guess and a
     // decision about money are kept a deliberate click apart.
 
+    /** Ask for a catalogue sweep on the Watcher's next pass. */
+    if (request.method === 'POST' && path === '/api/sweep-now') {
+      const asked = await store.requestSweep(db, userId, SWEEP_SOURCE);
+      if (!asked) {
+        return json(
+          { error: `no enabled source "${SWEEP_SOURCE}" — run db:seed on the Hub` },
+          404,
+        );
+      }
+      return json({ queued: true, sourceId: SWEEP_SOURCE });
+    }
+
     if (request.method === 'GET' && path === '/api/discoveries') {
       return json({ discoveries: await store.discoveriesToReview(db, userId) });
     }
@@ -534,7 +558,13 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
         store.activeMissions(db, userId),
         store.getSettings(db, userId),
       ]);
-      return json({ missions, settings });
+      // Whether to sweep is answered here rather than on the Watcher, because
+      // the Watcher restarts and the Hub remembers. See store.isSweepDue.
+      const sweep = {
+        due: await store.sweepDue(db, userId, SWEEP_SOURCE, settings.sweepEveryHours),
+        sourceId: SWEEP_SOURCE,
+      };
+      return json({ missions, settings, sweep });
     }
 
     /** The Watcher reporting a run it has already finished. */
