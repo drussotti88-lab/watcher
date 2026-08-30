@@ -425,25 +425,48 @@ async function runPasses(once: boolean): Promise<void> {
     activity.record({ kind: 'sweep', retailer: WALMART_RETAILER, ms: scan.ms, message: line });
   };
 
+  /**
+   * How many sweep steps one turn may take.
+   *
+   * One per retailer, and that is not a coincidence — it is the number the
+   * pacer allows. Each step records against its own retailer, so the second
+   * step for a shop always finds that shop cooling down and the loop stops on
+   * its own; the cap is a belt on top of that.
+   *
+   * It exists because the loop's cadence is set by the *pass*, which waits on
+   * Target. With one step per turn, a Pokémon Center page could only be read as
+   * often as Target would allow a Target request — three shops read at the
+   * speed of the slowest, which is exactly what carrying a retailer per step
+   * was supposed to fix.
+   */
+  const SWEEP_STEPS_PER_TURN = 3;
+
   const sweepOnce = async (): Promise<void> => {
-    if (sweepPlan.length === 0) return;
+    for (let taken = 0; taken < SWEEP_STEPS_PER_TURN; taken += 1) {
+      if (!(await sweepStep())) return;
+    }
+  };
+
+  /** Take one step if any retailer will have us. Returns whether it did. */
+  const sweepStep = async (): Promise<boolean> => {
+    if (sweepPlan.length === 0) return false;
 
     // The first step whose retailer will have us, not simply the first step.
     // Looking only at the head meant a Target cooldown stalled the whole plan,
     // including the Pokémon Center pages that Target has no say over.
     const ready = sweepPlan.findIndex((s) => pacer.waitMs(s.retailer, Date.now()) <= 0);
-    if (ready === -1) return;
+    if (ready === -1) return false;
     const step = sweepPlan.splice(ready, 1)[0]!;
     pacer.record(step.retailer, Date.now());
 
     if (step.kind === 'pc') {
       await sweepPokemonCenter(step);
-      return;
+      return true;
     }
 
     if (step.kind === 'walmart') {
       await sweepWalmart(step);
-      return;
+      return true;
     }
 
     {
@@ -534,6 +557,7 @@ async function runPasses(once: boolean): Promise<void> {
         });
       }
     }
+    return true;
   };
 
   try {
