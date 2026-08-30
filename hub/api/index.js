@@ -3176,9 +3176,27 @@ function findReason(d) {
 function renderFinds() {
   const list = document.getElementById('finds-list');
   list.textContent = '';
+  // Ordered by what you can act on, not alphabetically.
+  //
+  // Walmart's own catalogue runs back years and most of it will never restock,
+  // and unlike Pok\xE9mon Center it publishes no release date to judge age by \u2014 so
+  // there is nothing to filter on without throwing away things that matter.
+  // Sorting costs nothing and throws away nothing: the buyable and the
+  // scheduled come first, the dormant back-catalogue sinks, and a long list
+  // stops being a wall.
+  const rank = (d) => {
+    if (d.isPreOrder) return 0;              // takes money now \u2014 decide deliberately
+    if (d.state === 'in') return 1;          // buyable this minute
+    if (d.releaseDate && daysUntil(d.releaseDate) > 0) return 2;  // dated, ahead
+    if (d.signal === 'recent') return 3;     // sold out recently, may come back
+    if (d.confidence === 'unsure') return 5; // needs a person, but not urgently
+    return 4;
+  };
   const finds = (DATA.discoveries || []).slice().sort((a, b) => {
-    const rank = (d) => (d.confidence === 'sealed' ? 0 : 1);
     if (rank(a) !== rank(b)) return rank(a) - rank(b);
+    // Within a band, newest first: a find that appeared today is the news.
+    const seen = String(b.firstSeenAt || '').localeCompare(String(a.firstSeenAt || ''));
+    if (seen !== 0) return seen;
     return String(a.name).localeCompare(String(b.name));
   });
 

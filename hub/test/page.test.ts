@@ -1639,3 +1639,35 @@ test('an image the retailer refuses looks different from one we never had', asyn
   assert.ok(ph, 'a refused image gets its own marker');
   assert.match(ph.getAttribute('title') ?? '', /would not serve/);
 });
+
+test('THE FINDS LIST LEADS WITH WHAT YOU CAN ACT ON', async () => {
+  // Walmart's catalogue runs back years with no release date to judge age by,
+  // so a long list is unavoidable. Ordering it is what stops it being a wall.
+  const at = (n: number) => new Date(Date.now() - n * 86400000).toISOString();
+  const soon = new Date(Date.now() + 20 * 86400000).toISOString().slice(0, 10);
+  const h = await boot(withFinds([
+    { ...RICH_FIND, id: 1, name: 'Dormant back-catalogue', state: 'out', signal: '', releaseDate: '', firstSeenAt: at(1) },
+    { ...RICH_FIND, id: 2, name: 'Sold out recently', state: 'out', signal: 'recent', releaseDate: '', firstSeenAt: at(1) },
+    { ...RICH_FIND, id: 3, name: 'Dated and ahead', state: 'out', signal: '', releaseDate: soon, firstSeenAt: at(1) },
+    { ...RICH_FIND, id: 4, name: 'Buyable now', state: 'in', signal: 'buyable', releaseDate: '', firstSeenAt: at(1) },
+    { ...RICH_FIND, id: 5, name: 'A pre-order', state: 'in', isPreOrder: true, releaseDate: '', firstSeenAt: at(1) },
+  ]));
+  const names = [...h.doc.querySelectorAll('#finds-list .name')].map((n) => n.textContent);
+  assert.deepEqual(names, [
+    'A pre-order',
+    'Buyable now',
+    'Dated and ahead',
+    'Sold out recently',
+    'Dormant back-catalogue',
+  ]);
+});
+
+test('within a band, the newest find comes first', async () => {
+  const at = (n: number) => new Date(Date.now() - n * 86400000).toISOString();
+  const h = await boot(withFinds([
+    { ...RICH_FIND, id: 1, name: 'Found last week', state: 'in', signal: 'buyable', releaseDate: '', firstSeenAt: at(7) },
+    { ...RICH_FIND, id: 2, name: 'Found today', state: 'in', signal: 'buyable', releaseDate: '', firstSeenAt: at(0) },
+  ]));
+  const names = [...h.doc.querySelectorAll('#finds-list .name')].map((n) => n.textContent);
+  assert.deepEqual(names, ['Found today', 'Found last week']);
+});
