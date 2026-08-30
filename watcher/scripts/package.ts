@@ -102,10 +102,19 @@ function main(): void {
 
   const size = statSync(resolve(root, OUT)).size;
   const hasSetup = listing.includes('watcher/SETUP.md');
+  const launchers = listing.filter((n) => /\.(bat|command)$/i.test(n)).length;
 
   // An empty archive is a silent failure mode, not a hypothetical one — see
   // the note on git() above. Refuse rather than hand over a zip with nothing
   // in it and a message saying it worked.
+  if (launchers < 6) {
+    console.error(
+      `\n  Only ${launchers} launchers in the zip, expected 6.` +
+        `\n  A tester who has to type npm commands is one who does not finish.\n`,
+    );
+    process.exit(1);
+  }
+
   if (listing.length < 10 || !hasSetup) {
     console.error(
       `\n  Only ${listing.length} entries and ${hasSetup ? 'SETUP.md present' : 'no SETUP.md'}.` +
@@ -118,7 +127,7 @@ function main(): void {
   ${OUT}  ·  ${listing.length} files  ·  ${(size / 1024).toFixed(0)}kb
 
   Built from HEAD, so it holds only tracked files: no profile, no log, no
-  config, no token.
+  config, no token. ${launchers} double-click launchers included.
 
   Send it with the app's address and a token from:  npm run user token <name>
   Their first step is:  npm install && npm run setup

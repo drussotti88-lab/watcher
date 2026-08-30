@@ -14,6 +14,99 @@
 import { createInterface } from 'node:readline/promises';
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { homedir, platform } from 'node:os';
+
+// ── Before anything else, is this machine able to run it? ────────────────────
+
+export interface Check {
+  name: string;
+  ok: boolean;
+  /** What to do about it, in words a person can act on. Empty when fine. */
+  fix: string;
+  detail: string;
+}
+
+/**
+ * Node has to be new enough to run TypeScript without a build step.
+ *
+ * The whole repo is .ts files run directly. On an older Node the failure is
+ * `Unknown file extension ".ts"`, which tells a person nothing about what to
+ * install — so it is worth catching here and saying the version out loud.
+ */
+export function checkNode(version = process.versions.node): Check {
+  const parts = String(version).split('.').map((n) => Number(n));
+  const major = parts[0] ?? 0;
+  const minor = parts[1] ?? 0;
+  const ok = major > 22 || (major === 22 && minor >= 6);
+  return {
+    name: 'Node',
+    ok,
+    detail: `v${version}`,
+    fix: ok
+      ? ''
+      : 'This needs Node 22.6 or newer — it runs TypeScript directly, with no ' +
+        'build step.\n     Get the LTS installer from nodejs.org, then close this ' +
+        'window and open a new one.',
+  };
+}
+
+/** Where Chrome lives on each platform, so a missing one is named early. */
+export function chromePaths(os = platform(), home = homedir()): string[] {
+  if (os === 'win32') {
+    return [
+      'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+      'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+      `${home}\\AppData\\Local\\Google\\Chrome\\Application\\chrome.exe`,
+    ];
+  }
+  if (os === 'darwin') {
+    return [
+      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+      `${home}/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`,
+    ];
+  }
+  return ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/opt/google/chrome/chrome'];
+}
+
+/**
+ * Is Chrome installed?
+ *
+ * Real Chrome, not a bundled Chromium: the retailers answer a browser somebody
+ * actually uses and challenge one that looks automated. Checked by looking for
+ * the file rather than by launching it, because launching takes six seconds and
+ * this runs before anything else.
+ */
+export function checkChrome(exists: (p: string) => boolean = existsSync, os = platform()): Check {
+  const found = chromePaths(os).find((p) => exists(p));
+  return {
+    name: 'Google Chrome',
+    ok: Boolean(found),
+    detail: found ? 'installed' : 'not found in the usual places',
+    fix: found
+      ? ''
+      : 'Install Google Chrome from google.com/chrome. The Watcher drives a real\n' +
+        '     Chrome on your own connection — that is the part that makes the shops\n' +
+        '     answer at all.',
+  };
+}
+
+/** Everything to check before asking for an address and a token. */
+export function preflight(): Check[] {
+  return [checkNode(), checkChrome()];
+}
+
+/** The preflight as something to read. Empty when everything passed. */
+export function renderPreflight(checks: Check[]): string {
+  const lines: string[] = [''];
+  for (const c of checks) {
+    lines.push(`  ${c.ok ? '  ok' : 'NEED'}  ${c.name.padEnd(16)} ${c.detail}`);
+  }
+  const bad = checks.filter((c) => !c.ok);
+  if (bad.length === 0) return `${lines.join('\n')}\n`;
+  lines.push('');
+  for (const c of bad) lines.push(`  ${c.name}\n     ${c.fix}\n`);
+  return lines.join('\n');
+}
 
 export interface SetupAnswers {
   url: string;
@@ -113,12 +206,21 @@ const CONFIG_PATH = resolve(process.cwd(), 'watcher.config.json');
 
 /** The interactive half. Kept thin: everything worth testing is above. */
 export async function runSetup(): Promise<void> {
-  console.log(`
-  Setting up this Watcher.
+  console.log('\n  Setting up this Watcher.\n');
 
-  Two things, both from whoever runs the Hub: the web address of the app, and
-  a token of your own. The token is yours — it is what tells the Hub which
-  watchlist is yours and keeps it separate from everyone else's.
+  // The machine first. An address and a token are no use on a computer that
+  // cannot run the thing, and the failures that follow are unreadable.
+  const checks = preflight();
+  console.log(renderPreflight(checks));
+  if (checks.some((c) => !c.ok)) {
+    console.error('  Fix the above, then run this again. Nothing was written.\n');
+    process.exitCode = 1;
+    return;
+  }
+
+  console.log(`  Two things now, both from whoever runs the Hub: the web address of the
+  app, and a token of your own. The token is yours — it is what tells the Hub
+  which watchlist is yours and keeps it separate from everyone else's.
 `);
 
   if (existsSync(CONFIG_PATH)) {

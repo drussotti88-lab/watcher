@@ -1,84 +1,102 @@
 # Setting up the Watcher
 
-You have been given two things: a **web address** for the app, and a **token**
-of your own. Keep the token the way you'd keep a password.
+You have been given three things: a **web address** for the app, a **name and
+password** to sign in with, and a **token** for this program. Keep the password
+and the token the way you'd keep any password.
 
-## What this actually is
+## What this is
 
-Two halves. The **app** is a website — that's the address you were given, and
-you can open it on your phone. It holds your watchlist and remembers what
-happened.
+Two halves.
+
+The **app** is a website — that's the address you were given, and it works on
+your phone. It holds your watchlist and remembers what happened.
 
 The **Watcher** is this folder, and it runs on your computer. It opens a Chrome
-window and looks at product pages. It has to run on your machine rather than
-on a server because Target, Walmart and Pokémon Center all refuse a datacentre
+window and looks at product pages. It has to run on your machine rather than on
+a server because Target, Walmart and Pokémon Center all refuse a datacentre
 outright — a real browser on a home connection is the only thing they answer.
 
-That means: **nothing in your app updates unless the Watcher is running.** An
-empty dashboard usually means the Watcher isn't on.
+**So: nothing in your app updates unless the Watcher is running.** An empty
+dashboard almost always means the Watcher isn't on.
 
-## What you need first
+## Before you start
 
-- **Node 22 or newer.** Check with `node --version`. If it's missing or older,
-  get it from nodejs.org.
-- **Google Chrome**, installed normally.
+**Node 22.6 or newer.** Get the LTS installer from
+[nodejs.org](https://nodejs.org) and accept the defaults. If you're not sure
+whether you have it, don't check — just run step 1 below and it will tell you.
 
-## Setting up
+**Google Chrome**, installed normally. Not Edge, not a bundled browser: the
+shops answer a browser somebody actually uses.
 
-Open a terminal in this folder and run:
+## Setting up — three files, in order
 
-```
-npm install
-npm run setup
-```
+Unzip this folder somewhere you'll find again — Documents is fine, a synced
+cloud folder is not, because two machines fighting over the same profile causes
+strange failures.
 
-It asks for the address and the token, checks them against the app before
-writing anything, and tells you which of the two is wrong if either is. Then:
+**1 — Set up.** Double-click it once. It checks your Node and Chrome, installs
+what's needed, then asks for the app address and your token. It checks both
+against the live app *before* writing anything, so if one is wrong it tells you
+which.
 
-```
-npm run watch
-```
+**2 — Start watching.** Double-click. A terminal window opens, then a Chrome
+window. **Leave both alone.** That Chrome is signed out on purpose — it does the
+looking and nothing else, and it never touches an account with a card in it.
 
-A Chrome window opens and stays open. **That window is signed out on purpose.**
-It does the looking and nothing else, and it never touches an account with a
-card in it. Leave it alone and leave it running.
+**3 — Stop watching.** Double-click when you want it to stop. Don't just close
+the windows: stopping properly lets it finish the check it's on, close Chrome
+and send the last of its log. Killing it does none of that, and Chrome comes
+back next time complaining it didn't shut down correctly.
 
-To stop it, run `npm run stop` in a second terminal — don't just close the
-window or kill it. Stopping properly lets it close Chrome and send the last of
-its log; killing it does neither, and Chrome comes back next time complaining
-that it didn't shut down correctly.
+On a Mac the three files end in `.command`. If double-clicking does nothing, open
+Terminal, type `chmod +x ` (with the space), drag the folder in, and press
+return.
 
 ## Using it
 
-Add a product by pasting a Target, Walmart or Pokémon Center link into the app.
-It starts **watching** immediately — never armed, never with a price ceiling.
-Watching just means it looks and tells you.
+Sign in to the app with the name and password you were given. Add a product by
+pasting a Target, Walmart or Pokémon Center link into it.
+
+Adding something starts it **watching** — never armed, never with a price
+ceiling. Watching means it looks and tells you. Nothing here can spend money:
+there's no checkout code in this system at all.
 
 Things worth knowing:
 
 - **Pre-orders are not stock.** A pre-order takes your money now and ships
-  whenever the publisher says. Missions skip them by default; there's a setting
-  per product if you want one.
-- **Marketplace sellers are not Target.** A Target URL can be a reseller at four
-  times the price. The app says which is which.
-- **`10+ available`** means at least ten. The retailers don't publish a real
-  number above a ceiling, so neither do we.
+  whenever the publisher says. The app labels them, and missions skip them by
+  default.
+- **A Walmart or Target link can be a reseller.** When a shop is out of stock its
+  own listing stays up and the buy box falls to a marketplace seller, sometimes
+  at forty times the price. The app says "*N* resellers have the buy box" when
+  that's the case, so clicking through is never a surprise.
+- **"usually $X"** on a find is what that kind of product normally costs at a
+  shop that isn't reselling. It's a sanity check, not the official price —
+  there isn't one that retailers publish.
+- **`10+ available`** means at least ten. The shops don't publish a real number
+  above a ceiling, so neither do we.
 
 ## When something looks wrong
 
-Run `npm run once` — one pass, then it exits, and it prints what it saw. That's
-usually enough to tell whether the problem is the Watcher, the app, or the shop
-having a bad morning.
+Run **2 — Start watching** and read the first few lines. Almost everything
+announces itself there.
 
-Two normal things that look alarming:
+| What you see | What it means |
+|---|---|
+| `Unknown file extension ".ts"` | Node is too old. Install the LTS from nodejs.org, then reopen the window. |
+| `npm is not recognised` | Node isn't installed, or the window was open before you installed it. Close it and open a new one. |
+| `did not recognise the token` | Ask for a fresh token. Issuing a new one retires the old one, so an older token stops working. |
+| `Could not reach …` | The address is wrong, or you're offline. |
+| `challenged — standing down` | A shop asked to check you're human. It backs off and tries later. Nothing is broken. |
+| A gap in the log | It batches what it sends. A minute or two of quiet is it working. |
+| Chrome says "Restore pages?" | Something killed it rather than stopping it. Dismiss the bubble; use **3 — Stop watching** next time. |
 
-- **A challenge page.** Occasionally a retailer wants to check you're human. The
-  Watcher notices, backs off and tries later. Nothing is broken.
-- **A gap in the log.** The Watcher batches what it sends. A minute or two of
-  silence is it working, not it stopping.
+If none of that fits, run `npm run once` in the folder — one pass, then it exits,
+and it prints what it saw. That's usually enough to tell whether the problem is
+the Watcher, the app, or the shop having a bad morning.
 
 ## What it will not do
 
-It does not buy anything. Checkout isn't built yet, and when it is it will be
-something you turn on deliberately, per product, with a price ceiling you set.
-Nothing here can spend money today.
+It does not buy anything. Checkout isn't built. When it is, it'll be something
+turned on deliberately, per product, with a price ceiling — and a mission will
+refuse a marketplace seller before it even looks at the price.

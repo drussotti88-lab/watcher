@@ -101,3 +101,65 @@ test('an unreachable Hub is distinguished from a rejecting one', async () => {
   assert.equal(res.ok, false);
   assert.match(res.message, /Could not reach/);
 });
+
+// ── Is this machine able to run it at all? ───────────────────────────────────
+
+import { checkNode, checkChrome, chromePaths, preflight, renderPreflight } from '../src/setup.ts';
+
+test('NODE TOO OLD IS CAUGHT BEFORE IT BECOMES AN UNREADABLE ERROR', () => {
+  // On an older Node the failure is `Unknown file extension ".ts"`, which tells
+  // a person nothing about what to install.
+  assert.equal(checkNode('20.11.0').ok, false);
+  assert.equal(checkNode('22.5.0').ok, false, 'type stripping lands in 22.6');
+  assert.equal(checkNode('22.6.0').ok, true);
+  assert.equal(checkNode('24.1.0').ok, true);
+  assert.match(checkNode('20.11.0').fix, /nodejs\.org/);
+  assert.match(checkNode('20.11.0').detail, /v20\.11\.0/, 'and it says which version it found');
+});
+
+test('a nonsense version is treated as too old, not as fine', () => {
+  // Failing open here means the unreadable error happens anyway, later.
+  assert.equal(checkNode('').ok, false);
+  assert.equal(checkNode('not-a-version').ok, false);
+});
+
+test('Chrome is looked for where each platform actually puts it', () => {
+  assert.ok(chromePaths('win32', 'C:\\Users\\x').some((p) => p.includes('Program Files')));
+  assert.ok(chromePaths('darwin', '/Users/x').some((p) => p.includes('Google Chrome.app')));
+  assert.ok(chromePaths('linux', '/home/x').some((p) => p.includes('google-chrome')));
+});
+
+test('a missing Chrome says why it matters, not just that it is missing', () => {
+  const missing = checkChrome(() => false, 'win32');
+  assert.equal(missing.ok, false);
+  assert.match(missing.fix, /google\.com\/chrome/);
+  assert.match(missing.fix, /real\s+Chrome|own connection/, 'and why a bundled one will not do');
+
+  const present = checkChrome((p) => p.includes('Program Files'), 'win32');
+  assert.equal(present.ok, true);
+  assert.equal(present.fix, '');
+});
+
+test('the preflight prints every check, and the fixes only for what failed', () => {
+  const text = renderPreflight([
+    { name: 'Node', ok: true, detail: 'v22.9.0', fix: '' },
+    { name: 'Google Chrome', ok: false, detail: 'not found', fix: 'Install it from somewhere.' },
+  ]);
+  assert.match(text, /ok\s+Node/);
+  assert.match(text, /NEED\s+Google Chrome/);
+  assert.match(text, /Install it from somewhere/);
+  // A passing check must not print a fix it does not have.
+  assert.ok(!text.includes('undefined'));
+});
+
+test('a clean preflight is just the list, with nothing to do', () => {
+  const text = renderPreflight([{ name: 'Node', ok: true, detail: 'v22.9.0', fix: '' }]);
+  assert.match(text, /ok\s+Node/);
+  assert.ok(!text.includes('NEED'));
+});
+
+test('preflight runs on this machine without throwing', () => {
+  const checks = preflight();
+  assert.equal(checks.length, 2);
+  assert.equal(checks[0]!.name, 'Node');
+});
