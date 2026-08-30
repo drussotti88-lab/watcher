@@ -23,6 +23,7 @@ import {
 } from './scan.ts';
 import { searchUrl } from './readers/target-search.ts';
 import { Activity } from './activity.ts';
+import { runSetup } from './setup.ts';
 
 /**
  * What to sweep when nothing is named.
@@ -83,6 +84,7 @@ const SWEEP_RETAILER = 'Target';
 
 
 const COMMANDS = [
+  'setup',
   'watch',
   'stop',
   'once',
@@ -99,6 +101,9 @@ type Command = (typeof COMMANDS)[number];
 function help(): void {
   console.log(`
   Watcher — watches retailers from your own machine, on your own connection.
+
+  npm run setup      Start here on a new machine. Asks for the Hub address and
+                     your token, proves they work, and writes the config file.
 
   npm run watch      The real thing. Pulls your missions from the Hub, checks
                      whatever is due, and reports what it saw. Ctrl+C to stop.
@@ -445,6 +450,13 @@ async function main(): Promise<void> {
 
   if (command === 'help' || !COMMANDS.includes(command)) {
     help();
+    return;
+  }
+
+  // Before loadConfig, deliberately: this is the command you run when there is
+  // no config to load.
+  if (command === 'setup') {
+    await runSetup();
     return;
   }
 

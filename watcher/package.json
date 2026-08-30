@@ -8,6 +8,7 @@
     "node": ">=22"
   },
   "scripts": {
+    "setup": "node --experimental-strip-types src/index.ts setup",
     "watch": "node --experimental-strip-types src/index.ts watch",
     "stop": "node --experimental-strip-types src/index.ts stop",
     "once": "node --experimental-strip-types src/index.ts once",
@@ -18,6 +19,7 @@
     "browser": "node --experimental-strip-types src/index.ts browser",
     "help": "node --experimental-strip-types src/index.ts help",
     "test": "node --experimental-strip-types --test test/*.test.ts",
+    "package": "node --experimental-strip-types scripts/package.ts",
     "typecheck": "tsc --noEmit",
     "inspect": "node --experimental-strip-types src/index.ts inspect"
   },

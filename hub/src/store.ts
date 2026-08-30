@@ -751,6 +751,22 @@ export async function upsertUser(
   return Number(rows[0]?.id ?? 0);
 }
 
+/**
+ * Give a user's Watcher its own token, by storing the hash of one.
+ *
+ * Takes a hash for the same reason `upsertUser` takes one: the token itself
+ * exists for a moment in the CLI that generated it and in the file it is
+ * written to, and nowhere else. A leaked users table is then a list of hashes,
+ * not a set of working credentials.
+ */
+export async function setUserToken(db: Sql, handle: string, tokenHash: string): Promise<boolean> {
+  const rows = await db.query<{ id: number }>(
+    'UPDATE users SET token_hash = $2 WHERE lower(handle) = lower($1) RETURNING id',
+    [String(handle ?? '').trim(), tokenHash],
+  );
+  return rows.length > 0;
+}
+
 /** Switch an account on or off. Their data stays; their way in does not. */
 export async function setUserEnabled(db: Sql, handle: string, enabled: boolean): Promise<boolean> {
   const rows = await db.query<{ id: number }>(

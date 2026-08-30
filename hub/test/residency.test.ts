@@ -138,9 +138,24 @@ test('EVERY QUERY THAT TOUCHES AN OWNED TABLE FILTERS ON THE OWNER', async () =>
     assert.ok(owned.includes(expected), `${expected} should be an owned table`);
   }
 
+  // Comments first, and not for tidiness. This scanner pairs backticks, so a
+  // stray one in prose — `upsertUser`, say — pairs with the opening backtick of
+  // the next real query and hands the check a "statement" made of English. It
+  // reported a table it had read out of a sentence. Prose cannot filter on
+  // user_id, so the guard failed on writing rather than on code.
+  //
+  // Only whole-line comments are removed: a doc block, or a line whose first
+  // characters are // or *. Nothing on a line that also carries code, so no
+  // string literal can be cut in half by this.
+  const code = src
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .split('\n')
+    .filter((line) => !/^\s*(\/\/|\*)/.test(line))
+    .join('\n');
+
   const statements = [
-    ...src.matchAll(/`([^`]*?(?:SELECT|INSERT|UPDATE|DELETE)[^`]*?)`/gis),
-    ...src.matchAll(/'((?:SELECT|INSERT|UPDATE|DELETE)[^']*?)'/gis),
+    ...code.matchAll(/`([^`]*?(?:SELECT|INSERT|UPDATE|DELETE)[^`]*?)`/gis),
+    ...code.matchAll(/'((?:SELECT|INSERT|UPDATE|DELETE)[^']*?)'/gis),
   ].map((m) => m[1]!);
 
   assert.ok(statements.length > 30, `expected to have found the SQL, got ${statements.length}`);

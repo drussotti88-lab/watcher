@@ -13,13 +13,16 @@
  *   npm run user list
  *   npm run user add <name>
  *   npm run user passwd <name>
+ *   npm run user token <name>
  *   npm run user disable <name>
  *   npm run user enable <name>
  */
 import { createInterface } from 'node:readline';
+import { writeFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import postgres from 'postgres';
 import { connectionStringFrom, fromPostgres, type PostgresLike } from '../src/db.ts';
-import { hashPassword } from '../src/auth.ts';
+import { hashPassword, hashToken } from '../src/auth.ts';
 import * as store from '../src/store.ts';
 
 /**
@@ -48,8 +51,23 @@ function askSecret(prompt: string): Promise<string> {
   });
 }
 
-/** Ask twice, because a typo in a write-only field is a locked-out person. */
+/**
+ * Ask twice, because a typo in a write-only field is a locked-out person.
+ *
+ * USER_PASSWORD short-circuits the prompt. That exists so a password can be
+ * generated on this machine and handed straight to this script without ever
+ * being typed, echoed, or read back — which is how an account gets created for
+ * somebody else without its password passing through a conversation.
+ */
 async function newPassword(): Promise<string> {
+  const supplied = process.env.USER_PASSWORD ?? '';
+  if (supplied) {
+    if (supplied.length < 10) {
+      console.error('\n  USER_PASSWORD is too short. Ten characters minimum.\n');
+      process.exit(1);
+    }
+    return supplied;
+  }
   const first = await askSecret('  new password: ');
   if (first.length < 10) {
     console.error('\n  Too short. Ten characters minimum — this is the door to a card.\n');
@@ -68,6 +86,7 @@ function usage(): never {
   npm run user list
   npm run user add <name>
   npm run user passwd <name>
+  npm run user token <name>
   npm run user disable <name>
   npm run user enable <name>
 `);
@@ -144,6 +163,31 @@ async function main(): Promise<void> {
       } else {
         console.log(`\n  Password changed for user ${id}.\n`);
       }
+      return;
+    }
+
+    if (action === 'token') {
+      const existing = await store.findUser(db, handle);
+      if (!existing) {
+        console.error(`\n  There is no "${handle}". Create them first: npm run user add ${handle}\n`);
+        process.exit(1);
+      }
+
+      // 32 bytes of randomness, base64url. Long enough that guessing is not a
+      // strategy, and URL-safe so it survives being pasted into a JSON file.
+      const token = randomBytes(32).toString('base64url');
+      await store.setUserToken(db, existing.handle, await hashToken(token));
+
+      // Written to a file rather than printed. A token in a terminal is a token
+      // in the scrollback, in the screenshot of the scrollback, and in whatever
+      // is reading that terminal's output.
+      const file = `${existing.handle}-watcher-token.txt`;
+      writeFileSync(file, token + '\n', { mode: 0o600 });
+
+      console.log(`\n  A new Watcher token for "${existing.handle}" is in ${file}.`);
+      console.log('  It is not printed here on purpose. Send it to them the way you');
+      console.log('  would send a password, then delete the file.');
+      console.log('\n  Any token they had before this has stopped working.\n');
       return;
     }
 
