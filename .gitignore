@@ -30,3 +30,15 @@ __pycache__/
 
 .vercel
 .env*
+
+# Credentials the user CLI writes to disk.
+#
+# `npm run user add` and `npm run user token` deliberately write to a file
+# rather than printing, so a password or token never lands in a terminal's
+# scrollback. That is only half the job: the file is then sitting in the
+# working tree, and a `git add -A` will happily commit it. This is that
+# happening once, caught before the push.
+#
+# Delete these files once you have passed the credential on.
+*-watcher-token.txt
+*-password.txt
