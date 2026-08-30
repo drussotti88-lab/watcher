@@ -50,10 +50,15 @@ VALUES
   ),
   (
     'walmart-tcg',
-    'Walmart — trading cards',
+    'Walmart — sealed TCG',
     'Walmart',
     'watcher',
-    'https://www.walmart.com/browse/toys/trading-cards/4171_4187_1229163',
+    -- A search, not a browse id. The browse id this was seeded with,
+    -- 4171_4187_1229163, now answers "This page couldn't be found" -- numeric
+    -- category ids rot, words do not. retailer_type:Walmart is what separates
+    -- their own stock from the resale market: without it the same query returns
+    -- 50 results and none of them are Walmart's.
+    'https://www.walmart.com/search?q=pokemon+trading+cards&facet=retailer_type%3AWalmart',
     'watcher',
     '{"filters":["pokemon","pokémon"]}'::jsonb,
     true

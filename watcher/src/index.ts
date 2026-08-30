@@ -22,9 +22,12 @@ import {
   renderDiscover,
   scanPokemonCenterCategory,
   pcCandidates,
+  scanWalmartSearch,
+  walmartCandidates,
 } from './scan.ts';
 import { searchUrl } from './readers/target-search.ts';
 import { categoryUrl, pageCount } from './readers/pokemoncenter-search.ts';
+import { searchUrl as walmartSearchUrl } from './readers/walmart-search.ts';
 import { interleave, todayLocal, type SweepStep } from './plan.ts';
 import { Activity } from './activity.ts';
 import { runSetup } from './setup.ts';
@@ -103,6 +106,35 @@ const PC_CATEGORY = 'tcg-cards';
  * catalogue puts the things that are actually moving.
  */
 const PC_MAX_PAGES = 6;
+
+/**
+ * Walmart, by search rather than by category.
+ *
+ * The source was seeded with /browse/toys/trading-cards/4171_4187_1229163,
+ * which now answers "This page couldn't be found." The category id had rotted,
+ * and because nothing had ever swept Walmart the 404 went unnoticed for as
+ * long as the source existed. Words survive a re-organised taxonomy; numeric
+ * category ids do not.
+ */
+const WALMART_RETAILER = 'Walmart';
+const WALMART_SOURCE = 'walmart-tcg';
+const WALMART_MAX_PAGES = 2;
+
+/**
+ * The queries Walmart gets. A subset, and on purpose.
+ *
+ * Walmart's own sealed Pokémon catalogue is small — thirty results for elite
+ * trainer box, all of them theirs, all of them out of stock. Running the full
+ * thirteen would spend a third of the sweep's budget re-reading the same short
+ * list under different words.
+ */
+const WALMART_QUERIES = [
+  'pokemon elite trainer box',
+  'pokemon booster box',
+  'pokemon booster bundle',
+  'pokemon ultra premium collection',
+  'pokemon tin',
+];
 
 /**
  * Whose budget a sweep spends.
@@ -328,6 +360,71 @@ async function runPasses(once: boolean): Promise<void> {
     activity.record({ kind: 'sweep', retailer: PC_RETAILER, ms: scan.ms, message: line });
   };
 
+  /** One page of a Walmart search. */
+  const sweepWalmart = async (step: { query: string; page: number }): Promise<void> => {
+    const label = `wm "${step.query}"${step.page > 1 ? ` p${step.page}` : ''}`;
+    const scan = await scanWalmartSearch(browser, walmartSearchUrl(step.query, step.page));
+
+    if (scan.challenged) {
+      const until = pacer.challenged(WALMART_RETAILER, Date.now());
+      const mins = Math.round((until - Date.now()) / 60000);
+      sweepPlan = sweepPlan.filter((s) => s.retailer !== WALMART_RETAILER);
+      console.log(`  ${timestamp()}  sweep ${label} challenged — standing down ${mins}m`);
+      activity.record({
+        kind: 'sweep',
+        level: 'warn',
+        retailer: WALMART_RETAILER,
+        message: `challenged during sweep — standing down ${mins}m, ${WALMART_RETAILER} steps dropped`,
+      });
+      return;
+    }
+
+    if (scan.note) {
+      console.log(`  ${timestamp()}  sweep ${label}: ${scan.note}`);
+      activity.record({
+        kind: 'sweep',
+        level: 'error',
+        retailer: WALMART_RETAILER,
+        ms: scan.ms,
+        message: `sweep ${label} failed: ${scan.note}`,
+      });
+      return;
+    }
+
+    const found = walmartCandidates(scan.rows, step.query);
+    let line = `sweep ${label}: ${scan.rows.length} results, ${found.length} kept`;
+
+    // Follow the pages only while there is something on them, and only as far
+    // as Walmart says the query goes.
+    const pages = scan.maxPage ?? 1;
+    if (step.page < Math.min(pages, WALMART_MAX_PAGES) && found.length > 0) {
+      sweepPlan.unshift({
+        retailer: WALMART_RETAILER,
+        kind: 'walmart',
+        query: step.query,
+        page: step.page + 1,
+      });
+      line += ` · ${pages} pages, fetching p${step.page + 1}`;
+    }
+
+    if (found.length > 0) {
+      const last = !sweepPlan.some((s) => s.retailer === WALMART_RETAILER);
+      const result = await hub.ingest(
+        WALMART_SOURCE,
+        found.map(toDiscovered),
+        last,
+        sweepPlan.length,
+      );
+      const fresh = result.names ?? [];
+      if (result.seeded) line += ' (baseline)';
+      else if (fresh.length) line += ` — NEW: ${fresh.join(', ')}`;
+    }
+    if (sweepPlan.length) line += ` · ${sweepPlan.length} pages left`;
+
+    console.log(`  ${timestamp()}  ${line}`);
+    activity.record({ kind: 'sweep', retailer: WALMART_RETAILER, ms: scan.ms, message: line });
+  };
+
   const sweepOnce = async (): Promise<void> => {
     if (sweepPlan.length === 0) return;
 
@@ -341,6 +438,11 @@ async function runPasses(once: boolean): Promise<void> {
 
     if (step.kind === 'pc') {
       await sweepPokemonCenter(step);
+      return;
+    }
+
+    if (step.kind === 'walmart') {
+      await sweepWalmart(step);
       return;
     }
 
@@ -510,7 +612,13 @@ async function runPasses(once: boolean): Promise<void> {
           category: PC_CATEGORY,
           page: i + 1,
         }));
-        sweepPlan = interleave(targetSteps, pcSteps);
+        const walmartSteps: SweepStep[] = WALMART_QUERIES.map((query) => ({
+          retailer: WALMART_RETAILER,
+          kind: 'walmart' as const,
+          query,
+          page: 1,
+        }));
+        sweepPlan = interleave(targetSteps, pcSteps, walmartSteps);
         // Pressed by hand means somebody is looking at the button. Take the
         // next turn rather than waiting for one — the alternation exists to
         // stop a background sweep starving the watching, not to make a person

@@ -583,3 +583,18 @@ UPDATE sources
    SET url = 'https://www.pokemoncenter.com/category/tcg-cards',
        label = 'Pokémon Center — sealed TCG'
  WHERE url = 'https://www.pokemoncenter.com/category/new-releases';
+
+-- Walmart's seeded browse URL had rotted.
+--
+-- /browse/toys/trading-cards/4171_4187_1229163 now answers "This page couldn't
+-- be found." The numeric category id stopped existing at some point, and
+-- because nothing had ever swept Walmart the 404 sat there unnoticed for as
+-- long as the source has existed.
+--
+-- The Watcher searches Walmart by keyword now, with facet=retailer_type:Walmart
+-- to get their own stock rather than the resale market, so this URL is what the
+-- app shows rather than what the Watcher fetches. It should still be true.
+UPDATE sources
+   SET url = 'https://www.walmart.com/search?q=pokemon+trading+cards&facet=retailer_type%3AWalmart',
+       label = 'Walmart — sealed TCG'
+ WHERE url = 'https://www.walmart.com/browse/toys/trading-cards/4171_4187_1229163';

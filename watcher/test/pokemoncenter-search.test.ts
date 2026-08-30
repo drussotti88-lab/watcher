@@ -174,13 +174,30 @@ test('__NEXT_DATA__ is found in the page, and its absence is not a crash', () =>
 
 import { interleave, todayLocal } from '../src/plan.ts';
 
-test('the two shops are interleaved so neither sits behind the other', () => {
+test('the shops are interleaved so none sits behind another', () => {
   // Not a cosmetic property. Pacing is held per retailer, so if every Target
   // step came before every Pokémon Center step, Target's cooldown would be
   // Pokémon Center's cooldown too — which is the bug this replaces.
-  const a = ['t1', 't2', 't3'];
-  const b = ['p1', 'p2'];
-  assert.deepEqual(interleave(a, b), ['t1', 'p1', 't2', 'p2', 't3']);
+  assert.deepEqual(interleave(['t1', 't2', 't3'], ['p1', 'p2']), [
+    't1', 'p1', 't2', 'p2', 't3',
+  ]);
+});
+
+test('three shops interleave as evenly as two', () => {
+  // There are three now. The fourth should not require touching this.
+  assert.deepEqual(interleave(['t1', 't2'], ['p1', 'p2'], ['w1']), [
+    't1', 'p1', 'w1', 't2', 'p2',
+  ]);
+
+  const out = interleave(
+    Array.from({ length: 13 }, (_, i) => `t${i}`),
+    Array.from({ length: 6 }, (_, i) => `p${i}`),
+    Array.from({ length: 5 }, (_, i) => `w${i}`),
+  );
+  assert.equal(out.length, 24);
+  assert.equal(new Set(out).size, 24, 'nothing duplicated, nothing lost');
+  // Every shop gets a turn in the first handful rather than waiting for Target.
+  assert.deepEqual(out.slice(0, 3), ['t0', 'p0', 'w0']);
 });
 
 test('interleaving a long list with a short one keeps every item exactly once', () => {

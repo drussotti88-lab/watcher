@@ -10,22 +10,27 @@
 /** One unit of sweeping: a Target query page, or a Pokémon Center category page. */
 export type SweepStep =
   | { retailer: string; kind: 'target'; query: string; offset: number }
-  | { retailer: string; kind: 'pc'; category: string; page: number };
+  | { retailer: string; kind: 'pc'; category: string; page: number }
+  | { retailer: string; kind: 'walmart'; query: string; page: number };
 
 /**
  * Alternate two lists, longest tail last.
  *
- * The property that matters is not "perfectly alternating" — it is that
- * neither retailer's steps all sit behind the other's. Pacing is held per
- * retailer, so a plan with every Target step first makes Target's cooldown
- * into Pokémon Center's cooldown as well, and the second shop is read at the
- * speed of the first.
+ * The property that matters is not "perfectly alternating" — it is that no
+ * retailer's steps all sit behind another's. Pacing is held per retailer, so a
+ * plan with every Target step first makes Target's cooldown into everyone
+ * else's cooldown too, and three shops get read at the speed of one.
+ *
+ * Variadic because there are three of them now, and there is no reason the
+ * fourth should require touching this.
  */
-export function interleave<T>(a: readonly T[], b: readonly T[]): T[] {
+export function interleave<T>(...lists: readonly (readonly T[])[]): T[] {
   const out: T[] = [];
-  for (let i = 0; i < Math.max(a.length, b.length); i += 1) {
-    if (i < a.length) out.push(a[i]!);
-    if (i < b.length) out.push(b[i]!);
+  const longest = Math.max(0, ...lists.map((l) => l.length));
+  for (let i = 0; i < longest; i += 1) {
+    for (const list of lists) {
+      if (i < list.length) out.push(list[i]!);
+    }
   }
   return out;
 }

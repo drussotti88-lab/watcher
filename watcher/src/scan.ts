@@ -28,6 +28,13 @@ import {
 } from './readers/target-search.ts';
 import { classifyTcg, type TcgClassification } from './tcg.ts';
 import {
+  readWalmartSearch,
+  walmartMeta,
+  soldByWalmart,
+  nextData as walmartNextData,
+  type WalmartRow,
+} from './readers/walmart-search.ts';
+import {
   nextData,
   readPokemonCenterCategory,
   pokemonCenterMeta,
@@ -444,4 +451,136 @@ export function pcCandidates(verdicts: PcVerdict[], foundBy = ''): Candidate[] {
     tcg: classifyTcg(v.row.name),
     foundBy: foundBy || v.signal,
   }));
+}
+
+
+// ── Walmart ──────────────────────────────────────────────────────────────────
+
+export interface WalmartScanResult {
+  url: string;
+  rows: WalmartRow[];
+  challenged: boolean;
+  challengeReason: string;
+  ms: number;
+  note: string;
+  total: number | null;
+  maxPage: number | null;
+}
+
+/** Read one page of Walmart search results. */
+export async function scanWalmartSearch(
+  browser: Browser,
+  url: string,
+): Promise<WalmartScanResult> {
+  const started = Date.now();
+  const page = await browser.page();
+
+  try {
+    await page.goto(url, { waitUntil: 'domcontentloaded' });
+    const read = await readWhenReady(page, { minText: 600, settleForMs: 2000, timeoutMs: 40_000 });
+
+    const challenge = detectChallenge(read.title, read.text);
+    if (challenge.challenged) {
+      return {
+        url,
+        rows: [],
+        challenged: true,
+        challengeReason: challenge.reason,
+        ms: Date.now() - started,
+        note: `challenged: ${challenge.reason}`,
+        total: null,
+        maxPage: null,
+      };
+    }
+
+    // A dead category answers 200 with a page that says so. The seeded browse
+    // URL had been doing exactly that, unnoticed, for as long as it existed —
+    // because nothing ever swept Walmart to notice.
+    if (/couldn.t be found|page not found/i.test(read.text)) {
+      return {
+        url,
+        rows: [],
+        challenged: false,
+        challengeReason: '',
+        ms: Date.now() - started,
+        note: 'Walmart says this page does not exist — the URL has rotted',
+        total: null,
+        maxPage: null,
+      };
+    }
+
+    const html = await page.content();
+    const data = walmartNextData(html);
+    const rows = readWalmartSearch(data);
+    const meta = walmartMeta(data);
+
+    return {
+      url,
+      rows,
+      challenged: false,
+      challengeReason: '',
+      ms: Date.now() - started,
+      total: meta.total,
+      maxPage: meta.maxPage,
+      note:
+        rows.length === 0
+          ? data === null
+            ? 'no __NEXT_DATA__ in the page — it may have redirected, or the shape has moved'
+            : 'the page had __NEXT_DATA__ but no products in it'
+          : '',
+    };
+  } catch (err) {
+    return {
+      url,
+      rows: [],
+      challenged: false,
+      challengeReason: '',
+      ms: Date.now() - started,
+      note: `could not read the page: ${(err as Error).message}`,
+      total: null,
+      maxPage: null,
+    };
+  }
+}
+
+/**
+ * What a Walmart scan found that is worth remembering.
+ *
+ * Sold-by-Walmart is checked here rather than trusted from the facet, for the
+ * reason given in the reader: the facet is a request, and Target has already
+ * demonstrated once what a marketplace listing wearing a first-party badge does
+ * to an armed mission.
+ *
+ * Out of stock is kept, deliberately. Every Walmart-sold Pokémon result was out
+ * of stock on the day this was written — that is the normal state of their
+ * catalogue and precisely the thing worth watching, because it is what
+ * restocks.
+ */
+export function walmartCandidates(rows: WalmartRow[], foundBy = ''): Candidate[] {
+  const out: Candidate[] = [];
+  for (const row of rows) {
+    if (!soldByWalmart(row.sellerName)) continue;
+    const tcg = classifyTcg(row.name);
+    if (tcg.verdict === 'no') continue;
+    out.push({
+      row: {
+        tcin: row.usItemId,
+        name: row.name,
+        url: row.url,
+        price: row.price,
+        seller: { kind: 'retailer' as const, name: row.sellerName },
+        state: row.state,
+        availableQuantity: null,
+        orderLimit: null,
+        releaseDate: row.releaseDate,
+        outOfStockInAllStores: null,
+        storeQuantity: null,
+        preOrderStoreQuantity: null,
+        imageUrl: row.imageUrl,
+      },
+      tcg,
+      foundBy,
+    });
+  }
+  return out;
 }
