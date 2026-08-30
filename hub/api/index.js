@@ -381,8 +381,9 @@ async function recordDiscoveries(db2, userId, sourceId, items, announce2) {
     // classifier existed gets labelled the next time it is seen, and a row
     // already labelled is never relabelled by a query that guessed worse.
     text: `INSERT INTO discoveries
-             (user_id, source_id, external_id, url, name, price, announced, kind, confidence, found_by)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+             (user_id, source_id, external_id, url, name, price, announced, kind, confidence,
+              found_by, image_url)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
            ON CONFLICT (user_id, source_id, external_id) DO UPDATE SET
              found_by = CASE
                WHEN EXCLUDED.found_by = '' THEN discoveries.found_by
@@ -397,6 +398,12 @@ async function recordDiscoveries(db2, userId, sourceId, items, announce2) {
              confidence = CASE
                WHEN discoveries.confidence = '' THEN EXCLUDED.confidence
                ELSE discoveries.confidence
+             END,
+             -- Filled when blank, never replaced. A working image beats a
+             -- newer one: these CDN URLs churn and the old one still renders.
+             image_url = CASE
+               WHEN discoveries.image_url = '' THEN EXCLUDED.image_url
+               ELSE discoveries.image_url
              END`,
     params: [
       userId,
@@ -408,7 +415,8 @@ async function recordDiscoveries(db2, userId, sourceId, items, announce2) {
       !announce2,
       item.kind ?? "",
       item.confidence ?? "",
-      item.foundBy ?? ""
+      item.foundBy ?? "",
+      (item.imageUrl ?? "").slice(0, 500)
     ]
   }));
   await db2.batch(statements);
@@ -1213,6 +1221,7 @@ function toDiscovery(r) {
     kind: String(r.kind ?? ""),
     confidence: String(r.confidence ?? ""),
     foundBy: String(r.found_by ?? ""),
+    imageUrl: String(r.image_url ?? ""),
     status: String(r.status ?? "new"),
     firstSeenAt: r.first_seen_at ? new Date(String(r.first_seen_at)).toISOString() : "",
     alreadyHave: Boolean(r.already_have)
@@ -1257,7 +1266,8 @@ async function keepDiscovery(db2, userId, id) {
   const retailer = source?.retailer ?? "Target";
   const product = await upsertProduct(db2, userId, {
     name: found.name,
-    msrp: found.price ?? null
+    msrp: found.price ?? null,
+    imageUrl: found.imageUrl
   });
   const listing = await addListing(db2, userId, {
     productKey: product.key,
@@ -2948,6 +2958,10 @@ function renderFinds() {
   for (const d of finds) {
     const card = el('div', 'card');
     const row = el('div', 'row');
+    // The picture comes with the find, straight from Target's own response.
+    // A review list of twenty text rows is a chore; a list of twenty boxes you
+    // recognise is a glance.
+    row.appendChild(thumb(d.imageUrl, d.name));
     const left = el('div', 'grow');
 
     left.appendChild(el('div', 'name', d.name || 'unnamed'));

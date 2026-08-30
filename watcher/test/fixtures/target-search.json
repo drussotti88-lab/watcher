@@ -1,5 +1,5 @@
 {
- "_why": "A real Target search response (cdui slp endpoint), stripped to the availability fields and with the store id replaced. Six SKUs: two unreleased Target-sold boxes with a street date, two marketplace resellers in stock at four times MSRP, one Target-sold figure in stock, one Target-sold box in stock.",
+ "_why": "A real Target search response (cdui slp endpoint), stripped to the availability fields and with the store id replaced. Six SKUs: two unreleased Target-sold boxes with a street date, two marketplace resellers in stock at four times MSRP, one Target-sold figure in stock, one Target-sold box in stock. One product carries its image_info exactly as captured; a second carries a URL that already has a query string.",
  "data_source_modules": [
   {
    "module_data": {
@@ -12,7 +12,14 @@
          "title": "Pok&#233;mon Trading Card Game: 30th Celebration Elite Trainer Box"
         },
         "enrichment": {
-         "buy_url": "https://www.target.com/p/pok-233-mon-trading-card-game-30th-celebration-elite-trainer-box/-/A-1010892076"
+         "buy_url": "https://www.target.com/p/pok-233-mon-trading-card-game-30th-celebration-elite-trainer-box/-/A-1010892076",
+         "image_info": {
+          "base_url": "//target.scene7.com/is/image/Target/",
+          "primary_image": {
+           "url": "https://target.scene7.com/is/image/Target/GUEST_10bd6460-211d-4636-8bdc-6da9bafa783f",
+           "image_name": "GUEST_10bd6460-211d-4636-8bdc-6da9bafa783f"
+          }
+         }
         },
         "fulfillment": {},
         "product_vendors": [],
@@ -54,7 +61,12 @@
          "title": "Pok&#233;mon Trading Card Game: 30th Celebration Sylveon ex Box"
         },
         "enrichment": {
-         "buy_url": "https://www.target.com/p/pok-233-mon-trading-card-game-30th-celebration-sylveon-ex-box/-/A-1010892068"
+         "buy_url": "https://www.target.com/p/pok-233-mon-trading-card-game-30th-celebration-sylveon-ex-box/-/A-1010892068",
+         "image_info": {
+          "primary_image": {
+           "url": "https://target.scene7.com/is/image/Target/GUEST_already?wid=88"
+          }
+         }
         },
         "fulfillment": {},
         "product_vendors": [],
@@ -216,7 +228,7 @@
        "tcin": "1005837596",
        "item": {
         "product_description": {
-         "title": "Pokemon TCG: Scarlet & Violet—Prismatic Evolutions Poster Collection"
+         "title": "Pokemon TCG: Scarlet & Violet\u2014Prismatic Evolutions Poster Collection"
         },
         "enrichment": {
          "buy_url": "https://www.target.com/p/pokemon-tcg-scarlet-violet-prismatic-evolutions-poster-collection/-/A-1005837596"

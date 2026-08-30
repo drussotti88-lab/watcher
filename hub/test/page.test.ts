@@ -1368,3 +1368,18 @@ test('a dashboard with no sweep block still renders the bar', async () => {
   assert.equal($(h, '#sweep-now').disabled, false);
   assert.equal($(h, '#sweep-now').textContent, 'Run Target sweep');
 });
+
+test('A FIND SHOWS ITS PICTURE, NOT JUST ITS NAME', async () => {
+  // Twenty text rows is a chore. Twenty boxes you recognise is a glance.
+  const h = await boot(withFinds([{ ...FINDS[0], imageUrl: 'https://target.scene7.com/is/image/Target/GUEST_x?wid=300' }]));
+  const img = h.doc.querySelector('#finds-list img.thumb');
+  assert.ok(img, 'no thumbnail rendered');
+  assert.match(img.src, /GUEST_x/);
+  assert.equal(img.alt, FINDS[0].name, 'and it is described for anyone not seeing it');
+});
+
+test('a find with no picture gets the placeholder, not a broken image', async () => {
+  const h = await boot(withFinds([{ ...FINDS[0], imageUrl: '' }]));
+  assert.equal(h.doc.querySelector('#finds-list img.thumb'), null);
+  assert.ok(h.doc.querySelector('#finds-list .thumb.ph'), 'the placeholder should stand in');
+});

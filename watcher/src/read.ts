@@ -137,7 +137,11 @@ export async function readListing(
       ...base,
       challenged: false,
       challengeReason: '',
-      imageUrl: scraped.ogImage,
+      // The reader's own answer wins. og:image is the fallback because it is
+      // chosen for social previews — on a seasonal page it can be a banner
+      // rather than the product, and that image then sticks forever, since the
+      // Hub keeps the first one it is given.
+      imageUrl: base.imageUrl || scraped.ogImage,
       ms: Date.now() - started,
     };
   } catch (err) {

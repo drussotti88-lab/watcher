@@ -947,3 +947,42 @@ test('a caller that says nothing is treated as finishing, so the CLI still works
   await store.finishSweep(db, USER, 'target-tcg', 'ok', 24, true);
   assert.equal((await store.sweepState(db, USER, 'target-tcg', 24)).queued, false);
 });
+
+// ── The picture, through the discovery path ──────────────────────────────────
+
+test('A KEPT FIND BRINGS ITS PICTURE TO THE PRODUCT', async () => {
+  // Otherwise every product created from a sweep starts blank and stays blank
+  // until the Watcher happens to read its page.
+  const db = await withTargetSource();
+  await store.recordDiscoveries(db, USER, 'target-tcg', [
+    sighting({ imageUrl: 'https://target.scene7.com/is/image/Target/GUEST_abc?wid=300' }),
+  ], true);
+
+  const [found] = await store.discoveriesToReview(db, USER);
+  assert.match(found!.imageUrl, /GUEST_abc/);
+
+  await store.keepDiscovery(db, USER, found!.id);
+  const [product] = await store.listProducts(db, USER);
+  assert.match(product!.imageUrl, /GUEST_abc/, 'the product should have the photo already');
+});
+
+test('an image fills in when it was missing, and is never replaced', async () => {
+  // These CDN URLs churn. A working image beats a newer one, which is the same
+  // rule products already follow.
+  const db = await withTargetSource();
+  await store.recordDiscoveries(db, USER, 'target-tcg', [sighting({ imageUrl: '' })], true);
+  await store.recordDiscoveries(db, USER, 'target-tcg', [sighting({ imageUrl: 'https://cdn/one' })], true);
+  let [found] = await store.discoveriesToReview(db, USER);
+  assert.equal(found!.imageUrl, 'https://cdn/one');
+
+  await store.recordDiscoveries(db, USER, 'target-tcg', [sighting({ imageUrl: 'https://cdn/two' })], true);
+  [found] = await store.discoveriesToReview(db, USER);
+  assert.equal(found!.imageUrl, 'https://cdn/one', 'the first working URL stands');
+});
+
+test('a find with no picture is blank rather than broken', async () => {
+  const db = await withTargetSource();
+  await store.recordDiscoveries(db, USER, 'target-tcg', [sighting({ imageUrl: undefined })], true);
+  const [found] = await store.discoveriesToReview(db, USER);
+  assert.equal(found!.imageUrl, '');
+});

@@ -16,6 +16,7 @@ import {
   classify,
   rankScan,
   searchMeta,
+  thumbnail,
   type ScanRow,
 } from '../src/readers/target-search.ts';
 import {
@@ -410,4 +411,43 @@ test('the real fixture has no metadata, and that is handled', () => {
   // It was captured before any of this existed. Absent must mean "one page",
   // not a crash.
   assert.equal(searchMeta([body]).total, null);
+});
+
+// ── The picture ──────────────────────────────────────────────────────────────
+//
+// Target's search response names the product photo, so a find can arrive with
+// a picture rather than a line of text. Nothing is downloaded and nothing is
+// hosted: it is the retailer's own CDN URL, asked for at thumbnail size.
+
+test('A FIND ARRIVES WITH ITS PICTURE', () => {
+  const box = byTcin('1010892076');
+  assert.match(box.imageUrl, /^https:\/\/target\.scene7\.com\/is\/image\/Target\/GUEST_10bd6460/);
+});
+
+test('the image is asked for at thumbnail size, not full resolution', () => {
+  // A sixty-pixel square in a list of twenty has no business fetching a
+  // print-resolution photo.
+  assert.match(byTcin('1010892076').imageUrl, /wid=300&hei=300/);
+});
+
+test('A URL THAT ALREADY HAS PARAMETERS IS LEFT ALONE', () => {
+  // Guessing at how to merge query strings on somebody else's CDN is how a
+  // working image becomes a broken one.
+  assert.equal(
+    byTcin('1010892068').imageUrl,
+    'https://target.scene7.com/is/image/Target/GUEST_already?wid=88',
+  );
+});
+
+test('a product with no image is blank, not a broken URL', () => {
+  assert.equal(byTcin('94725169').imageUrl, '');
+  assert.equal(thumbnail(''), '');
+  assert.equal(thumbnail('not-a-url'), '');
+  assert.equal(thumbnail(undefined as unknown as string), '');
+});
+
+test('the picture travels to the Hub with the rest of the find', () => {
+  const [first] = candidates(rankScan(rows, CAPTURE_DAY));
+  const item = toDiscovered(first!);
+  assert.match(item.imageUrl, /scene7\.com/);
 });

@@ -231,12 +231,14 @@ export function toDiscovered(c: Candidate): {
   kind: string;
   confidence: string;
   foundBy: string;
+  imageUrl: string;
 } {
   return {
     externalId: c.row.tcin,
     name: c.row.name,
     url: c.row.url,
     price: c.row.price,
+    imageUrl: c.row.imageUrl,
     // Carried through so the review list can group, explain itself, and show
     // which query is earning its place in the sweep.
     kind: c.tcg.kind,

@@ -158,8 +158,9 @@ export async function recordDiscoveries(
     // classifier existed gets labelled the next time it is seen, and a row
     // already labelled is never relabelled by a query that guessed worse.
     text: `INSERT INTO discoveries
-             (user_id, source_id, external_id, url, name, price, announced, kind, confidence, found_by)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+             (user_id, source_id, external_id, url, name, price, announced, kind, confidence,
+              found_by, image_url)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
            ON CONFLICT (user_id, source_id, external_id) DO UPDATE SET
              found_by = CASE
                WHEN EXCLUDED.found_by = '' THEN discoveries.found_by
@@ -174,6 +175,12 @@ export async function recordDiscoveries(
              confidence = CASE
                WHEN discoveries.confidence = '' THEN EXCLUDED.confidence
                ELSE discoveries.confidence
+             END,
+             -- Filled when blank, never replaced. A working image beats a
+             -- newer one: these CDN URLs churn and the old one still renders.
+             image_url = CASE
+               WHEN discoveries.image_url = '' THEN EXCLUDED.image_url
+               ELSE discoveries.image_url
              END`,
     params: [
       userId,
@@ -186,6 +193,7 @@ export async function recordDiscoveries(
       item.kind ?? '',
       item.confidence ?? '',
       item.foundBy ?? '',
+      (item.imageUrl ?? '').slice(0, 500),
     ],
   }));
   await db.batch(statements);
@@ -1652,6 +1660,7 @@ export interface DiscoveryRow {
   kind: string;
   confidence: string;
   foundBy: string;
+  imageUrl: string;
   status: string;
   firstSeenAt: string;
   /** True when a product with this name already exists — usually already yours. */
@@ -1669,6 +1678,7 @@ function toDiscovery(r: Record<string, unknown>): DiscoveryRow {
     kind: String(r.kind ?? ''),
     confidence: String(r.confidence ?? ''),
     foundBy: String(r.found_by ?? ''),
+    imageUrl: String(r.image_url ?? ''),
     status: String(r.status ?? 'new'),
     firstSeenAt: r.first_seen_at ? new Date(String(r.first_seen_at)).toISOString() : '',
     alreadyHave: Boolean(r.already_have),
@@ -1753,6 +1763,7 @@ export async function keepDiscovery(
   const product = await upsertProduct(db, userId, {
     name: found.name,
     msrp: found.price ?? null,
+    imageUrl: found.imageUrl,
   });
   const listing = await addListing(db, userId, {
     productKey: product.key,

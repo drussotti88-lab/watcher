@@ -65,6 +65,26 @@ export interface ScanRow {
   storeQuantity: number | null;
   /** Pre-release allocation held at the nearest store, when stated. */
   preOrderStoreQuantity: number | null;
+  /** Target's own product photo, sized down. Blank when it did not offer one. */
+  imageUrl: string;
+}
+
+/**
+ * Target's image CDN, asked politely for a thumbnail.
+ *
+ * The raw URL serves a full-resolution photo — fine for a product page, absurd
+ * for a sixty-pixel square in a list of twenty. Scene7 takes sizing in the
+ * query string, so this costs nothing and saves most of the bytes.
+ *
+ * A URL that already carries parameters is left exactly as it is: guessing at
+ * how to merge query strings on somebody else's CDN is how you turn a working
+ * image into a broken one.
+ */
+export function thumbnail(url: string, size = 300): string {
+  const clean = String(url ?? '').trim();
+  if (!clean || clean.includes('?')) return clean;
+  if (!clean.startsWith('http')) return '';
+  return `${clean}?wid=${size}&hei=${size}&qlt=80&fmt=webp`;
 }
 
 function asRecord(v: unknown): Record<string, unknown> | null {
@@ -155,6 +175,10 @@ export function toScanRow(product: Record<string, unknown>): ScanRow {
     if (pq !== null) preOrderStoreQuantity = Math.max(preOrderStoreQuantity ?? 0, pq);
   }
 
+  const enrich = enrichment ? asRecord(enrichment.image_info) : null;
+  const primary = enrich ? asRecord(enrich.primary_image) : null;
+  const imageUrl = thumbnail(primary ? String(primary.url ?? '') : '');
+
   const retail = price ? num(price.current_retail) : null;
 
   return {
@@ -174,6 +198,7 @@ export function toScanRow(product: Record<string, unknown>): ScanRow {
         : null,
     storeQuantity,
     preOrderStoreQuantity,
+    imageUrl,
   };
 }
 

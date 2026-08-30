@@ -16,6 +16,8 @@ export interface Discovered {
   confidence?: string;
   /** The query that turned it up, so a keyword that only returns rubbish shows. */
   foundBy?: string;
+  /** The retailer's own product photo, at thumbnail size. */
+  imageUrl?: string;
 }
 
 export type SourceKind = 'sitemap_index' | 'sitemap' | 'json_list' | 'watcher';

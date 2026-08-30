@@ -44,6 +44,14 @@ export interface ProductRead {
   seller: Seller;
   preOrder: PreOrder;
   note: string;
+  /**
+   * The retailer's own product photo, when the response names one.
+   *
+   * Preferred over the page's og:image tag, which is chosen for social
+   * previews and is sometimes a seasonal banner rather than the product.
+   * Blank means "use whatever the page scrape found".
+   */
+  imageUrl?: string;
 }
 
 /**

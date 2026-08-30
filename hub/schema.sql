@@ -530,3 +530,11 @@ CREATE INDEX IF NOT EXISTS discoveries_review_idx
 -- Watcher clears it by finishing, so a sweep that never ran stays queued rather
 -- than being silently forgotten.
 ALTER TABLE sources ADD COLUMN IF NOT EXISTS sweep_now_at TIMESTAMPTZ;
+
+-- The product photo, carried from the sweep.
+--
+-- Target's search response already names it (item.enrichment.image_info), so a
+-- find arrives with a picture rather than a line of text, and Keep can hand it
+-- straight to the product. No download and no hosting: it is the retailer's own
+-- CDN URL, asked for at thumbnail size.
+ALTER TABLE discoveries ADD COLUMN IF NOT EXISTS image_url TEXT NOT NULL DEFAULT '';

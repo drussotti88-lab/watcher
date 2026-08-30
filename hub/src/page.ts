@@ -1374,6 +1374,10 @@ function renderFinds() {
   for (const d of finds) {
     const card = el('div', 'card');
     const row = el('div', 'row');
+    // The picture comes with the find, straight from Target's own response.
+    // A review list of twenty text rows is a chore; a list of twenty boxes you
+    // recognise is a glance.
+    row.appendChild(thumb(d.imageUrl, d.name));
     const left = el('div', 'grow');
 
     left.appendChild(el('div', 'name', d.name || 'unnamed'));

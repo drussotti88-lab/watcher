@@ -113,6 +113,7 @@ export function readTargetBodies(
   let orderLimit: number | null = null;
   let preOrderQuantity: number | null = null;
   let seller: Seller = firstParty('Target');
+  let imageUrl = '';
 
   for (const body of bodies) {
     for (const product of productNodes(body, tcin)) {
@@ -170,6 +171,16 @@ export function readTargetBodies(
         const vendor = vendors.length ? asRecord(vendors[0]) : null;
         const vendorName = vendor ? String(vendor.vendor_name ?? '').trim() : '';
         if (vendorName && seller.kind === 'marketplace') seller = { kind: 'marketplace', name: vendorName };
+      }
+
+      // The same photo the search response carries, and a better source than
+      // the page's og:image tag — og:image is chosen for social previews and
+      // is sometimes a banner rather than the product.
+      if (item && !imageUrl) {
+        const enrich = asRecord(item.enrichment);
+        const info = enrich ? asRecord(enrich.image_info) : null;
+        const primary = info ? asRecord(info.primary_image) : null;
+        if (primary && primary.url) imageUrl = String(primary.url);
       }
 
       const p = asRecord(product.price);
@@ -273,6 +284,7 @@ export function readTargetBodies(
       isPreOrder: state === 'in' && daysOut !== null && daysOut > 0,
       releaseDate: streetDate,
     },
+    imageUrl,
     note: notes.join('; '),
   };
 }
