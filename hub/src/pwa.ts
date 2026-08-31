@@ -30,7 +30,11 @@ export const ICONS: Record<string, string> = {
 };
 
 export function iconResponse(name: string): Response | null {
-  const b64 = ICONS[name];
+  // Version suffixes live in the PATH, not the query: iOS's touch-icon cache
+  // is documented to ignore query strings, so /icon-192.png?v=5 looked, to a
+  // phone, exactly like the reticle it saved in week one. /icon-192-v5.png
+  // does not. The suffix is stripped here so one table serves every vintage.
+  const b64 = ICONS[name.replace(/-v\d+$/, '')];
   if (!b64) return null;
   const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
   return new Response(bytes, {
@@ -63,9 +67,9 @@ export const MANIFEST = {
   theme_color: '#09080e',
   categories: ['shopping', 'utilities'],
   icons: [
-    { src: '/icon-192.png?v=5', sizes: '192x192', type: 'image/png', purpose: 'any' },
-    { src: '/icon-512.png?v=5', sizes: '512x512', type: 'image/png', purpose: 'any' },
-    { src: '/icon-maskable.png?v=5', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+    { src: '/icon-192-v5.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+    { src: '/icon-512-v5.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+    { src: '/icon-maskable-v5.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
   ],
   shortcuts: [
     { name: 'Add a listing', short_name: 'Add', url: '/add' },

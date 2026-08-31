@@ -453,8 +453,8 @@ export function loginPage(message = '', handle = ''): string {
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Vault Watch</title>
 <link rel="manifest" href="/manifest.webmanifest?v=5">
-<link rel="icon" href="/icon-192.png?v=5" sizes="192x192" type="image/png">
-<link rel="apple-touch-icon" href="/icon-192.png?v=5">
+<link rel="icon" href="/icon-192-v5.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/icon-192-v5.png">
 ${FONTS}<style>${STYLE}</style></head>
 <body><main class="login">
   <div class="card">
@@ -484,12 +484,12 @@ export function dashboardPage(): string {
 <title>Vault Watch</title>
 <link rel="manifest" href="/manifest.webmanifest?v=5">
 <meta name="theme-color" content="#09080e">
-<link rel="icon" href="/icon-192.png?v=5" sizes="192x192" type="image/png">
+<link rel="icon" href="/icon-192-v5.png" sizes="192x192" type="image/png">
 <!-- iOS ignores the manifest for the home-screen icon and the status bar. -->
 <!-- The version tag is load-bearing: the icons are served immutable, so a
      new drawing under the old URL is a new drawing nobody's phone will ever
      fetch. Bump ?v= whenever the art changes. -->
-<link rel="apple-touch-icon" href="/icon-192.png?v=5">
+<link rel="apple-touch-icon" href="/icon-192-v5.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Vault Watch">
