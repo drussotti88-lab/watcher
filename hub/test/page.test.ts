@@ -144,6 +144,20 @@ const submit = (form: any, win: any): void => {
   form.dispatchEvent(new win.Event('submit', { bubbles: true, cancelable: true }));
 };
 
+/** Open a card's detail pop-up the way a person does: by pressing its button. */
+const openMission = (h: Harness, idx = 0): void => {
+  const btns = [...h.doc.querySelectorAll('#missions button')]
+    .filter((b) => b.textContent === 'Settings & run history');
+  assert.ok(btns[idx], 'a mission card should offer its pop-up');
+  (btns[idx] as HTMLButtonElement).click();
+};
+const openProduct = (h: Harness, idx = 0): void => {
+  const btns = [...h.doc.querySelectorAll('#products button')]
+    .filter((b) => b.textContent === 'Listings & details');
+  assert.ok(btns[idx], 'a product card should offer its pop-up');
+  (btns[idx] as HTMLButtonElement).click();
+};
+
 // ── The bug this file was written for ────────────────────────────────────────
 
 test('ADD PRODUCT SENDS THE NAME YOU TYPED', async () => {
@@ -279,8 +293,9 @@ test('tabs switch what is shown, and only one at a time', async () => {
 
 test('saving a mission sends the settings actually on screen', async () => {
   const h = await boot();
+  openMission(h);
   const form = $(h, 'form[data-mission="1"]');
-  assert.ok(form, 'the mission panel should be rendered');
+  assert.ok(form, 'the mission pop-up should be rendered');
 
   form.querySelector('[name=ceiling]').value = '49.99';
   form.querySelector('[name=quantity]').value = '2';
@@ -301,6 +316,7 @@ test('saving a mission sends the settings actually on screen', async () => {
 
 test('an empty ceiling is sent as null, never as an empty string', async () => {
   const h = await boot();
+  openMission(h);
   const form = $(h, 'form[data-mission="1"]');
   form.querySelector('[name=ceiling]').value = '';
   h.reply('POST /api/missions', { mission: {} });
@@ -315,6 +331,7 @@ test('ticking Armed warns before anything is saved', async () => {
   // With a spend cap in place — without one the tick now refuses outright,
   // which its own test covers below.
   const h = await boot({ ...DASHBOARD, settings: { taxRate: 0, shippingAllowance: 0, spendCapDay: 200 } });
+  openMission(h);
   const form = $(h, 'form[data-mission="1"]');
   const armed = form.querySelector('[name=armed]');
   armed.checked = true;
@@ -328,8 +345,7 @@ test('adding a listing also creates the mission to watch it', async () => {
   // A listing with no mission is a thing you meant to watch and didn't.
   const h = await boot();
   (h.doc.querySelector('[data-tab=products]') as any).click();
-  const panel = $(h, 'details');
-  panel.open = true;
+  openProduct(h);
 
   const form = $(h, 'form[data-product="prd_etb"]');
   form.querySelector('[name=url]').value = 'https://www.target.com/p/-/A-1012644666';
@@ -457,6 +473,7 @@ test('THE TEST RUN BUTTON ACTUALLY ASKS FOR A TEST RUN', async () => {
   // The lesson from the add-product bug: a button that looks right and posts
   // nowhere passes every test that does not press it.
   const h = await boot();
+  openMission(h);
   const form = $(h, 'form[data-mission="1"]');
   const btn = form.querySelector('[data-act=check-now]');
   assert.ok(btn, 'the button should be on the mission panel');
@@ -475,6 +492,7 @@ test('the test run button says queued, never "checking now"', async () => {
   // for a button click. Wording that promises otherwise is a claim neither of
   // them can keep.
   const h = await boot();
+  openMission(h);
   const form = $(h, 'form[data-mission="1"]');
   const btn = form.querySelector('[data-act=check-now]');
 
@@ -490,6 +508,7 @@ test('a mission already waiting on a test run shows it', async () => {
   const pending = JSON.parse(JSON.stringify(DASHBOARD));
   pending.missions[0].checkNow = true;
   const h = await boot(pending);
+  openMission(h);
   const btn = $(h, 'form[data-mission="1"]').querySelector('[data-act=check-now]');
   assert.match(btn.textContent, /queued/i);
 });
@@ -577,6 +596,7 @@ test('A SUGGESTED CEILING IS FILLED IN AND LABELLED AS A SUGGESTION', async () =
   d.settings = { taxRate: 0.0975, shippingAllowance: 0 };
 
   const h = await boot(d);
+  openMission(h);
   const form = $(h, 'form[data-mission="1"]');
   assert.equal(form.querySelector('[name=ceiling]').value, '54.86');
   assert.match(form.querySelector('[data-hint=ceiling]').textContent, /suggested/i);
@@ -590,6 +610,7 @@ test('a ceiling already set is never overwritten by a suggestion', async () => {
   d.settings = { taxRate: 0.0975, shippingAllowance: 0 };
 
   const h = await boot(d);
+  openMission(h);
   assert.equal($(h, 'form[data-mission="1"]').querySelector('[name=ceiling]').value, '40');
 });
 
@@ -599,6 +620,7 @@ test('with no MSRP the box stays empty and says why', async () => {
   d.missions[0].msrp = null;
 
   const h = await boot(d);
+  openMission(h);
   const form = $(h, 'form[data-mission="1"]');
   assert.equal(form.querySelector('[name=ceiling]').value, '');
   assert.match(form.querySelector('[data-hint=ceiling]').textContent, /no MSRP/i);
@@ -634,6 +656,7 @@ test('a saved rate comes back into the box as a percentage', async () => {
 
 test('the ceiling field says what it covers', async () => {
   const h = await boot();
+  openMission(h);
   const label = $(h, 'form[data-mission="1"]').textContent;
   assert.match(label, /per unit, including tax/);
 });
@@ -1507,9 +1530,8 @@ test('an ordinary in-stock item still says IN STOCK', async () => {
 
 test('the policy is editable and is sent when saved', async () => {
   const h = await boot(preorderMission());
-  const panel = $(h, '#tab-missions details');
-  panel.open = true;
-  const form = h.doc.querySelector('#tab-missions form');
+  openMission(h);
+  const form = h.doc.querySelector('#detail-dialog form');
   form.querySelector('[name=preOrderPolicy]').value = 'allow';
   h.reply('POST /api/missions', { mission: {} });
 
@@ -1971,15 +1993,15 @@ test('THE ARM CHECKBOX REFUSES WITHOUT A SPEND CAP, AND SAYS WHY', async () => {
     ...DASHBOARD,
     settings: { taxRate: 0, shippingAllowance: 0, spendCapDay: null },
   });
-  // Open the first mission's settings panel and try to arm it.
-  const details = [...h.doc.querySelectorAll('#missions details')];
-  for (const d of details) (d as HTMLDetailsElement).open = true;
-  const armed = h.doc.querySelector('#missions input[name="armed"]') as HTMLInputElement;
+  // Open the first mission's pop-up and try to arm it.
+  openMission(h);
+  const armed = h.doc.querySelector('#detail-dialog input[name="armed"]') as HTMLInputElement;
   assert.ok(armed, 'there is an arm control');
   armed.checked = true;
   armed.dispatchEvent(new h.dom.window.Event('change', { bubbles: true }));
   assert.equal(armed.checked, false, 'the tick does not stick');
-  assert.match($(h, '#missions').textContent, /daily spend cap in Settings first/);
+  // The refusal renders where the tick happened — inside the pop-up.
+  assert.match($(h, '#detail-dialog').textContent, /daily spend cap in Settings first/);
 });
 
 test('with a cap set, the arm checkbox warns about what arming means', async () => {
@@ -1987,9 +2009,8 @@ test('with a cap set, the arm checkbox warns about what arming means', async () 
     ...DASHBOARD,
     settings: { taxRate: 0, shippingAllowance: 0, spendCapDay: 200 },
   });
-  const details = [...h.doc.querySelectorAll('#missions details')];
-  for (const d of details) (d as HTMLDetailsElement).open = true;
-  const armed = h.doc.querySelector('#missions input[name="armed"]') as HTMLInputElement;
+  openMission(h);
+  const armed = h.doc.querySelector('#detail-dialog input[name="armed"]') as HTMLInputElement;
   armed.checked = true;
   armed.dispatchEvent(new h.dom.window.Event('change', { bubbles: true }));
   assert.equal(armed.checked, true, 'the cap exists, so arming is a real choice');
@@ -2376,4 +2397,37 @@ test('A WAITING ROOM PUTS AN ALARM AT THE TOP OF THE APP', async () => {
 test('no sightings, no alarm', async () => {
   const h = await boot(DASHBOARD);
   assert.equal(($(h, '#queue-banner') as any).hidden, true);
+});
+
+// ── The pop-up's two promises ────────────────────────────────────────────────
+
+test('THE POP-UP SURVIVES THE REFRESH AND ITS CONTENT STAYS FRESH', async () => {
+  const h = await boot();
+  openMission(h);
+  const dlg = $(h, '#detail-dialog') as any;
+  assert.equal(dlg.open, true);
+
+  const renamed = JSON.parse(JSON.stringify(DASHBOARD));
+  renamed.missions[0].productName = 'Renamed By Another Device';
+  h.reply('GET /api/dashboard', renamed);
+  ($(h, '#refresh') as HTMLButtonElement).click();
+  await h.settle();
+
+  assert.equal(dlg.open, true, 'the refresh must not slam the pop-up shut');
+  assert.match($(h, '#detail-title').textContent ?? '', /Renamed By Another Device/,
+    'and what it shows is the fresh data, not a stale copy');
+});
+
+test('a hand in the pop-up form is not interrupted by the refresh', async () => {
+  const h = await boot();
+  openMission(h);
+  const ceiling = $(h, 'form[data-mission="1"]').querySelector('[name=ceiling]');
+  ceiling.focus();
+  ceiling.value = '123.45';
+
+  ($(h, '#refresh') as HTMLButtonElement).click();
+  await h.settle();
+
+  const after = $(h, 'form[data-mission="1"]').querySelector('[name=ceiling]');
+  assert.equal(after.value, '123.45', 'a redraw under the cursor eats keystrokes');
 });

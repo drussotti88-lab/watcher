@@ -2283,6 +2283,11 @@ dialog {
 }
 dialog::backdrop { background: rgba(4, 3, 8, .72); }
 dialog .card { margin: 0; max-height: 86vh; overflow-y: auto; }
+/* The detail pop-up carries run tables, so it earns more width. */
+#detail-dialog { max-width: 720px; }
+.dlg-head { display: flex; justify-content: space-between; align-items: center;
+            gap: 12px; margin-bottom: 6px; }
+.dlg-head h3 { margin: 0; }
 
 .login { max-width: 350px; margin: 15vh auto; }
 .login .card { padding: 26px 24px; }
@@ -2612,6 +2617,18 @@ ${FONTS}<style>${STYLE}</style></head>
       </div>
     </div>
   </dialog>
+
+  <!-- One pop-up serves every card's details and edit forms. Its content is
+       rebuilt from fresh data on each refresh, unless a hand is in a form. -->
+  <dialog id="detail-dialog">
+    <div class="card">
+      <div class="dlg-head">
+        <h3 id="detail-title"></h3>
+        <button type="button" class="small" data-act="detail-close">Close</button>
+      </div>
+      <div id="detail-body"></div>
+    </div>
+  </dialog>
 </main>
 <script>
 const money = (n) => n === null || n === undefined ? '\u2014' : '$' + Number(n).toFixed(2);
@@ -2630,7 +2647,6 @@ function ago(iso) {
 const STALE_MS = 5 * 60 * 1000;
 
 let DATA = { missions: [], runs: [], changes: [], products: [], listings: [] };
-const OPEN = new Set();   // which detail panels are expanded, kept across refreshes
 
 function el(tag, cls, text) {
   const n = document.createElement(tag);
@@ -2790,13 +2806,54 @@ function thumb(url, alt, big) {
   return img;
 }
 
-function panel(key, summaryText, build) {
-  const d = el('details');
-  d.open = OPEN.has(key);
-  d.addEventListener('toggle', () => { d.open ? OPEN.add(key) : OPEN.delete(key); });
-  d.appendChild(el('summary', null, summaryText));
-  d.appendChild(build());
-  return d;
+/**
+ * The detail pop-up: one dialog serves every card.
+ *
+ * Replaced the expand/collapse panels (Roberto's call \u2014 pop-ups read better
+ * than cards that grow). Module state rather than DOM state so the
+ * thirty-second refresh REFILLS the open dialog instead of closing it \u2014
+ * and skips the refill entirely while a hand is inside a form, because a
+ * redraw under a cursor eats keystrokes.
+ */
+let DETAIL = null;
+
+function openDetail(kind, key) {
+  DETAIL = { kind: kind, key: key };
+  renderDetail(true);
+  const d = document.getElementById('detail-dialog');
+  if (d.showModal) { if (!d.open) d.showModal(); }
+  else d.open = true;
+}
+
+function closeDetail() {
+  DETAIL = null;
+  const d = document.getElementById('detail-dialog');
+  if (d.close) d.close();
+  else d.open = false;
+}
+
+function renderDetail(force) {
+  if (!DETAIL) return;
+  const d = document.getElementById('detail-dialog');
+  if (!force && d.contains(document.activeElement)) return;
+  const title = document.getElementById('detail-title');
+  const body = document.getElementById('detail-body');
+  if (DETAIL.kind === 'mission') {
+    const m = DATA.missions.find((x) => x.id === DETAIL.key);
+    // The thing this pop-up was about can vanish under it \u2014 deleted from
+    // another device, say. A dialog about nothing closes rather than lying.
+    if (!m) { closeDetail(); return; }
+    title.textContent = shortName(m.productName);
+    body.textContent = '';
+    body.appendChild(missionPanel(m));
+  } else {
+    const p = DATA.products.find((x) => x.key === DETAIL.key);
+    if (!p) { closeDetail(); return; }
+    const mine = (DATA.listings || []).filter((l) => l.productKey === p.key);
+    title.textContent = p.name;
+    body.textContent = '';
+    body.appendChild(productPanel(p, mine));
+  }
 }
 
 function emptyBlock(title, detail) {
@@ -2978,7 +3035,12 @@ function missionCard(m) {
   // Tags go below the whole row, full width. Nested inside the title column
   // they were competing with the price for space and wrapping at odd points.
   card.appendChild(flags);
-  card.appendChild(panel('m' + m.id, 'Settings and run history', () => missionPanel(m)));
+  const more = el('button', 'small', 'Settings & run history');
+  more.addEventListener('click', () => openDetail('mission', m.id));
+  const acts = el('div', 'actions');
+  acts.style.marginTop = '12px';
+  acts.appendChild(more);
+  card.appendChild(acts);
   return card;
 }
 
@@ -3238,7 +3300,12 @@ function productCard(p) {
 
   row.append(left);
   card.appendChild(row);
-  card.appendChild(panel('p' + p.key, 'Listings and details', () => productPanel(p, mine)));
+  const more = el('button', 'small', 'Listings & details');
+  more.addEventListener('click', () => openDetail('product', p.key));
+  const acts = el('div', 'actions');
+  acts.style.marginTop = '12px';
+  acts.appendChild(more);
+  card.appendChild(acts);
   return card;
 }
 
@@ -3741,6 +3808,7 @@ function render() {
 
   renderRadar();
   renderFinds();
+  renderDetail();
 
   const hf = document.getElementById('hours-form');
   if (document.activeElement !== hf.querySelector('[name=activeFrom]')) {
@@ -4379,8 +4447,12 @@ document.getElementById('product-form').addEventListener('submit', async (e) => 
       const r = await api('POST', '/api/quick-add', { ...details, url });
       form.reset();
       closeAdd();
-      OPEN.add('p' + (r.product ? r.product.key : r.listing.productKey));
-      load();
+      // Open the new product's pop-up once fresh data is in, so the next
+      // step is in front of you. The key is read HERE, inside the button's
+      // own error handling \u2014 a surprise response shape must fail the button,
+      // not leak out of a .then as an unhandled rejection.
+      const newKey = r.product ? r.product.key : r.listing ? r.listing.productKey : '';
+      load().then(() => { if (newKey) openDetail('product', newKey); });
       return r.alreadyTracked
         ? 'already watching that listing \u2014 the product details were saved'
         : 'added, and watching ' + r.listing.retailer + ' ' + r.listing.externalId;
@@ -4389,8 +4461,8 @@ document.getElementById('product-form').addEventListener('submit', async (e) => 
     const { product } = await api('POST', '/api/products', details);
     form.reset();
     closeAdd();
-    OPEN.add('p' + product.key);   // open it, so the next step is in front of you
-    load();
+    const newKey = product ? product.key : '';
+    load().then(() => { if (newKey) openDetail('product', newKey); });
     return 'added \u2014 now give it a listing URL below';
   });
 });
@@ -4421,6 +4493,12 @@ function closeAdd() {
 
 document.getElementById('add-open').addEventListener('click', openAdd);
 addDialog.querySelector('[data-act=add-close]').addEventListener('click', closeAdd);
+
+const detailDialog = document.getElementById('detail-dialog');
+detailDialog.querySelector('[data-act=detail-close]').addEventListener('click', closeDetail);
+detailDialog.addEventListener('click', (e) => { if (e.target === detailDialog) closeDetail(); });
+// Escape closes the dialog natively; the state has to follow it.
+detailDialog.addEventListener('close', () => { DETAIL = null; });
 // Clicking the backdrop is the other way people expect to dismiss this.
 addDialog.addEventListener('click', (e) => { if (e.target === addDialog) closeAdd(); });
 
