@@ -81,13 +81,34 @@ const STYLE = `
   --mono: "DM Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 * { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.55 var(--sans); }
+body { margin: 0; color: var(--ink); font: 15px/1.55 var(--sans);
+  /* The flat ground, with one quiet pool of the accent bleeding down from the
+     top. Costs nothing, and it is most of the difference between "web page"
+     and "app". */
+  background:
+    radial-gradient(1100px 460px at 50% -180px, rgba(127, 119, 221, .16), transparent 60%),
+    var(--bg);
+}
+::selection { background: rgba(127, 119, 221, .35); }
 main { max-width: 1040px; margin: 0 auto; padding: 28px 20px 96px; }
 
 header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+/* The mark: an accent tile with a centred dot — the closest thing to a poké
+   ball that stays abstract enough to sit in a corner all day. */
+.mark { width: 32px; height: 32px; border-radius: 10px; flex: none;
+        background: linear-gradient(135deg, #948ce6, #6a61cf);
+        box-shadow: 0 4px 14px rgba(127, 119, 221, .4);
+        display: inline-flex; align-items: center; justify-content: center;
+        vertical-align: -7px; margin-right: 10px; }
+.mark::before { content: ''; width: 10px; height: 10px; border-radius: 50%;
+                background: #fff; box-shadow: 0 0 0 3px rgba(9, 8, 14, .35); }
 h1 { font: 800 26px/1.2 var(--display); margin: 0; letter-spacing: -0.02em; }
 h2 { font: 700 12px/1.4 var(--display); text-transform: uppercase; letter-spacing: .1em;
-     color: var(--dim); margin: 32px 0 10px; }
+     color: var(--dim); margin: 32px 0 10px;
+     display: flex; align-items: center; gap: 12px; }
+/* Section headings carry their own hairline, so the page reads as chapters
+   instead of one long scroll. */
+h2::after { content: ''; flex: 1; height: 1px; background: var(--line); }
 h3 { font: 700 14px/1.4 var(--display); margin: 0 0 8px; letter-spacing: -0.01em; }
 .sub { color: var(--muted); font-size: 13px; }
 a { color: var(--accent); text-underline-offset: 2px; }
@@ -102,38 +123,56 @@ a { color: var(--accent); text-underline-offset: 2px; }
  * wrap: two short rows beat one row with a secret.
  */
 .tabs { display: flex; flex-wrap: wrap; gap: 2px; margin: 18px 0 16px;
-        border-bottom: 1px solid var(--line); }
+        border-bottom: 1px solid var(--line);
+        /* The tab strip stays put while the lists scroll under it — with the
+           app's own ground blurred through, so it reads as an app bar rather
+           than a row of links that happened to stick. */
+        position: sticky; top: env(safe-area-inset-top, 0px); z-index: 30;
+        background: rgba(9, 8, 14, .8);
+        backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
 @media (max-width: 520px) {
-  .tab { padding: 9px 11px; font-size: 13.5px; }
+  .tab { padding: 10px 11px; font-size: 13.5px; }
   .tab .count { margin-left: 4px; }
 }
-.tab { padding: 9px 16px; cursor: pointer; border: none; background: none;
+.tab { padding: 10px 16px; cursor: pointer; border: none; background: none;
        font: 500 14px/1.4 var(--sans); color: var(--muted);
-       border-bottom: 2px solid transparent; border-radius: 0; }
+       border-bottom: 2px solid transparent; border-radius: 0;
+       transition: color .12s, border-color .12s; }
 .tab:hover { color: var(--ink); }
 .tab.on { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
 .tab .count { font-family: var(--mono); font-size: 12px; opacity: .6; margin-left: 6px; }
 
-.bar { display: flex; gap: 10px; align-items: center; margin-bottom: 18px; flex-wrap: wrap; }
-/* The spacer that right-aligns Sign out is only worth having when there is
-   room for it. On a narrow screen it pushes Sign out onto a line of its own. */
+.bar { display: flex; gap: 8px; align-items: center; margin-bottom: 18px; flex-wrap: wrap; }
+/* flex-basis 0, not the card column's 260px: with a 260px floor the spacer
+   itself is what pushed Sign out onto a second row on a laptop. */
+.bar .grow { flex: 1 1 0; min-width: 0; }
+/* On a phone the toolbar was four rows of buttons before any content. The
+   spacer goes, and the buttons drop a size — they are chrome, not content. */
 @media (max-width: 520px) {
+  .bar { gap: 6px; margin-bottom: 14px; }
   .bar .grow { display: none; }
-  .bar button, .bar .btn { padding: 8px 12px; }
+  .bar button, .bar .btn { padding: 7px 11px; font-size: 13px; }
+  .bar .check { font-size: 13px; }
 }
 button, .btn {
   font: 600 14px/1.4 var(--sans); padding: 8px 15px; border-radius: var(--r-ctl);
   cursor: pointer; border: 1px solid var(--line-strong); background: var(--panel-2);
   color: var(--ink); text-decoration: none; display: inline-block;
-  transition: border-color .12s, background .12s, opacity .12s;
+  transition: border-color .12s, background .12s, opacity .12s, transform .06s;
 }
 button:hover:not(:disabled), .btn:hover { border-color: var(--accent); background: var(--accent-soft); }
+button:active:not(:disabled), .btn:active { transform: translateY(1px); }
+button:focus-visible, .btn:focus-visible, .chip:focus-visible, .tab:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px; }
 button:disabled { opacity: .45; cursor: progress; }
-button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-button.primary:hover:not(:disabled) { filter: brightness(1.1); background: var(--accent); }
+button.primary { background: linear-gradient(180deg, #8b84e4, #7269d6);
+                 border-color: var(--accent); color: #fff;
+                 box-shadow: 0 2px 12px rgba(127, 119, 221, .35); }
+button.primary:hover:not(:disabled) { filter: brightness(1.08);
+                 background: linear-gradient(180deg, #8b84e4, #7269d6); }
 button.danger { color: var(--alert); border-color: rgba(240,131,107,.35); }
 button.danger:hover:not(:disabled) { background: var(--alert-bg); border-color: var(--alert); }
-button.small { padding: 4px 10px; font-size: 12px; border-radius: var(--r-sm); }
+button.small { padding: 4px 10px; font-size: 12px; border-radius: var(--r-sm); box-shadow: none; }
 
 /* The filter bar.
    Ninety-eight finds is a wall, and the answer is not to throw any of them
@@ -151,9 +190,10 @@ button.small { padding: 4px 10px; font-size: 12px; border-radius: var(--r-sm); }
              border-radius: 10px; }
 .chip {
   font: 500 12px/1 var(--sans); letter-spacing: .01em;
-  padding: 6px 11px; border-radius: 999px; cursor: pointer;
+  padding: 7px 12px; border-radius: 999px; cursor: pointer;
   background: var(--panel-2); border: 1px solid var(--line); color: var(--muted);
-  white-space: nowrap;
+  white-space: nowrap; min-height: 28px;
+  transition: border-color .12s, color .12s, background .12s;
 }
 .chip:hover { border-color: var(--accent); color: var(--ink); }
 .chip[aria-pressed="true"] {
@@ -164,9 +204,13 @@ button.small { padding: 4px 10px; font-size: 12px; border-radius: var(--r-sm); }
 .chip:disabled { opacity: .35; cursor: default; }
 .chip:disabled:hover { border-color: var(--line); color: var(--muted); }
 
-.card { background: var(--panel); border: 1px solid var(--line);
+.card { border: 1px solid var(--line);
         border-radius: var(--r-card); padding: 16px 18px; margin-bottom: 12px;
-        box-shadow: var(--shadow); }
+        box-shadow: var(--shadow);
+        /* A one-per-cent sheen across the top edge. Imperceptible on its own;
+           the difference between a panel and a printout in aggregate. */
+        background: linear-gradient(180deg, rgba(237, 235, 245, .03), rgba(237, 235, 245, 0) 46%),
+                    var(--panel); }
 .row { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
 .grow { flex: 1 1 260px; min-width: 0; }
 .name { font: 600 15px/1.35 var(--sans); letter-spacing: -0.01em; }
@@ -209,13 +253,17 @@ button.small { padding: 4px 10px; font-size: 12px; border-radius: var(--r-sm); }
 .fresh { background: var(--accent); color: #fff; }
 /* The release radar: a compact calendar of what drops when. */
 .radar { margin-bottom: 14px; }
-.radar h3 { margin: 0 0 2px; font-size: 13px; letter-spacing: .05em;
-            text-transform: uppercase; color: var(--muted); }
+.radar h3 { margin: 12px 0 2px; font-size: 12px; letter-spacing: .08em;
+            text-transform: uppercase; color: var(--muted);
+            display: flex; align-items: center; gap: 10px; }
+.radar h3::after { content: ''; flex: 1; height: 1px; background: var(--line); }
 .radar h3.today { color: var(--accent); }
-.radar .rrow { display: flex; gap: 8px; align-items: baseline; padding: 5px 0;
+.radar .rrow { display: flex; gap: 8px; align-items: baseline; padding: 6px 0;
                border-bottom: 1px solid var(--line); flex-wrap: wrap; }
 .radar .rrow:last-child { border-bottom: 0; }
-.radar .rgroup { margin-bottom: 10px; }
+.radar .rrow a { text-decoration: none; font-weight: 600; color: var(--ink); }
+.radar .rrow a:hover { color: var(--accent); text-decoration: underline; }
+.radar .rgroup { margin-bottom: 8px; }
 .stale { color: var(--alert); font-weight: 600; }
 /* The "why you are seeing this" line. Quieter than the facts above it, because
    it explains rather than informs. */
@@ -237,11 +285,15 @@ label.f .hint { font-weight: 400; color: var(--dim); }
 label.check { display: flex; gap: 8px; align-items: center; font-size: 14px;
               color: var(--ink); cursor: pointer; }
 input[type=text], input[type=url], input[type=number], input[type=date],
-select, textarea, input[type=password] {
-  font: 400 14px/1.5 var(--sans); padding: 9px 11px; border-radius: var(--r-ctl); width: 100%;
+input[type=search], select, textarea, input[type=password] {
+  font: 400 14px/1.5 var(--sans); padding: 9px 12px; border-radius: var(--r-ctl); width: 100%;
   border: 1px solid var(--line-strong); background: var(--bg); color: var(--ink);
+  -webkit-appearance: none; appearance: none;
+  transition: border-color .12s, box-shadow .12s;
 }
 input::placeholder, textarea::placeholder { color: var(--dim); }
+input:hover:not(:focus), select:hover:not(:focus), textarea:hover:not(:focus) {
+  border-color: rgba(237, 235, 245, .2); }
 input:focus, select:focus, textarea:focus {
   outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft);
 }
@@ -278,6 +330,10 @@ table { width: 100%; border-collapse: collapse; font-size: 13px; }
   td.nowrap { white-space: normal; }
 }
 td, th { padding: 8px; border-top: 1px solid var(--line); vertical-align: top; text-align: left; }
+/* Only where a pointer exists — on touch this paints rows on scroll. */
+@media (hover: hover) and (min-width: 641px) {
+  tr:hover td { background: rgba(237, 235, 245, .025); }
+}
 th { color: var(--dim); font: 600 10.5px/1.4 var(--sans); text-transform: uppercase;
      letter-spacing: .09em; border-top: none; }
 tr:first-child td { border-top: none; }
@@ -308,7 +364,27 @@ details > summary:hover { color: var(--ink); }
 header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .quickadd { margin-bottom: 14px; border-color: var(--accent); }
 .quickadd h2 { margin: 0; font: 700 17px/1.3 var(--display); color: var(--ink); }
+.quickadd h2::after { display: none; }
 #install { flex: none; }
+
+/* The three warnings that outrank every tab: money committed, a queue up, and
+   everything paused. One shape — a stripe down the left edge in the colour of
+   how bad it is — instead of three hand-rolled tints. */
+.banner { border-left: 4px solid var(--alert); }
+.banner.warn { border-left-color: var(--warn);
+               border-color: rgba(240, 197, 107, .35); border-left: 4px solid var(--warn);
+               background: linear-gradient(180deg, rgba(237,235,245,.02), transparent 46%),
+                           rgba(224, 176, 96, .07); }
+.banner.alert { border-color: rgba(240, 131, 107, .4); border-left: 4px solid var(--alert);
+                background: linear-gradient(180deg, rgba(237,235,245,.02), transparent 46%),
+                            rgba(240, 131, 107, .09); }
+
+/* A thin dark scrollbar; the stock one is a grey slab on this ground. */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: rgba(237, 235, 245, .14); border-radius: 5px;
+                            border: 2px solid var(--bg); }
+::-webkit-scrollbar-thumb:hover { background: rgba(237, 235, 245, .22); }
+::-webkit-scrollbar-track { background: transparent; }
 
 /* Room for the notch and the home indicator once it is installed. */
 body { padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right); }
@@ -333,7 +409,7 @@ export function loginPage(message = '', handle = ''): string {
 <title>Hub</title>${FONTS}<style>${STYLE}</style></head>
 <body><main class="login">
   <div class="card">
-    <h1>Hub</h1>
+    <h1><span class="mark"></span>Hub</h1>
     <p class="sub" style="margin:6px 0 0">Sign in to see what you're watching.</p>
     <form method="POST" action="/login" style="margin-top:20px" class="stack">
       <!-- Blank name means the owner and the deployment password, which is how
@@ -369,7 +445,7 @@ ${FONTS}<style>${STYLE}</style></head>
 <body><main>
   <header>
     <div>
-      <h1>Hub <span class="who" id="who"></span></h1>
+      <h1><span class="mark"></span>Hub <span class="who" id="who"></span></h1>
       <span class="sub" id="summary">loading…</span>
     </div>
     <button id="install" class="small" hidden>Install</button>
@@ -395,23 +471,20 @@ ${FONTS}<style>${STYLE}</style></head>
        died mid-checkout. Both deserve the top of the page. Releasing is the
        recovery path for the second one — after a look at the orders page,
        because a grant nobody resolved means nobody knows whether money moved. -->
-  <div class="card" id="money-banner" hidden
-       style="border-color:rgba(240,197,107,.35); background:rgba(240,197,107,.07)">
+  <div class="card banner warn" id="money-banner" hidden>
     <div class="name">Money is committed</div>
     <div class="meta" id="money-banner-detail"></div>
     <div id="money-banner-list"></div>
   </div>
 
-  <div class="card" id="paused-banner" hidden
-       style="border-color:rgba(240,131,107,.35); background:rgba(240,131,107,.08)">
+  <div class="card banner alert" id="paused-banner" hidden>
     <div class="name">Everything is paused</div>
     <div class="meta">
       The Watcher is looking at nothing. Turn it back on under Settings → When to watch.
     </div>
   </div>
 
-  <div class="card" id="queue-banner" hidden
-       style="border-color:rgba(240,131,107,.55); background:rgba(240,131,107,.12)"></div>
+  <div class="card banner alert" id="queue-banner" hidden></div>
 
   <div class="tabs">
     <button class="tab on" data-tab="missions">Missions<span class="count" id="c-missions"></span></button>
