@@ -102,7 +102,19 @@ export interface ObservationOut {
   note: string;
 }
 
-export type RunOutcome = 'in_stock' | 'bought' | 'declined' | 'failed' | 'blocked';
+export type RunOutcome =
+  | 'in_stock'
+  | 'bought'
+  | 'declined'
+  | 'failed'
+  | 'blocked'
+  // The buy path's own vocabulary, distinct so the history can answer "how
+  // often did the duplicate lock fire" without string-matching reasons.
+  | 'dry_run'
+  | 'duplicate_prevented'
+  | 'budget_exhausted'
+  | 'price_exceeded'
+  | 'not_authorised';
 
 export interface RunOut {
   missionId: number;
@@ -445,6 +457,73 @@ export class Hub {
    * is the one thing that must not be inferred from stale state — and if the
    * Hub cannot answer, the answer is no.
    */
+  /** What the Hub said when asked for permission to spend. */
+  // eslint-disable-next-line @typescript-eslint/no-empty-object-type
+  async authorise(missionId: number): Promise<Authorisation> {
+    if (!this.configured) {
+      return {
+        granted: false,
+        refusal: 'not_authorised',
+        reason: 'no Hub configured — spending requires one to authorise it',
+      };
+    }
+    try {
+      const data = await this.call<{
+        granted: boolean;
+        authorisation?: { id: number; amount: number };
+        refusal?: string;
+        reason?: string;
+      }>('POST', '/api/authorise', { missionId });
+      if (data.granted && data.authorisation) {
+        return {
+          granted: true,
+          id: data.authorisation.id,
+          amount: data.authorisation.amount,
+          reason: '',
+        };
+      }
+      return {
+        granted: false,
+        refusal: refusalOutcome(data.refusal),
+        reason: data.reason || 'the Hub refused without a reason',
+      };
+    } catch (err) {
+      // Fail closed. An unreachable Hub is exactly when a duplicate purchase
+      // is most likely, because nothing knows what has already been bought.
+      return {
+        granted: false,
+        refusal: 'not_authorised',
+        reason: `could not reach the Hub to authorise: ${(err as Error).message}`,
+      };
+    }
+  }
+
+  /**
+   * Say what became of a grant.
+   *
+   * A failure to deliver 'released' costs an authorisation, never money — the
+   * grant stays live and a person releases it. A failure to deliver 'spent' is
+   * the bad one, so it is retried once; if it still cannot land, the grant
+   * ALSO stays live, which still counts the money and still blocks a second
+   * buy. Wrong in the safe direction.
+   */
+  async resolveAuthorisation(
+    id: number,
+    result: 'spent' | 'released',
+    note: string,
+  ): Promise<boolean> {
+    if (!this.configured) return false;
+    for (let attempt = 0; attempt < (result === 'spent' ? 2 : 1); attempt += 1) {
+      try {
+        await this.call('POST', `/api/authorisations/${id}/resolve`, { result, note });
+        return true;
+      } catch {
+        /* retried above for spent; a stuck grant fails closed either way */
+      }
+    }
+    return false;
+  }
+
   async authorised(missionId: number): Promise<{ ok: boolean; reason: string }> {
     if (!this.configured) {
       return { ok: false, reason: 'no Hub configured — spending requires one to authorise it' };
@@ -465,3 +544,20 @@ export class Hub {
     }
   }
 }
+
+
+/** The Hub's refusal vocabulary, mapped onto run outcomes. */
+function refusalOutcome(refusal: string | undefined): RunOutcome {
+  switch (refusal) {
+    case 'duplicate_prevented':
+      return 'duplicate_prevented';
+    case 'budget_exhausted':
+      return 'budget_exhausted';
+    default:
+      return 'not_authorised';
+  }
+}
+
+export type Authorisation =
+  | { granted: true; id: number; amount: number; reason: string }
+  | { granted: false; refusal: RunOutcome; reason: string };

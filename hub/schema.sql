@@ -654,3 +654,45 @@ UPDATE discoveries
    SET kind = 'mini tin'
  WHERE kind = 'tin'
    AND (name ILIKE '%mini tin%' OR name ILIKE '%mini tins%');
+
+-- ── Spending, authorised in exactly one place ────────────────────────────────
+
+-- The daily cap itself lives in the settings key/value table as `spendCapDay`.
+-- Unset means nothing can be armed — deliberately not defaulted, because this
+-- is somebody's money and a default is a decision made on their behalf.
+
+-- One row per permission to spend money.
+--
+-- The Watcher never decides to buy; it asks, and this table is the answer and
+-- the memory of the answer. Three properties carry all the weight:
+--
+--   · at most ONE live authorisation per mission, enforced by the partial
+--     unique index below — four checks racing, or a Watcher restarting
+--     mid-buy, find the grant already taken and record duplicate_prevented
+--   · the 24-hour sum of live grants is what the daily cap is checked against,
+--     so the cap is authoritative here and survives anything the Watcher does
+--   · a grant that vanished mid-checkout stays 'granted' until a person
+--     releases it. Fail closed: a crash between "add to cart" and "confirm" is
+--     exactly when nobody knows whether money moved, and the wrong response to
+--     not knowing is to authorise more.
+CREATE TABLE IF NOT EXISTS authorisations (
+  id           BIGSERIAL PRIMARY KEY,
+  user_id      BIGINT NOT NULL DEFAULT 1 REFERENCES users(id) ON DELETE CASCADE,
+  mission_id   BIGINT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
+  -- ceiling × quantity + the shipping allowance: the worst case this grant
+  -- permits, computed by the Hub from its own mission row. The Watcher's
+  -- opinion of the amount is not consulted.
+  amount       NUMERIC(10, 2) NOT NULL,
+  -- granted → spent | released. Nothing else, and no way back.
+  status       TEXT NOT NULL DEFAULT 'granted',
+  granted_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  resolved_at  TIMESTAMPTZ,
+  note         TEXT NOT NULL DEFAULT ''
+);
+
+-- The duplicate lock. 'spent' stays live forever on purpose: a mission that
+-- bought is done (and is disarmed on resolution) — a second grant for it is
+-- precisely the double-purchase this exists to prevent.
+CREATE UNIQUE INDEX IF NOT EXISTS authorisations_one_live
+  ON authorisations (user_id, mission_id)
+  WHERE status IN ('granted', 'spent');

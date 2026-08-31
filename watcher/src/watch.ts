@@ -33,6 +33,14 @@ export interface Verdict {
   observation: ObservationOut;
   /** Record a run? Only when something happened. */
   run: RunOut | null;
+  /**
+   * Everything a purchase needs is true, says the detection side.
+   *
+   * A verdict, not an action: judge() stays pure, and whether anything is
+   * actually bought is the pass's business — authorisation from the Hub first,
+   * then the cart, then the cart's own numbers get the final word.
+   */
+  buy?: { unitPrice: number; quantity: number } | null;
 }
 
 /**
@@ -195,27 +203,14 @@ export function judge(
     };
   }
 
-  // Everything a purchase needs is true. The one missing piece is the checkout
-  // flow itself, which is written with a browser open and a person watching.
-  // Tax is charged on the order, not rounded onto each unit and then summed —
-  // doing it the other way loses a cent per item and the log stops matching
-  // the receipt.
-  const goods = round2(reading.price * mission.quantity * (1 + settings.taxRate));
+  // Everything a purchase needs is true. This is a verdict, not a purchase:
+  // the pass takes it to the Hub for authorisation, and the cart's own numbers
+  // get the final word before anything is submitted. No run is recorded here —
+  // the buy attempt records the one that says what actually happened.
   return {
     observation,
-    run: {
-      ...base,
-      outcome: 'declined',
-      quantity: mission.quantity,
-      total: goods,
-      reason:
-        `would have bought ${mission.quantity} at ${money(reading.price)} ` +
-        `(${money(goods)} with tax` +
-        (settings.shippingAllowance > 0
-          ? `, plus up to ${money(settings.shippingAllowance)} shipping`
-          : ', shipping must be free') +
-        `) — checkout is not built yet`,
-    },
+    run: null,
+    buy: { unitPrice: reading.price, quantity: Math.max(1, mission.quantity || 1) },
   };
 }
 
@@ -258,6 +253,13 @@ export interface WatchDeps {
    * constructs a pass without one, and so a Watcher with no Hub still runs.
    */
   activity?: Activity;
+  /**
+   * What to do when judge() says everything a purchase needs is true.
+   *
+   * Absent means this Watcher cannot buy — the honest run is recorded instead.
+   * Injectable so the pass can be tested without a Hub, a cart or a card.
+   */
+  buyer?: (mission: Mission, reading: Reading) => Promise<RunOut>;
 }
 
 export interface PassResult {
@@ -319,7 +321,42 @@ export async function pass(missions: Mission[], pacer: Pacer, deps: WatchDeps): 
     }
     result.checked += 1;
 
-    const { observation, run } = judge(mission, reading, deps.hub.settings);
+    const verdict = judge(mission, reading, deps.hub.settings);
+    const { observation } = verdict;
+    let run = verdict.run;
+
+    // The detection side says buy. What happens next is the buy path's story,
+    // and the run it returns is the truth of what happened — bought, dry_run,
+    // duplicate_prevented, or a cart that disagreed with the page.
+    if (verdict.buy) {
+      if (deps.buyer) {
+        try {
+          run = await deps.buyer(mission, reading);
+        } catch (err) {
+          run = {
+            missionId: mission.id,
+            state: reading.state,
+            price: reading.price,
+            sellerKind: reading.seller.kind,
+            sellerName: reading.seller.name,
+            outcome: 'failed',
+            reason: `the buy attempt itself failed: ${(err as Error).message}`,
+          };
+        }
+      } else {
+        run = {
+          missionId: mission.id,
+          state: reading.state,
+          price: reading.price,
+          sellerKind: reading.seller.kind,
+          sellerName: reading.seller.name,
+          outcome: 'declined',
+          reason:
+            `would buy ${verdict.buy.quantity} at ${money(reading.price)} — ` +
+            'buying is not enabled on this Watcher',
+        };
+      }
+    }
 
     // One line per check, whether or not anything happened. This is the half
     // that runs deliberately counter to the rest of the file: a run row is

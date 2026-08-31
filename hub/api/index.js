@@ -693,7 +693,8 @@ var DEFAULT_SETTINGS = {
   activeUntil: "",
   timezone: "",
   paused: false,
-  sweepEveryHours: 24
+  sweepEveryHours: 24,
+  spendCapDay: null
 };
 function isClockTime(v) {
   if (v === "") return true;
@@ -705,6 +706,12 @@ function isClockTime(v) {
   return h >= 0 && h <= 23 && m >= 0 && m <= 59 && parts[0].length === 2 && parts[1].length === 2;
 }
 function validateSettings(s) {
+  if (s.spendCapDay !== void 0 && s.spendCapDay !== null) {
+    if (!Number.isFinite(s.spendCapDay) || s.spendCapDay <= 0) {
+      return "the daily spend cap must be a positive number of dollars";
+    }
+    if (s.spendCapDay > 1e5) return "that daily spend cap does not look like dollars";
+  }
   if (s.taxRate !== void 0) {
     if (!Number.isFinite(s.taxRate) || s.taxRate < 0) return "a tax rate cannot be negative";
     if (s.taxRate > 0.25) {
@@ -767,7 +774,8 @@ async function getSettings(db2, userId) {
     activeUntil: isClockTime(text("activeUntil", "")) ? text("activeUntil", "") : "",
     timezone: text("timezone", ""),
     paused: text("paused", "") === "true",
-    sweepEveryHours: num2("sweepEveryHours", DEFAULT_SETTINGS.sweepEveryHours)
+    sweepEveryHours: num2("sweepEveryHours", DEFAULT_SETTINGS.sweepEveryHours),
+    spendCapDay: map.has("spendCapDay") && Number.isFinite(Number(map.get("spendCapDay"))) && Number(map.get("spendCapDay")) > 0 ? Number(map.get("spendCapDay")) : null
   };
 }
 async function setSettings(db2, userId, patch) {
@@ -781,14 +789,17 @@ async function setSettings(db2, userId, patch) {
     "activeUntil",
     "timezone",
     "paused",
-    "sweepEveryHours"
+    "sweepEveryHours",
+    "spendCapDay"
   ]) {
     const value = patch[key];
     if (value === void 0) continue;
     statements.push({
       text: `INSERT INTO settings (user_id, key, value) VALUES ($1, $2, $3)
              ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
-      params: [userId, key, String(value)]
+      // null clears a key back to unset — for the spend cap, that means
+      // nothing further can be armed until a person sets one again.
+      params: [userId, key, value === null ? "" : String(value)]
     });
   }
   if (statements.length) await db2.batch(statements);
@@ -947,6 +958,129 @@ async function deleteMission(db2, userId, id) {
     [userId, id]
   );
   return rows.length > 0;
+}
+function toAuthorisation(r) {
+  return {
+    id: Number(r.id),
+    missionId: Number(r.mission_id),
+    amount: Number(r.amount),
+    status: String(r.status ?? "granted"),
+    grantedAt: r.granted_at ? new Date(String(r.granted_at)).toISOString() : "",
+    resolvedAt: r.resolved_at ? new Date(String(r.resolved_at)).toISOString() : null,
+    note: String(r.note ?? "")
+  };
+}
+async function committedLast24h(db2, userId) {
+  const rows = await db2.query(
+    `SELECT coalesce(sum(amount), 0) AS sum FROM authorisations
+      WHERE user_id = $1 AND status IN ('granted', 'spent')
+        AND granted_at > now() - interval '24 hours'`,
+    [userId]
+  );
+  return Number(rows[0]?.sum ?? 0);
+}
+async function requestAuthorisation(db2, userId, missionId) {
+  const settings = await getSettings(db2, userId);
+  const cap = settings.spendCapDay;
+  const committed = await committedLast24h(db2, userId);
+  const no = (refusal, reason) => ({
+    granted: false,
+    refusal,
+    reason,
+    committed,
+    cap
+  });
+  const mission = await getMission(db2, userId, missionId);
+  if (!mission || !mission.enabled || !mission.armed) {
+    return no("not_armed", "the Hub does not list this mission as armed");
+  }
+  if (mission.ceiling === null || mission.ceiling <= 0) {
+    return no("no_ceiling", "armed with no price ceiling \u2014 nothing authorises a purchase");
+  }
+  if (cap === null) {
+    return no(
+      "no_spend_cap",
+      "no daily spend cap is set \u2014 set one in Settings before anything may buy"
+    );
+  }
+  const quantity = Math.max(1, mission.quantity || 1);
+  const amount = Math.round((mission.ceiling * quantity + settings.shippingAllowance) * 100) / 100;
+  if (committed + amount > cap) {
+    return no(
+      "budget_exhausted",
+      `$${amount.toFixed(2)} would take the last 24 hours to $${(committed + amount).toFixed(2)}, over the $${cap.toFixed(2)} cap`
+    );
+  }
+  let inserted;
+  try {
+    const rows = await db2.query(
+      `INSERT INTO authorisations (user_id, mission_id, amount, note)
+       VALUES ($1, $2, $3, $4) RETURNING *`,
+      [userId, missionId, amount, `granted against a $${cap.toFixed(2)} daily cap`]
+    );
+    inserted = rows[0];
+  } catch (err) {
+    if (/authorisations_one_live|duplicate key/i.test(err.message)) {
+      return no(
+        "duplicate_prevented",
+        "a live authorisation already exists for this mission \u2014 nothing buys twice"
+      );
+    }
+    throw err;
+  }
+  if (!inserted) {
+    return no("duplicate_prevented", "the grant could not be recorded \u2014 refusing rather than guessing");
+  }
+  const after = await committedLast24h(db2, userId);
+  if (after > cap) {
+    await db2.query(
+      `UPDATE authorisations SET status = 'released', resolved_at = now(),
+              note = note || ' \u2014 released: lost the race to the daily cap'
+        WHERE user_id = $1 AND id = $2`,
+      [userId, Number(inserted.id)]
+    );
+    return {
+      granted: false,
+      refusal: "budget_exhausted",
+      reason: `concurrent grants would take the last 24 hours to $${after.toFixed(2)}, over the cap`,
+      committed: after - amount,
+      cap
+    };
+  }
+  return {
+    granted: true,
+    authorisation: toAuthorisation(inserted),
+    reason: "",
+    committed: after,
+    cap
+  };
+}
+async function resolveAuthorisation(db2, userId, id, result, note) {
+  const rows = await db2.query(
+    `UPDATE authorisations
+        SET status = $3, resolved_at = now(),
+            note = CASE WHEN $4 = '' THEN note ELSE left($4, 300) END
+      WHERE user_id = $1 AND id = $2 AND status = 'granted'
+      RETURNING *`,
+    [userId, id, result, note]
+  );
+  const row = rows[0];
+  if (!row) return null;
+  if (result === "spent") {
+    await db2.query("UPDATE missions SET armed = false WHERE user_id = $1 AND id = $2", [
+      userId,
+      Number(row.mission_id)
+    ]);
+  }
+  return toAuthorisation(row);
+}
+async function openAuthorisations(db2, userId) {
+  const rows = await db2.query(
+    `SELECT * FROM authorisations WHERE user_id = $1 AND status = 'granted'
+      ORDER BY granted_at DESC`,
+    [userId]
+  );
+  return rows.map(toAuthorisation);
 }
 async function startRun(db2, userId, missionId) {
   const owns = await db2.query(
@@ -2105,6 +2239,17 @@ ${FONTS}<style>${STYLE}</style></head>
     </form>
   </div>
 
+  <!-- A live grant is money committed: a buy in progress, or a Watcher that
+       died mid-checkout. Both deserve the top of the page. Releasing is the
+       recovery path for the second one \u2014 after a look at the orders page,
+       because a grant nobody resolved means nobody knows whether money moved. -->
+  <div class="card" id="money-banner" hidden
+       style="border-color:rgba(240,197,107,.35); background:rgba(240,197,107,.07)">
+    <div class="name">Money is committed</div>
+    <div class="meta" id="money-banner-detail"></div>
+    <div id="money-banner-list"></div>
+  </div>
+
   <div class="card" id="paused-banner" hidden
        style="border-color:rgba(240,131,107,.35); background:rgba(240,131,107,.08)">
     <div class="name">Everything is paused</div>
@@ -2188,6 +2333,10 @@ ${FONTS}<style>${STYLE}</style></head>
           <label class="f">Shipping allowance
             <span class="hint">per order, on top of the ceiling</span>
             <input type="number" name="shippingAllowance" step="0.01" min="0" placeholder="0.00">
+          </label>
+          <label class="f">Most to spend in 24 hours
+            <span class="hint">in dollars \u2014 nothing can be armed without this</span>
+            <input type="number" name="spendCapDay" step="0.01" min="0" placeholder="unset">
           </label>
         </div>
         <p class="sub" style="margin:0">
@@ -2771,6 +2920,13 @@ function missionPanel(m) {
   const armed = q('armed');
   const warn = el('div', 'msg');
   armed.addEventListener('change', () => {
+    const noCap = !(DATA.settings && DATA.settings.spendCapDay);
+    if (armed.checked && noCap) {
+      armed.checked = false;
+      warn.textContent = 'set a daily spend cap in Settings first \u2014 ' +
+        'the cap is what bounds a night, and nothing arms without one';
+      return;
+    }
     warn.textContent = armed.checked
       ? 'This mission will buy on its own. It needs a price ceiling.'
       : '';
@@ -3156,6 +3312,10 @@ function render() {
   if (document.activeElement !== sf.querySelector('[name=shippingAllowance]')) {
     sf.querySelector('[name=shippingAllowance]').value = st.shippingAllowance || '';
   }
+  if (document.activeElement !== sf.querySelector('[name=spendCapDay]')) {
+    sf.querySelector('[name=spendCapDay]').value =
+      st.spendCapDay === null || st.spendCapDay === undefined ? '' : st.spendCapDay;
+  }
 
   renderFinds();
 
@@ -3172,6 +3332,7 @@ function render() {
   hf.querySelector('[name=paused]').checked = !!st.paused;
 
   // Say it where it cannot be missed, not only on the tab nobody opens.
+  renderMoney();
   const banner = document.getElementById('paused-banner');
   banner.hidden = !st.paused;
 
@@ -3585,6 +3746,52 @@ function renderFinds() {
   }
 }
 
+function renderMoney() {
+  const banner = document.getElementById('money-banner');
+  if (!banner) return;
+  const open = DATA.authorisations || [];
+  banner.hidden = open.length === 0;
+  if (open.length === 0) return;
+
+  const cap = DATA.settings && DATA.settings.spendCapDay;
+  document.getElementById('money-banner-detail').textContent =
+    '$' + Number(DATA.committed || 0).toFixed(2) + ' of ' +
+    (cap ? '$' + Number(cap).toFixed(2) : 'no cap') +
+    ' is committed by ' + open.length + (open.length === 1 ? ' grant' : ' grants') +
+    '. A grant is a buy in progress, or a Watcher that died mid-checkout.';
+
+  const list = document.getElementById('money-banner-list');
+  list.textContent = '';
+  for (const a of open) {
+    const m = (DATA.missions || []).find((x) => x.id === a.missionId);
+    const row = el('div', 'actions');
+    row.style.marginTop = '10px';
+    row.appendChild(el('span', 'meta',
+      '$' + Number(a.amount).toFixed(2) + ' \u2014 ' + (m ? m.productName : 'mission ' + a.missionId) +
+      ' \u2014 granted ' + new Date(a.grantedAt).toLocaleTimeString()));
+    const release = el('button', 'small danger', 'Release');
+    release.addEventListener('click', async (e) => {
+      // Deliberate friction, in words: releasing says "I looked, nothing was
+      // bought". The confirm is the look.
+      // No newline escapes in this string: the page ships inside a template
+      // literal, which eats the backslash and drops a raw newline into the
+      // middle of a quoted string. That mistake has now been made six times.
+      if (!window.confirm(
+        'Release this $' + Number(a.amount).toFixed(2) + ' grant? ' +
+        'Only do this after checking your ' + (m ? m.retailer : '') + ' orders page. ' +
+        'If an order DID go through, the money is spent whatever this button says.')) return;
+      await withButton(e.target, 'Releasing\u2026', null, async () => {
+        await api('POST', '/api/authorisations/' + a.id + '/resolve',
+          { result: 'released', note: 'released by hand from the app' });
+        load();
+        return 'released';
+      });
+    });
+    row.appendChild(release);
+    list.appendChild(row);
+  }
+}
+
 async function load() {
   try {
     DATA = await api('GET', '/api/dashboard');
@@ -3672,6 +3879,8 @@ document.getElementById('settings-form').addEventListener('submit', async (e) =>
     await api('POST', '/api/settings', {
       taxRate: Math.round(percent * 1000) / 100000,
       shippingAllowance: Number(f.shippingAllowance || 0),
+      // Blank clears the cap \u2014 and with it, the ability to arm anything new.
+      spendCapDay: f.spendCapDay === '' ? null : Number(f.spendCapDay),
     });
     load();
     return 'saved \u2014 applies to every mission';
@@ -4045,6 +4254,8 @@ function createHandler(db2, env2) {
       ]);
       const sweep = await sweepState(db2, userId, SWEEP_SOURCE, settings.sweepEveryHours);
       const you = await userHandle(db2, userId);
+      const authorisations = await openAuthorisations(db2, userId);
+      const committed = await committedLast24h(db2, userId);
       return json({
         missions,
         runs,
@@ -4055,7 +4266,9 @@ function createHandler(db2, env2) {
         discoveries,
         sweep,
         now,
-        you
+        you,
+        authorisations,
+        committed
       });
     }
     if (request.method === "GET" && path.startsWith("/api/missions/") && path.endsWith("/runs")) {
@@ -4162,11 +4375,39 @@ function createHandler(db2, env2) {
     if (request.method === "POST" && path === "/api/missions") {
       const b = await body();
       if (!b) return json({ error: "body must be JSON" }, 400);
+      if (b.armed === true) {
+        const current = await getSettings(db2, userId);
+        if (current.spendCapDay === null) {
+          return json(
+            {
+              error: 'nothing can be armed until a daily spend cap is set \u2014 Settings \u2192 "Most to spend in 24 hours"'
+            },
+            400
+          );
+        }
+      }
       try {
         return json({ mission: await upsertMission(db2, userId, b) });
       } catch (err) {
         return json({ error: err.message }, 400);
       }
+    }
+    if (request.method === "POST" && path === "/api/authorise") {
+      const b = await body();
+      const missionId = Number(b?.missionId);
+      if (!Number.isInteger(missionId)) return json({ error: "need missionId" }, 400);
+      const result = await requestAuthorisation(db2, userId, missionId);
+      return json(result, result.granted ? 201 : 200);
+    }
+    if (request.method === "POST" && path.startsWith("/api/authorisations/") && path.endsWith("/resolve")) {
+      const id = Number(path.split("/")[3]);
+      if (!Number.isInteger(id)) return json({ error: "bad authorisation id" }, 400);
+      const b = await body();
+      const result = b?.result === "spent" ? "spent" : b?.result === "released" ? "released" : null;
+      if (!result) return json({ error: "result must be 'spent' or 'released'" }, 400);
+      const row = await resolveAuthorisation(db2, userId, id, result, String(b?.note ?? ""));
+      if (!row) return json({ error: "no live authorisation with that id" }, 404);
+      return json({ authorisation: row });
     }
     if (request.method === "POST" && path.endsWith("/check-now") && path.startsWith("/api/missions/")) {
       const id = Number(path.split("/")[3]);

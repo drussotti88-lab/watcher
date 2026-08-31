@@ -212,8 +212,14 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       // page, because "which account am I looking at" is exactly the question
       // you need answered correctly when the answer is surprising.
       const you = await store.userHandle(db, userId);
+      // The money picture: what is committed right now, and any grant still
+      // open. An open grant on the dashboard is either a buy in progress or a
+      // Watcher that died mid-checkout — both worth seeing at a glance.
+      const authorisations = await store.openAuthorisations(db, userId);
+      const committed = await store.committedLast24h(db, userId);
       return json({
         missions, runs, changes, products, listings, settings, discoveries, sweep, now, you,
+        authorisations, committed,
       });
     }
 
@@ -386,12 +392,68 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
     if (request.method === 'POST' && path === '/api/missions') {
       const b = await body<store.MissionInput>();
       if (!b) return json({ error: 'body must be JSON' }, 400);
+
+      // The arm gate. A mission may not be armed until a daily spend cap
+      // exists, because the cap is what bounds a night's worst case — per-
+      // mission ceilings bound one purchase, and six ceilings at once is
+      // exactly the morning the cap exists to prevent. Checked here rather
+      // than in the store so the refusal can say what to do about it.
+      if (b.armed === true) {
+        const current = await store.getSettings(db, userId);
+        if (current.spendCapDay === null) {
+          return json(
+            {
+              error:
+                'nothing can be armed until a daily spend cap is set — ' +
+                'Settings → "Most to spend in 24 hours"',
+            },
+            400,
+          );
+        }
+      }
+
       try {
         return json({ mission: await store.upsertMission(db, userId, b) });
       } catch (err) {
         // validateMission speaks in sentences, so pass it straight through.
         return json({ error: (err as Error).message }, 400);
       }
+    }
+
+    /**
+     * Permission to spend. The Watcher asks; this is the only yes there is.
+     *
+     * Deliberately allowed for both callers: the Watcher asks for real, and a
+     * signed-in browser may ask to see what the answer would be. The grant
+     * itself is idempotent-hostile on purpose — one live grant per mission,
+     * ever, until something resolves it.
+     */
+    if (request.method === 'POST' && path === '/api/authorise') {
+      const b = await body<{ missionId?: number }>();
+      const missionId = Number(b?.missionId);
+      if (!Number.isInteger(missionId)) return json({ error: 'need missionId' }, 400);
+      const result = await store.requestAuthorisation(db, userId, missionId);
+      return json(result, result.granted ? 201 : 200);
+    }
+
+    /**
+     * What became of a grant. 'spent' also disarms the mission — a mission is
+     * a pre-authorisation for one purchase, and the purchase happened.
+     *
+     * A grant that is never resolved stays live and keeps counting against the
+     * cap. That is the fail-closed answer to a Watcher dying mid-checkout:
+     * nobody knows whether money moved, so the money stays committed until a
+     * person looks at their orders page and releases it by hand.
+     */
+    if (request.method === 'POST' && path.startsWith('/api/authorisations/') && path.endsWith('/resolve')) {
+      const id = Number(path.split('/')[3]);
+      if (!Number.isInteger(id)) return json({ error: 'bad authorisation id' }, 400);
+      const b = await body<{ result?: string; note?: string }>();
+      const result = b?.result === 'spent' ? 'spent' : b?.result === 'released' ? 'released' : null;
+      if (!result) return json({ error: "result must be 'spent' or 'released'" }, 400);
+      const row = await store.resolveAuthorisation(db, userId, id, result, String(b?.note ?? ''));
+      if (!row) return json({ error: 'no live authorisation with that id' }, 404);
+      return json({ authorisation: row });
     }
 
     /**

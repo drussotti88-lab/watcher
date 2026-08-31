@@ -860,6 +860,14 @@ export interface Settings {
    * often spends requests on a catalogue that has not changed.
    */
   sweepEveryHours: number;
+  /**
+   * The most that may be authorised in any rolling 24 hours, in dollars.
+   *
+   * Null means unset, and unset means nothing can be armed. The cap is checked
+   * here, at grant time, against the sum of live authorisations — never on the
+   * Watcher, whose process can die and forget.
+   */
+  spendCapDay: number | null;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -870,6 +878,7 @@ export const DEFAULT_SETTINGS: Settings = {
   timezone: '',
   paused: false,
   sweepEveryHours: 24,
+  spendCapDay: null,
 };
 
 /** HH:MM, 24-hour, or blank. Deliberately strict: a half-parsed time is worse. */
@@ -884,6 +893,12 @@ export function isClockTime(v: string): boolean {
 }
 
 export function validateSettings(s: Partial<Settings>): string | null {
+  if (s.spendCapDay !== undefined && s.spendCapDay !== null) {
+    if (!Number.isFinite(s.spendCapDay) || s.spendCapDay <= 0) {
+      return 'the daily spend cap must be a positive number of dollars';
+    }
+    if (s.spendCapDay > 100_000) return 'that daily spend cap does not look like dollars';
+  }
   if (s.taxRate !== undefined) {
     if (!Number.isFinite(s.taxRate) || s.taxRate < 0) return 'a tax rate cannot be negative';
     // A rate above 25% is almost certainly 9.75 typed where 0.0975 was meant,
@@ -956,6 +971,9 @@ export async function getSettings(db: Sql, userId: number): Promise<Settings> {
     timezone: text('timezone', ''),
     paused: text('paused', '') === 'true',
     sweepEveryHours: num('sweepEveryHours', DEFAULT_SETTINGS.sweepEveryHours),
+    spendCapDay: map.has('spendCapDay') && Number.isFinite(Number(map.get('spendCapDay'))) && Number(map.get('spendCapDay')) > 0
+      ? Number(map.get('spendCapDay'))
+      : null,
   };
 }
 
@@ -976,13 +994,16 @@ export async function setSettings(
     'timezone',
     'paused',
     'sweepEveryHours',
+    'spendCapDay',
   ] as const) {
     const value = patch[key];
     if (value === undefined) continue;
     statements.push({
       text: `INSERT INTO settings (user_id, key, value) VALUES ($1, $2, $3)
              ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
-      params: [userId, key, String(value)],
+      // null clears a key back to unset — for the spend cap, that means
+      // nothing further can be armed until a person sets one again.
+      params: [userId, key, value === null ? '' : String(value)],
     });
   }
   if (statements.length) await db.batch(statements);
@@ -1234,9 +1255,238 @@ export async function deleteMission(db: Sql, userId: number, id: number): Promis
   return rows.length > 0;
 }
 
+// ─── Authorisations: permission to spend, granted in exactly one place ───────
+
+export type AuthorisationStatus = 'granted' | 'spent' | 'released';
+
+export interface AuthorisationRow {
+  id: number;
+  missionId: number;
+  amount: number;
+  status: AuthorisationStatus;
+  grantedAt: string;
+  resolvedAt: string | null;
+  note: string;
+}
+
+export type AuthoriseRefusal =
+  | 'not_armed'
+  | 'no_ceiling'
+  | 'no_spend_cap'
+  | 'duplicate_prevented'
+  | 'budget_exhausted';
+
+export interface AuthoriseResult {
+  granted: boolean;
+  authorisation?: AuthorisationRow;
+  refusal?: AuthoriseRefusal;
+  reason: string;
+  /** What the last 24 hours already hold, so a refusal can show its working. */
+  committed: number;
+  cap: number | null;
+}
+
+function toAuthorisation(r: Record<string, unknown>): AuthorisationRow {
+  return {
+    id: Number(r.id),
+    missionId: Number(r.mission_id),
+    amount: Number(r.amount),
+    status: String(r.status ?? 'granted') as AuthorisationStatus,
+    grantedAt: r.granted_at ? new Date(String(r.granted_at)).toISOString() : '',
+    resolvedAt: r.resolved_at ? new Date(String(r.resolved_at)).toISOString() : null,
+    note: String(r.note ?? ''),
+  };
+}
+
+/** Live grants — money that is committed until something resolves it. */
+export async function committedLast24h(db: Sql, userId: number): Promise<number> {
+  const rows = await db.query<{ sum: string }>(
+    `SELECT coalesce(sum(amount), 0) AS sum FROM authorisations
+      WHERE user_id = $1 AND status IN ('granted', 'spent')
+        AND granted_at > now() - interval '24 hours'`,
+    [userId],
+  );
+  return Number(rows[0]?.sum ?? 0);
+}
+
+/**
+ * May this mission spend, right now? The one place that answer comes from.
+ *
+ * The amount is computed here from the Hub's own mission row — ceiling ×
+ * quantity plus the shipping allowance — because the Watcher's opinion of what
+ * it is about to spend is not evidence. Every refusal names itself, and the
+ * two that matter most are load-bearing:
+ *
+ *   duplicate_prevented   the partial unique index found a live grant already.
+ *                         Four checks racing, or a Watcher restarted mid-buy,
+ *                         all collide here and nobody buys twice.
+ *   budget_exhausted      the 24-hour sum of live grants would pass the cap.
+ *
+ * ── The race on the cap, and why the insert is optimistic ───────────────────
+ *
+ * Two authorisations for two different missions can pass the sum check
+ * concurrently and both insert. So the sum is re-checked AFTER inserting, with
+ * our own row included; whoever finds the total over the cap releases their
+ * own grant and reports budget_exhausted. Both may release — that wastes an
+ * authorisation, never money, which is the direction to fail in. The invariant
+ * that holds: no grant survives whose keeper saw a total over the cap.
+ */
+export async function requestAuthorisation(
+  db: Sql,
+  userId: number,
+  missionId: number,
+): Promise<AuthoriseResult> {
+  const settings = await getSettings(db, userId);
+  const cap = settings.spendCapDay;
+  const committed = await committedLast24h(db, userId);
+  const no = (refusal: AuthoriseRefusal, reason: string): AuthoriseResult => ({
+    granted: false,
+    refusal,
+    reason,
+    committed,
+    cap,
+  });
+
+  const mission = await getMission(db, userId, missionId);
+  if (!mission || !mission.enabled || !mission.armed) {
+    return no('not_armed', 'the Hub does not list this mission as armed');
+  }
+  if (mission.ceiling === null || mission.ceiling <= 0) {
+    return no('no_ceiling', 'armed with no price ceiling — nothing authorises a purchase');
+  }
+  if (cap === null) {
+    return no(
+      'no_spend_cap',
+      'no daily spend cap is set — set one in Settings before anything may buy',
+    );
+  }
+
+  const quantity = Math.max(1, mission.quantity || 1);
+  const amount = Math.round((mission.ceiling * quantity + settings.shippingAllowance) * 100) / 100;
+
+  if (committed + amount > cap) {
+    return no(
+      'budget_exhausted',
+      `$${amount.toFixed(2)} would take the last 24 hours to ` +
+        `$${(committed + amount).toFixed(2)}, over the $${cap.toFixed(2)} cap`,
+    );
+  }
+
+  let inserted: Record<string, unknown> | undefined;
+  try {
+    const rows = await db.query(
+      `INSERT INTO authorisations (user_id, mission_id, amount, note)
+       VALUES ($1, $2, $3, $4) RETURNING *`,
+      [userId, missionId, amount, `granted against a $${cap.toFixed(2)} daily cap`],
+    );
+    inserted = rows[0];
+  } catch (err) {
+    // The partial unique index. A live grant already exists for this mission,
+    // which is the duplicate lock doing its one job.
+    if (/authorisations_one_live|duplicate key/i.test((err as Error).message)) {
+      return no(
+        'duplicate_prevented',
+        'a live authorisation already exists for this mission — nothing buys twice',
+      );
+    }
+    throw err;
+  }
+  if (!inserted) {
+    return no('duplicate_prevented', 'the grant could not be recorded — refusing rather than guessing');
+  }
+
+  // The post-insert re-check described above. Our own row is in this sum.
+  const after = await committedLast24h(db, userId);
+  if (after > cap) {
+    await db.query(
+      `UPDATE authorisations SET status = 'released', resolved_at = now(),
+              note = note || ' — released: lost the race to the daily cap'
+        WHERE user_id = $1 AND id = $2`,
+      [userId, Number(inserted.id)],
+    );
+    return {
+      granted: false,
+      refusal: 'budget_exhausted',
+      reason: `concurrent grants would take the last 24 hours to $${after.toFixed(2)}, over the cap`,
+      committed: after - amount,
+      cap,
+    };
+  }
+
+  return {
+    granted: true,
+    authorisation: toAuthorisation(inserted),
+    reason: '',
+    committed: after,
+    cap,
+  };
+}
+
+/**
+ * The Watcher says what became of a grant.
+ *
+ * 'spent' also disarms the mission: a mission is a pre-authorisation for ONE
+ * purchase, and the purchase happened. Re-arming is a decision a person makes
+ * in the app, never something a successful buy rolls into.
+ *
+ * Only 'granted' rows can be resolved, and only once — resolving is how a
+ * grant stops counting against the cap ('released') or becomes a permanent
+ * record ('spent'), and neither transition may be repeated or reversed.
+ */
+export async function resolveAuthorisation(
+  db: Sql,
+  userId: number,
+  id: number,
+  result: 'spent' | 'released',
+  note: string,
+): Promise<AuthorisationRow | null> {
+  const rows = await db.query(
+    `UPDATE authorisations
+        SET status = $3, resolved_at = now(),
+            note = CASE WHEN $4 = '' THEN note ELSE left($4, 300) END
+      WHERE user_id = $1 AND id = $2 AND status = 'granted'
+      RETURNING *`,
+    [userId, id, result, note],
+  );
+  const row = rows[0];
+  if (!row) return null;
+
+  if (result === 'spent') {
+    await db.query('UPDATE missions SET armed = false WHERE user_id = $1 AND id = $2', [
+      userId,
+      Number(row.mission_id),
+    ]);
+  }
+  return toAuthorisation(row);
+}
+
+/** Grants still live, for the dashboard — and for a person to release a stuck one. */
+export async function openAuthorisations(db: Sql, userId: number): Promise<AuthorisationRow[]> {
+  const rows = await db.query(
+    `SELECT * FROM authorisations WHERE user_id = $1 AND status = 'granted'
+      ORDER BY granted_at DESC`,
+    [userId],
+  );
+  return rows.map(toAuthorisation);
+}
+
 // ─── Mission runs ────────────────────────────────────────────────────────────
 
-export type RunOutcome = 'running' | 'in_stock' | 'bought' | 'declined' | 'failed' | 'blocked';
+export type RunOutcome =
+  | 'running'
+  | 'in_stock'
+  | 'bought'
+  | 'declined'
+  | 'failed'
+  | 'blocked'
+  // The buy path's own vocabulary. Distinct values rather than reasons inside
+  // 'declined', because "how often did the duplicate lock fire" is a question
+  // the history has to answer without string-matching.
+  | 'dry_run'
+  | 'duplicate_prevented'
+  | 'budget_exhausted'
+  | 'price_exceeded'
+  | 'not_authorised';
 
 export interface RunRow {
   id: number;

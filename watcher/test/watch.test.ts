@@ -135,7 +135,8 @@ test('a mission allowing any seller does not refuse on the seller', () => {
     mission({ armed: true, ceiling: 80, sellerPolicy: 'any' }),
     reading({ state: 'in', price: 73.76, seller: { kind: 'marketplace', name: 'Rares' } }),
   );
-  assert.match(v.run!.reason, /would have bought/);
+  assert.ok(v.buy, 'the verdict is buy');
+  assert.equal(v.run, null, 'and the buy path records the run, not judge()');
 });
 
 test('an unknown seller is refused by a retailer-only mission', () => {
@@ -171,7 +172,7 @@ test('a price over the ceiling is refused, and the reason names both numbers', (
 
 test('the ceiling is inclusive — exactly at it is allowed', () => {
   const v = judge(mission({ armed: true, ceiling: 49.99 }), reading({ state: 'in', price: 49.99 }));
-  assert.match(v.run!.reason, /would have bought/);
+  assert.ok(v.buy, 'exactly at the ceiling is a buy verdict');
 });
 
 test('an inferred reading is not good enough to spend on', () => {
@@ -183,18 +184,18 @@ test('an inferred reading is not good enough to spend on', () => {
   assert.match(v.run!.reason, /not exact/);
 });
 
-test('a would-be purchase is declined honestly, with the total', () => {
-  // Checkout does not exist yet. Saying "bought" here would be a lie the
-  // history could not be un-told.
+test('EVERYTHING TRUE IS A VERDICT, NOT A PURCHASE', () => {
+  // judge() stays pure. It says "everything a purchase needs is true" and
+  // hands the price and quantity to the pass — authorisation from the Hub and
+  // the cart's own numbers come after, and the run that gets recorded is the
+  // buy path's account of what actually happened.
   const v = judge(
     mission({ armed: true, ceiling: 60, quantity: 2 }),
     reading({ state: 'in', price: 49.99 }),
   );
-  assert.equal(v.run?.outcome, 'declined');
-  assert.equal(v.run?.quantity, 2);
-  assert.equal(v.run?.total, 99.98);
-  assert.match(v.run!.reason, /would have bought 2 at \$49\.99 \(\$99\.98 with tax/);
-  assert.match(v.run!.reason, /checkout is not built yet/);
+  assert.deepEqual(v.buy, { unitPrice: 49.99, quantity: 2 });
+  assert.equal(v.run, null);
+  assert.ok(v.observation, 'the reading still reaches the Hub either way');
 });
 
 // ── The ceiling means item + tax ─────────────────────────────────────────────
@@ -228,34 +229,19 @@ test('with no tax rate set, the listed price is judged as-is', () => {
     reading({ state: 'in', price: 29.99 }),
     taxed(0),
   );
-  assert.match(v.run!.reason, /would have bought/);
+  assert.ok(v.buy, 'within the ceiling as-is, so the verdict is buy');
 });
 
-test('the would-be total is the tax-inclusive one, not the sticker', () => {
+test('a buy verdict carries the observed price, not a tax-adjusted one', () => {
+  // The tax adjustment belongs to the ceiling comparison; what the buy path
+  // needs is what the page said, because the cart's own tax line is the real
+  // number and verifyCart judges against that.
   const v = judge(
     mission({ armed: true, ceiling: 60, quantity: 2 }),
     reading({ state: 'in', price: 49.99 }),
     taxed(0.0975),
   );
-  assert.equal(v.run?.total, 109.73, '49.99 + tax, times two');
-});
-
-test('a shipping allowance is stated in the reason, and its absence is too', () => {
-  // "Shipping must be free" is a real constraint and the log should say so
-  // rather than leaving it out and looking like it does not apply.
-  const withAllowance = judge(
-    mission({ armed: true, ceiling: 60 }),
-    reading({ state: 'in', price: 49.99 }),
-    taxed(0, 9.99),
-  );
-  assert.match(withAllowance.run!.reason, /plus up to \$9\.99 shipping/);
-
-  const none = judge(
-    mission({ armed: true, ceiling: 60 }),
-    reading({ state: 'in', price: 49.99 }),
-    taxed(0, 0),
-  );
-  assert.match(none.run!.reason, /shipping must be free/);
+  assert.deepEqual(v.buy, { unitPrice: 49.99, quantity: 2 });
 });
 
 test('nothing judge() can return ever says bought', () => {
@@ -547,13 +533,13 @@ test('the pre-order reason beats the price reason', () => {
   assert.ok(!run!.reason.includes('ceiling'));
 });
 
-test('a mission told to allow pre-orders buys one', () => {
-  const { run } = judge(
+test('a mission told to allow pre-orders gets a buy verdict for one', () => {
+  const v = judge(
     mission({ armed: true, ceiling: 60, preOrderPolicy: 'allow' }),
     preordered(),
   );
-  assert.equal(run?.outcome, 'declined');
-  assert.match(run!.reason, /would have bought/, 'declined only because checkout is unbuilt');
+  assert.ok(v.buy, 'allow means allow');
+  assert.equal(v.run, null);
 });
 
 test('a pre-order with no date still says so', () => {
@@ -567,8 +553,8 @@ test('a pre-order with no date still says so', () => {
 });
 
 test('an ordinary in-stock item is untouched by any of this', () => {
-  const { run } = judge(mission({ armed: true, ceiling: 60 }), reading({ state: 'in' }));
-  assert.match(run!.reason, /would have bought/);
+  const v = judge(mission({ armed: true, ceiling: 60 }), reading({ state: 'in' }));
+  assert.ok(v.buy, 'plain stock inside the ceiling is a buy verdict');
 });
 
 test('a watching-only mission still just reports a pre-order', () => {
@@ -576,4 +562,74 @@ test('a watching-only mission still just reports a pre-order', () => {
   // to make and should not start inventing one.
   const { run } = judge(mission({ armed: false }), preordered());
   assert.equal(run?.outcome, 'in_stock');
+});
+
+// ── The pass hands a buy verdict to the buyer ────────────────────────────────
+
+test('THE PASS INVOKES THE BUYER ON A BUY VERDICT, AND RECORDS ITS RUN', async () => {
+  const bought: string[] = [];
+  const { hub, runs } = recorder();
+  const result = await pass(
+    [mission({ armed: true, ceiling: 60 })],
+    new Pacer(STEADY, () => 0),
+    {
+      browser,
+      hub,
+      read: reads(() => reading({ state: 'in', price: 49.99 })),
+      buyer: async (m) => {
+        bought.push(m.productName);
+        return {
+          missionId: m.id, outcome: 'dry_run', reason: 'stopped before the button',
+          state: 'in', price: 49.99, sellerKind: 'retailer', sellerName: 'Target',
+        };
+      },
+    },
+  );
+  assert.equal(bought.length, 1, 'the buyer was handed the verdict');
+  assert.equal(result.runs, 1);
+  assert.equal(runs[0]?.outcome, 'dry_run');
+});
+
+test('a Watcher with no buyer still records the honest decline', async () => {
+  const { hub, runs } = recorder();
+  await pass(
+    [mission({ armed: true, ceiling: 60 })],
+    new Pacer(STEADY, () => 0),
+    { browser, hub, read: reads(() => reading({ state: 'in', price: 49.99 })) },
+  );
+  assert.equal(runs[0]?.outcome, 'declined');
+  assert.match(runs[0]!.reason, /buying is not enabled on this Watcher/);
+});
+
+test('a buyer that throws becomes a failed run, not a dead pass', async () => {
+  const { hub, runs } = recorder();
+  const result = await pass(
+    [mission({ armed: true, ceiling: 60 })],
+    new Pacer(STEADY, () => 0),
+    {
+      browser,
+      hub,
+      read: reads(() => reading({ state: 'in', price: 49.99 })),
+      buyer: async () => { throw new Error('the buy machinery exploded'); },
+    },
+  );
+  assert.equal(result.checked, 1, 'the pass survives');
+  assert.equal(runs[0]?.outcome, 'failed');
+  assert.match(runs[0]!.reason, /the buy attempt itself failed/);
+});
+
+test('a watching-only mission never reaches the buyer', async () => {
+  let invoked = 0;
+  const { hub } = recorder();
+  await pass(
+    [mission({ armed: false })],
+    new Pacer(STEADY, () => 0),
+    {
+      browser,
+      hub,
+      read: reads(() => reading({ state: 'in', price: 49.99 })),
+      buyer: async () => { invoked += 1; return {} as never; },
+    },
+  );
+  assert.equal(invoked, 0, 'watching means watching');
 });

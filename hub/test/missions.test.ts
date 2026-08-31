@@ -134,6 +134,9 @@ test('a new mission watches and does not buy', async () => {
 
 test('ARMING WITHOUT A CEILING IS REFUSED — an open cheque is not a mandate', async () => {
   const { db, listingId } = await withMission();
+  // A cap exists, so the refusal under test is the ceiling one. Arming with
+  // no cap at all is its own refusal, tested in authorise.test.ts.
+  await store.setSettings(db, USER, { spendCapDay: 500 });
   const { status, body } = await call(db, 'POST', '/api/missions', { listingId, armed: true });
   assert.equal(status, 400);
   assert.match(body.error, /ceiling before arming/);
@@ -145,6 +148,7 @@ test('ARMING WITHOUT A CEILING IS REFUSED — an open cheque is not a mandate', 
 
 test('arming with a ceiling is allowed', async () => {
   const { db, listingId } = await withMission();
+  await store.setSettings(db, USER, { spendCapDay: 500 });
   const { status, body } = await call(db, 'POST', '/api/missions', {
     listingId,
     armed: true,
@@ -175,6 +179,7 @@ test('nonsense mandates are refused in words', async () => {
 
 test('ONE MISSION PER LISTING — two armed missions is two purchases', async () => {
   const { db, listingId } = await withMission();
+  await store.setSettings(db, USER, { spendCapDay: 500 });
   await call(db, 'POST', '/api/missions', { listingId, armed: true, ceiling: 40 });
   await call(db, 'POST', '/api/missions', { listingId, armed: true, ceiling: 60 });
 
@@ -346,6 +351,7 @@ test('the dashboard hands the page everything it renders, in one request', async
 
 test('active missions are what the Watcher polls, and carry the mandate', async () => {
   const { db, listingId } = await withMission();
+  await store.setSettings(db, USER, { spendCapDay: 500 });
   await call(db, 'POST', '/api/missions', { listingId, armed: true, ceiling: 49.99, quantity: 2 });
 
   const { body } = await call(db, 'GET', '/api/missions/active');

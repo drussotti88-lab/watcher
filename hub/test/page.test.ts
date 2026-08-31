@@ -312,7 +312,9 @@ test('an empty ceiling is sent as null, never as an empty string', async () => {
 });
 
 test('ticking Armed warns before anything is saved', async () => {
-  const h = await boot();
+  // With a spend cap in place — without one the tick now refuses outright,
+  // which its own test covers below.
+  const h = await boot({ ...DASHBOARD, settings: { taxRate: 0, shippingAllowance: 0, spendCapDay: 200 } });
   const form = $(h, 'form[data-mission="1"]');
   const armed = form.querySelector('[name=armed]');
   armed.checked = true;
@@ -1906,4 +1908,86 @@ test('a find with no price is not compared to anything', async () => {
   assert.ok(!findPills(h).some((p) => p.includes('usual price')));
   // The reference is still worth showing — it is about the kind, not the price.
   assert.match(h.doc.querySelector('#finds-list .meta')?.textContent ?? '', /usually \$24\.99/);
+});
+
+// ── Money on the page ────────────────────────────────────────────────────────
+
+test('AN OPEN GRANT PUTS A BANNER AT THE TOP, WITH A RELEASE PATH', async () => {
+  // A live grant is either a buy in progress or a Watcher that died between
+  // add-to-cart and the button. The second one is invisible everywhere else.
+  const h = await boot({
+    ...DASHBOARD,
+    settings: { taxRate: 0, shippingAllowance: 0, spendCapDay: 200 },
+    committed: 65,
+    authorisations: [
+      { id: 42, missionId: 1, amount: 65, status: 'granted',
+        grantedAt: new Date().toISOString(), resolvedAt: null, note: '' },
+    ],
+  });
+  const banner = h.doc.getElementById('money-banner');
+  assert.equal(banner?.hidden, false);
+  assert.match($(h, '#money-banner-detail').textContent, /\$65\.00 of \$200\.00/);
+  assert.match($(h, '#money-banner').textContent, /Pitch Black ETB/, 'names the mission');
+  assert.ok([...banner!.querySelectorAll('button')].some((b) => b.textContent === 'Release'));
+});
+
+test('no open grants, no banner', async () => {
+  const h = await boot({ ...DASHBOARD, authorisations: [], committed: 0 });
+  assert.equal(h.doc.getElementById('money-banner')?.hidden, true);
+});
+
+test('releasing a grant asks for the look first, then resolves it', async () => {
+  const h = await boot({
+    ...DASHBOARD,
+    settings: { taxRate: 0, shippingAllowance: 0, spendCapDay: 200 },
+    committed: 65,
+    authorisations: [
+      { id: 42, missionId: 1, amount: 65, status: 'granted',
+        grantedAt: new Date().toISOString(), resolvedAt: null, note: '' },
+    ],
+  });
+  // Declining the confirm must do nothing at all.
+  (h.dom.window as never as { confirm: () => boolean }).confirm = () => false;
+  const release = [...h.doc.querySelectorAll('#money-banner button')]
+    .find((b) => b.textContent === 'Release') as HTMLButtonElement;
+  release.click();
+  await h.settle();
+  assert.ok(!h.calls.some((c) => c.path.includes('/resolve')), 'no confirm, no call');
+
+  (h.dom.window as never as { confirm: () => boolean }).confirm = () => true;
+  h.reply('POST /api/authorisations/42/resolve', { authorisation: { id: 42, status: 'released' } });
+  release.click();
+  await h.settle();
+  const call = h.calls.find((c) => c.path === '/api/authorisations/42/resolve');
+  assert.ok(call, 'confirmed, so the release goes through');
+  assert.equal(call!.body.result, 'released');
+});
+
+test('THE ARM CHECKBOX REFUSES WITHOUT A SPEND CAP, AND SAYS WHY', async () => {
+  const h = await boot({
+    ...DASHBOARD,
+    settings: { taxRate: 0, shippingAllowance: 0, spendCapDay: null },
+  });
+  // Open the first mission's settings panel and try to arm it.
+  const details = [...h.doc.querySelectorAll('#missions details')];
+  for (const d of details) (d as HTMLDetailsElement).open = true;
+  const armed = h.doc.querySelector('#missions input[name="armed"]') as HTMLInputElement;
+  assert.ok(armed, 'there is an arm control');
+  armed.checked = true;
+  armed.dispatchEvent(new h.dom.window.Event('change', { bubbles: true }));
+  assert.equal(armed.checked, false, 'the tick does not stick');
+  assert.match($(h, '#missions').textContent, /daily spend cap in Settings first/);
+});
+
+test('with a cap set, the arm checkbox warns about what arming means', async () => {
+  const h = await boot({
+    ...DASHBOARD,
+    settings: { taxRate: 0, shippingAllowance: 0, spendCapDay: 200 },
+  });
+  const details = [...h.doc.querySelectorAll('#missions details')];
+  for (const d of details) (d as HTMLDetailsElement).open = true;
+  const armed = h.doc.querySelector('#missions input[name="armed"]') as HTMLInputElement;
+  armed.checked = true;
+  armed.dispatchEvent(new h.dom.window.Event('change', { bubbles: true }));
+  assert.equal(armed.checked, true, 'the cap exists, so arming is a real choice');
 });

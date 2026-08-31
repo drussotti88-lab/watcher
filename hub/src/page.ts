@@ -375,6 +375,17 @@ ${FONTS}<style>${STYLE}</style></head>
     </form>
   </div>
 
+  <!-- A live grant is money committed: a buy in progress, or a Watcher that
+       died mid-checkout. Both deserve the top of the page. Releasing is the
+       recovery path for the second one — after a look at the orders page,
+       because a grant nobody resolved means nobody knows whether money moved. -->
+  <div class="card" id="money-banner" hidden
+       style="border-color:rgba(240,197,107,.35); background:rgba(240,197,107,.07)">
+    <div class="name">Money is committed</div>
+    <div class="meta" id="money-banner-detail"></div>
+    <div id="money-banner-list"></div>
+  </div>
+
   <div class="card" id="paused-banner" hidden
        style="border-color:rgba(240,131,107,.35); background:rgba(240,131,107,.08)">
     <div class="name">Everything is paused</div>
@@ -458,6 +469,10 @@ ${FONTS}<style>${STYLE}</style></head>
           <label class="f">Shipping allowance
             <span class="hint">per order, on top of the ceiling</span>
             <input type="number" name="shippingAllowance" step="0.01" min="0" placeholder="0.00">
+          </label>
+          <label class="f">Most to spend in 24 hours
+            <span class="hint">in dollars — nothing can be armed without this</span>
+            <input type="number" name="spendCapDay" step="0.01" min="0" placeholder="unset">
           </label>
         </div>
         <p class="sub" style="margin:0">
@@ -1041,6 +1056,13 @@ function missionPanel(m) {
   const armed = q('armed');
   const warn = el('div', 'msg');
   armed.addEventListener('change', () => {
+    const noCap = !(DATA.settings && DATA.settings.spendCapDay);
+    if (armed.checked && noCap) {
+      armed.checked = false;
+      warn.textContent = 'set a daily spend cap in Settings first — ' +
+        'the cap is what bounds a night, and nothing arms without one';
+      return;
+    }
     warn.textContent = armed.checked
       ? 'This mission will buy on its own. It needs a price ceiling.'
       : '';
@@ -1426,6 +1448,10 @@ function render() {
   if (document.activeElement !== sf.querySelector('[name=shippingAllowance]')) {
     sf.querySelector('[name=shippingAllowance]').value = st.shippingAllowance || '';
   }
+  if (document.activeElement !== sf.querySelector('[name=spendCapDay]')) {
+    sf.querySelector('[name=spendCapDay]').value =
+      st.spendCapDay === null || st.spendCapDay === undefined ? '' : st.spendCapDay;
+  }
 
   renderFinds();
 
@@ -1442,6 +1468,7 @@ function render() {
   hf.querySelector('[name=paused]').checked = !!st.paused;
 
   // Say it where it cannot be missed, not only on the tab nobody opens.
+  renderMoney();
   const banner = document.getElementById('paused-banner');
   banner.hidden = !st.paused;
 
@@ -1855,6 +1882,52 @@ function renderFinds() {
   }
 }
 
+function renderMoney() {
+  const banner = document.getElementById('money-banner');
+  if (!banner) return;
+  const open = DATA.authorisations || [];
+  banner.hidden = open.length === 0;
+  if (open.length === 0) return;
+
+  const cap = DATA.settings && DATA.settings.spendCapDay;
+  document.getElementById('money-banner-detail').textContent =
+    '$' + Number(DATA.committed || 0).toFixed(2) + ' of ' +
+    (cap ? '$' + Number(cap).toFixed(2) : 'no cap') +
+    ' is committed by ' + open.length + (open.length === 1 ? ' grant' : ' grants') +
+    '. A grant is a buy in progress, or a Watcher that died mid-checkout.';
+
+  const list = document.getElementById('money-banner-list');
+  list.textContent = '';
+  for (const a of open) {
+    const m = (DATA.missions || []).find((x) => x.id === a.missionId);
+    const row = el('div', 'actions');
+    row.style.marginTop = '10px';
+    row.appendChild(el('span', 'meta',
+      '$' + Number(a.amount).toFixed(2) + ' — ' + (m ? m.productName : 'mission ' + a.missionId) +
+      ' — granted ' + new Date(a.grantedAt).toLocaleTimeString()));
+    const release = el('button', 'small danger', 'Release');
+    release.addEventListener('click', async (e) => {
+      // Deliberate friction, in words: releasing says "I looked, nothing was
+      // bought". The confirm is the look.
+      // No newline escapes in this string: the page ships inside a template
+      // literal, which eats the backslash and drops a raw newline into the
+      // middle of a quoted string. That mistake has now been made six times.
+      if (!window.confirm(
+        'Release this $' + Number(a.amount).toFixed(2) + ' grant? ' +
+        'Only do this after checking your ' + (m ? m.retailer : '') + ' orders page. ' +
+        'If an order DID go through, the money is spent whatever this button says.')) return;
+      await withButton(e.target, 'Releasing…', null, async () => {
+        await api('POST', '/api/authorisations/' + a.id + '/resolve',
+          { result: 'released', note: 'released by hand from the app' });
+        load();
+        return 'released';
+      });
+    });
+    row.appendChild(release);
+    list.appendChild(row);
+  }
+}
+
 async function load() {
   try {
     DATA = await api('GET', '/api/dashboard');
@@ -1942,6 +2015,8 @@ document.getElementById('settings-form').addEventListener('submit', async (e) =>
     await api('POST', '/api/settings', {
       taxRate: Math.round(percent * 1000) / 100000,
       shippingAllowance: Number(f.shippingAllowance || 0),
+      // Blank clears the cap — and with it, the ability to arm anything new.
+      spendCapDay: f.spendCapDay === '' ? null : Number(f.spendCapDay),
     });
     load();
     return 'saved — applies to every mission';

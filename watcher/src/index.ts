@@ -26,6 +26,7 @@ import {
   walmartCandidates,
 } from './scan.ts';
 import { searchUrl } from './readers/target-search.ts';
+import { makeBuyer } from './buy.ts';
 import { categoryUrl, pageCount } from './readers/pokemoncenter-search.ts';
 import { searchUrl as walmartSearchUrl } from './readers/walmart-search.ts';
 import { interleave, todayLocal, type SweepStep } from './plan.ts';
@@ -231,12 +232,32 @@ async function runPasses(once: boolean): Promise<void> {
   const browser = new Browser(config, 'watch');
   const pacer = new Pacer();
 
+
   // The log. Its own token goes in as a known secret so that even a Hub error
   // that quotes the Authorization header back at us cannot write it down.
   const activity = new Activity({
     sink: hub,
     secrets: [config.hub.token],
     dir: 'logs',
+  });
+
+
+  // The buy path. The buy profile opens per attempt and closes after — the
+  // signed-in half must never sit in the polling loop. `live` comes from the
+  // config and defaults to false, and false means every attempt stops on the
+  // line before the button.
+  const buyer = makeBuyer({
+    hub,
+    activity,
+    live: config.live,
+    openBuyBrowser: async () => {
+      const buyBrowser = new Browser(config, 'buy');
+      return {
+        page: () => buyBrowser.page(),
+        close: () => buyBrowser.close(),
+      };
+    },
+    log: (line) => console.log(line),
   });
 
   browser.onEvent = (level, message) => {
@@ -674,6 +695,7 @@ async function runPasses(once: boolean): Promise<void> {
           browser,
           hub,
           activity,
+          buyer,
           log: (line) => console.log(line),
         });
         const parts = [`${result.checked} checked`];
