@@ -58,3 +58,44 @@ test('THE SITTING IS COMPLETE — every selector is a verified reading', () => {
   assert.ok(targetCart.placeOrder, 'the gated entry point still exists');
   assert.ok(CheckoutStepError, 'and so does the error it refuses with');
 });
+
+// ── The click is not the order ───────────────────────────────────────────────
+//
+// Learned the expensive-in-embarrassment way on the first live buy: placeOrder
+// returned after clicking, the caller recorded "bought", and the pens were
+// still sitting in the cart. These pin the fix: confirmation or a loud throw.
+
+const fakeCheckoutPage = (opts: { bodyText?: string; url?: string }) =>
+  ({
+    url: () => opts.url ?? 'https://www.target.com/checkout',
+    waitForTimeout: async () => {},
+    evaluate: async () => opts.bodyText ?? 'Review your order and payment',
+    locator: () => ({
+      first: () => ({
+        waitFor: async () => {},
+        click: async () => {},
+        isVisible: async () => true,
+        getAttribute: async () => null,
+      }),
+    }),
+    screenshot: async () => {},
+  }) as never;
+
+test('AN ORDER EXISTS ONLY WHEN THE PAGE SAYS SO', async () => {
+  // Confirmation text appears -> placeOrder resolves.
+  await targetCart.placeOrder(fakeCheckoutPage({ bodyText: 'Thanks for your order!' }));
+  // A confirmation URL is also proof.
+  await targetCart.placeOrder(
+    fakeCheckoutPage({ url: 'https://www.target.com/co-thankyou?x=1' }),
+  );
+});
+
+test('a click with no confirmation throws instead of claiming bought', async () => {
+  await assert.rejects(
+    () => targetCart.placeOrder(fakeCheckoutPage({ bodyText: 'Review your order' })),
+    (e: unknown) =>
+      e instanceof CheckoutStepError &&
+      /no confirmation appeared/.test(e.message) &&
+      /orders page/.test(e.message),
+  );
+});

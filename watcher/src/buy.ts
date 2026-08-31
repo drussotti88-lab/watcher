@@ -150,6 +150,13 @@ export async function attemptBuy(
     }
 
     // ── The click. Everything above this line was reversible. ────────────────
+    //
+    // placeOrder returns only once the page has CONFIRMED an order exists —
+    // a click alone proved nothing on the first live attempt (31 Aug 2026:
+    // "bought" recorded, pens still in the cart). If confirmation never
+    // appears it throws, landing in the mid-checkout path below: the grant
+    // stays live and a person checks the orders page. 'spent' is only ever
+    // written about an order the retailer acknowledged.
     await driver.placeOrder(page);
     await deps.hub.resolveAuthorisation(
       auth.id,

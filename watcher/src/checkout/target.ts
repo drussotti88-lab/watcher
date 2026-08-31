@@ -248,5 +248,42 @@ export const targetCart: CartDriver = {
     await page.waitForTimeout(4000);
     const place = await find(page, 'placeOrder');
     await place.click();
+
+    // ── The click is not the order ──────────────────────────────────────────
+    //
+    // Learned on the first live buy (31 Aug 2026): this used to return right
+    // here, and the caller recorded "bought". Target had not placed anything —
+    // the pens were still in the cart, no email, no order — most likely a
+    // card-confirmation prompt swallowed the click. The machine's one
+    // unverified claim was the only one that mattered.
+    //
+    // So now the order exists only when the page says so. Deliberately loose
+    // about HOW it says so — we have never seen Target's confirmation page,
+    // and guessing one selector would be the sin this file exists to avoid —
+    // and strict about the consequence: no confirmation within the wait means
+    // a loud throw with a screenshot, the caller keeps the grant LIVE, and a
+    // person checks the orders page. Fail closed on not knowing.
+    const confirmed = async (): Promise<boolean> => {
+      const url = page.url();
+      if (/thank|confirm|receipt/i.test(url)) return true;
+      const text = await page
+        .evaluate(() => document.body?.innerText?.slice(0, 6000) ?? '')
+        .catch(() => '');
+      return /thanks for your order|order placed|order number|we got your order|your order.s in/i.test(
+        text,
+      );
+    };
+    for (let waited = 0; waited < 30_000; waited += 2500) {
+      await page.waitForTimeout(2500);
+      if (await confirmed()) return;
+    }
+    const shot = await screenshot(page, 'placeOrder-unconfirmed');
+    throw new CheckoutStepError(
+      'placeOrder',
+      'clicked Place Order, but no confirmation appeared within 30s — the order may not ' +
+        'have been placed. Check your Target orders page before releasing anything.' +
+        (shot ? ` What the page showed is in ${shot}` : ''),
+      shot,
+    );
   },
 };
