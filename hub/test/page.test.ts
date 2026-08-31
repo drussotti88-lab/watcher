@@ -1991,3 +1991,214 @@ test('with a cap set, the arm checkbox warns about what arming means', async () 
   armed.dispatchEvent(new h.dom.window.Event('change', { bubbles: true }));
   assert.equal(armed.checked, true, 'the cap exists, so arming is a real choice');
 });
+
+// ── Filters on every list, not just the finds ────────────────────────────────
+//
+// Same contract the finds bar established: static search box, chips whose
+// counts respect the other filters, a count line, and a way back. These tests
+// drive the missions, products, and activity bars the same way a person does.
+
+const BASE_MISSION = DASHBOARD.missions[0]!;
+const missionRow = (over: Record<string, unknown>) => ({ ...BASE_MISSION, ...over });
+
+const LISTED = {
+  ...DASHBOARD,
+  missions: [
+    missionRow({ id: 1, listingId: 11, productName: 'Alpha ETB', retailer: 'Target',
+      state: 'in', isPreOrder: false, armed: false, enabled: true }),
+    missionRow({ id: 2, listingId: 12, productName: 'Bravo Booster Box', retailer: 'Target',
+      state: 'out', isPreOrder: false, armed: true, enabled: true }),
+    missionRow({ id: 3, listingId: 13, productName: 'Charlie Tin', retailer: 'Walmart',
+      state: 'out', isPreOrder: false, armed: false, enabled: true }),
+    missionRow({ id: 4, listingId: 14, productName: 'Delta UPC', retailer: 'Pokemon Center',
+      state: 'in', isPreOrder: true, armed: false, enabled: true }),
+    missionRow({ id: 5, listingId: 15, productName: 'Echo Bundle', retailer: 'Walmart',
+      state: 'in', isPreOrder: false, armed: false, enabled: false }),
+    missionRow({ id: 6, listingId: 16, productName: 'Foxtrot Collection', retailer: 'Target',
+      state: 'out', isPreOrder: false, armed: false, enabled: true }),
+  ],
+  products: [
+    { key: 'p1', name: 'Alpha ETB', releaseDate: null, msrp: 49.99, imageUrl: '', notes: '' },
+    { key: 'p2', name: 'Bravo Booster Box', releaseDate: null, msrp: 161.64, imageUrl: '', notes: '' },
+    { key: 'p3', name: 'Charlie Tin', releaseDate: null, msrp: 24.99, imageUrl: '', notes: '' },
+    { key: 'p4', name: 'Delta UPC', releaseDate: null, msrp: 119.99, imageUrl: '', notes: '' },
+    { key: 'p5', name: 'Echo Bundle', releaseDate: null, msrp: 26.94, imageUrl: '', notes: '' },
+    { key: 'p6', name: 'Foxtrot Collection', releaseDate: null, msrp: 39.99, imageUrl: '', notes: '' },
+  ],
+  runs: [
+    { startedAt: new Date(Date.now() - 60_000).toISOString(), productName: 'Alpha ETB',
+      retailer: 'Target', outcome: 'in_stock', reason: 'in stock at $49.99', price: 49.99, ms: 800 },
+    { startedAt: new Date(Date.now() - 120_000).toISOString(), productName: 'Charlie Tin',
+      retailer: 'Walmart', outcome: 'failed', reason: 'browser has been closed', price: null, ms: 20 },
+    { startedAt: new Date(Date.now() - 180_000).toISOString(), productName: 'Bravo Booster Box',
+      retailer: 'Target', outcome: 'dry_run', reason: 'would have bought 1', price: 161.64, ms: 900 },
+  ],
+  changes: [
+    { at: new Date(Date.now() - 60_000).toISOString(), productName: 'Alpha ETB',
+      retailer: 'Target', state: 'in', price: 49.99 },
+    { at: new Date(Date.now() - 90_000).toISOString(), productName: 'Echo Bundle',
+      retailer: 'Walmart', state: 'out', price: null },
+    { at: new Date(Date.now() - 120_000).toISOString(), productName: 'Delta UPC',
+      retailer: 'Pokemon Center', state: 'in', price: 119.99 },
+  ],
+};
+
+const missionNames = (h: Harness): string[] =>
+  [...h.doc.querySelectorAll('#missions .name')].map((n) => n.textContent ?? '');
+const productNames = (h: Harness): string[] =>
+  [...h.doc.querySelectorAll('#products .name')].map((n) => n.textContent ?? '');
+const typeInto = (h: Harness, id: string, value: string): void => {
+  const box = h.doc.getElementById(id) as HTMLInputElement;
+  box.value = value;
+  box.dispatchEvent(new h.dom.window.Event('input'));
+};
+
+test('A SHORT LIST GETS NO FILTER BAR, A LONG ONE DOES', async () => {
+  // One mission does not need a search box; the bar would be clutter that
+  // says "this app is complicated" on the first screen.
+  const short = await boot(DASHBOARD);
+  assert.equal((short.doc.getElementById('flt-missions') as any).hidden, true);
+
+  const long = await boot(LISTED);
+  assert.equal((long.doc.getElementById('flt-missions') as any).hidden, false);
+  assert.equal((long.doc.getElementById('flt-products') as any).hidden, false);
+  assert.equal((long.doc.getElementById('flt-activity') as any).hidden, false);
+});
+
+test('the missions shop chip narrows to that shop', async () => {
+  const h = await boot(LISTED);
+  pressChip(h, 'flt-missions-chips', 'Walmart');
+  const names = missionNames(h);
+  assert.ok(names.some((n) => n.includes('Charlie')));
+  assert.ok(names.some((n) => n.includes('Echo')));
+  assert.ok(!names.some((n) => n.includes('Alpha')));
+  pressChip(h, 'flt-missions-chips', 'Walmart');
+  assert.ok(missionNames(h).some((n) => n.includes('Alpha')), 'pressing again clears it');
+});
+
+test('the missions status chip tells pre-order and in-stock apart', async () => {
+  const h = await boot(LISTED);
+  pressChip(h, 'flt-missions-chips', 'Pre-order');
+  assert.deepEqual(missionNames(h).filter((n) => n.includes('Delta')).length, 1);
+  assert.equal(missionNames(h).length, 1, 'the in-stock Alpha does not answer to pre-order');
+
+  const h2 = await boot(LISTED);
+  pressChip(h2, 'flt-missions-chips', 'In stock');
+  const names = missionNames(h2);
+  assert.ok(names.some((n) => n.includes('Alpha')));
+  assert.ok(!names.some((n) => n.includes('Delta')), 'the pre-order is not "in stock"');
+});
+
+test('the mode chips answer armed, watching, paused', async () => {
+  const h = await boot(LISTED);
+  pressChip(h, 'flt-missions-chips', 'Armed');
+  assert.equal(missionNames(h).length, 1);
+  assert.ok(missionNames(h)[0]!.includes('Bravo'));
+
+  const h2 = await boot(LISTED);
+  pressChip(h2, 'flt-missions-chips', 'Paused');
+  assert.equal(missionNames(h2).length, 1);
+  assert.ok(missionNames(h2)[0]!.includes('Echo'));
+});
+
+test('MISSION CHIP COUNTS RESPECT THE OTHER FILTERS', async () => {
+  const h = await boot(LISTED);
+  pressChip(h, 'flt-missions-chips', 'Walmart');
+  const armed = chips(h, 'flt-missions-chips').find((c) => c.startsWith('Armed'));
+  assert.equal(armed, 'Armed0', 'no armed Walmart missions, and it says so');
+  const paused = chips(h, 'flt-missions-chips').find((c) => c.startsWith('Paused'));
+  assert.equal(paused, 'Paused1');
+});
+
+test('searching missions matches name, shop, and SKU, every word any order', async () => {
+  const h = await boot(LISTED);
+  typeInto(h, 'flt-missions-q', 'booster bravo');
+  assert.equal(missionNames(h).length, 1);
+  assert.ok(missionNames(h)[0]!.includes('Bravo'));
+
+  typeInto(h, 'flt-missions-q', 'walmart');
+  assert.equal(missionNames(h).length, 2, 'the shop name is searchable too');
+});
+
+test('mission filters that match nothing say so and offer a way back', async () => {
+  const h = await boot(LISTED);
+  typeInto(h, 'flt-missions-q', 'charizard');
+  assert.match($(h, '#missions').textContent, /Nothing matches those filters/);
+  assert.match($(h, '#flt-missions-count').textContent, /Showing 0 of 6/);
+
+  const clear = [...h.doc.querySelectorAll('#flt-missions-count button')]
+    .find((b) => b.textContent === 'Clear filters');
+  assert.ok(clear, 'the count line offers the way back');
+  (clear as HTMLButtonElement).click();
+  assert.equal(missionNames(h).length, 6);
+  assert.equal((h.doc.getElementById('flt-missions-q') as HTMLInputElement).value, '',
+    'and the box is emptied with it');
+});
+
+test('the filter survives the thirty-second refresh', async () => {
+  // The page redraws from fresh data every thirty seconds. A filter that
+  // reset each time would be unusable; one that lives in the module survives.
+  const h = await boot(LISTED);
+  pressChip(h, 'flt-missions-chips', 'Walmart');
+  assert.equal(missionNames(h).length, 2);
+  ($(h, '#refresh') as HTMLButtonElement).click();
+  await h.settle();
+  assert.equal(missionNames(h).length, 2, 'still narrowed after a reload');
+});
+
+test('the products search narrows the product list', async () => {
+  const h = await boot(LISTED);
+  typeInto(h, 'flt-products-q', 'tin');
+  assert.equal(productNames(h).length, 1);
+  assert.ok(productNames(h)[0]!.includes('Charlie'));
+  typeInto(h, 'flt-products-q', '');
+  assert.equal(productNames(h).length, 6);
+});
+
+test('THE ACTIVITY BAR FILTERS RUNS AND CHANGES TOGETHER', async () => {
+  const h = await boot(LISTED);
+  (h.doc.querySelector('[data-tab=activity]') as any).click();
+  pressChip(h, 'flt-activity-chips', 'Walmart');
+  const runsText = $(h, '#runs-card').textContent;
+  const changesText = $(h, '#changes-card').textContent;
+  assert.match(runsText, /Charlie/);
+  assert.doesNotMatch(runsText, /Alpha/);
+  assert.match(changesText, /Echo/);
+  assert.doesNotMatch(changesText, /Alpha/, 'one chip, both tables');
+});
+
+test('an outcome chip narrows runs but does not blank the changes', async () => {
+  // Outcome is a run word. A change has none, and hiding every change
+  // because a run filter is active would look like history being erased.
+  const h = await boot(LISTED);
+  (h.doc.querySelector('[data-tab=activity]') as any).click();
+  pressChip(h, 'flt-activity-chips', 'failed');
+  const runsText = $(h, '#runs-card').textContent;
+  assert.match(runsText, /Charlie/);
+  assert.doesNotMatch(runsText, /Alpha/);
+  assert.match($(h, '#changes-card').textContent, /Alpha/, 'changes are left alone');
+});
+
+test('searching activity reaches the reason a run gives', async () => {
+  const h = await boot(LISTED);
+  (h.doc.querySelector('[data-tab=activity]') as any).click();
+  typeInto(h, 'flt-activity-q', 'browser closed');
+  assert.match($(h, '#runs-card').textContent, /Charlie/);
+  assert.doesNotMatch($(h, '#runs-card').textContent, /Bravo/);
+});
+
+test('activity filtered to nothing says so instead of going blank', async () => {
+  const h = await boot(LISTED);
+  (h.doc.querySelector('[data-tab=activity]') as any).click();
+  typeInto(h, 'flt-activity-q', 'charizard');
+  assert.match($(h, '#runs-card').textContent, /No runs match those filters/);
+  assert.match($(h, '#changes-card').textContent, /No changes match those filters/);
+});
+
+test('the finds bar is untouched by the other bars', async () => {
+  // The finds filter shipped first and is heavily leaned on; the new bars
+  // must not reach into its state.
+  const h = await boot({ ...LISTED, discoveries: MIXED });
+  typeInto(h, 'flt-missions-q', 'charizard');
+  assert.ok(findNames(h).length > 0, 'finds still show while missions are filtered');
+});

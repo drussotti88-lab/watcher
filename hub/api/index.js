@@ -2009,6 +2009,7 @@ button.small { padding: 4px 10px; font-size: 12px; border-radius: var(--r-sm); }
 .filters { display: grid; gap: 9px; margin-bottom: 14px; }
 .filters input[type=search] { width: 100%; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chipgroups { display: grid; gap: 6px; }
 .chip {
   font: 500 12px/1 var(--sans); letter-spacing: .01em;
   padding: 6px 11px; border-radius: 999px; cursor: pointer;
@@ -2276,13 +2277,32 @@ ${FONTS}<style>${STYLE}</style></head>
     <a class="btn" href="/logout">Sign out</a>
   </div>
 
-  <section id="tab-missions"><div id="missions"></div></section>
+  <section id="tab-missions">
+    <div class="filters" id="flt-missions" hidden>
+      <input type="search" id="flt-missions-q" placeholder="Search missions"
+             autocomplete="off" autocapitalize="off" spellcheck="false">
+      <div class="chipgroups" id="flt-missions-chips"></div>
+      <div class="sub" id="flt-missions-count"></div>
+    </div>
+    <div id="missions"></div>
+  </section>
 
   <section id="tab-products" hidden>
+    <div class="filters" id="flt-products" hidden>
+      <input type="search" id="flt-products-q" placeholder="Search products"
+             autocomplete="off" autocapitalize="off" spellcheck="false">
+      <div class="sub" id="flt-products-count"></div>
+    </div>
     <div id="products"></div>
   </section>
 
   <section id="tab-activity" hidden>
+    <div class="filters" id="flt-activity" hidden>
+      <input type="search" id="flt-activity-q" placeholder="Search runs and changes"
+             autocomplete="off" autocapitalize="off" spellcheck="false">
+      <div class="chipgroups" id="flt-activity-chips"></div>
+      <div class="sub" id="flt-activity-count"></div>
+    </div>
     <h2 style="margin-top:0">Mission runs</h2>
     <p class="sub" style="margin:-6px 0 10px">
       Written when a mission acted, or could not. Routine checks that found
@@ -3231,21 +3251,265 @@ function productPanel(p, listings) {
 
 /* \u2500\u2500 rendering \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */
 
+/* \u2500\u2500 filters for the other lists \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+ *
+ * Same shape as the finds filter below, for the same reasons: the search
+ * boxes are static in the markup (the page redraws every thirty seconds,
+ * and a rebuilt input steals your cursor mid-word), only chips and lists
+ * are redrawn, and the state is module-level \u2014 a hard refresh clears it,
+ * which is the right amount of memory for something set while looking at
+ * a list. One bar per tab; the activity bar covers runs and changes both.
+ */
+const LIST_FILTERS = {
+  missions: { q: '', shop: '', status: '', mode: '' },
+  products: { q: '' },
+  activity: { q: '', shop: '', outcome: '' },
+};
+
+/** Below this many rows a filter bar is clutter, not help. */
+const FILTER_FROM = 6;
+
+/** Every word, in any order. Typing two words should narrow, not fail. */
+function wordsMatch(q, hay) {
+  const h = hay.toLowerCase();
+  for (const word of q.toLowerCase().split(' ')) {
+    if (word && h.indexOf(word) === -1) return false;
+  }
+  return true;
+}
+
+function missionMatchesFilter(m) {
+  const f = LIST_FILTERS.missions;
+  if (f.shop && m.retailer !== f.shop) return false;
+  if (f.status === 'pre' && !m.isPreOrder) return false;
+  if (f.status === 'in' && (m.isPreOrder || m.state !== 'in')) return false;
+  if (f.status === 'out' && (m.isPreOrder || m.state !== 'out')) return false;
+  if (f.status === 'blind' && !notReading(m)) return false;
+  if (f.mode === 'armed' && !m.armed) return false;
+  if (f.mode === 'watching' && !(m.enabled && !m.armed)) return false;
+  if (f.mode === 'off' && m.enabled) return false;
+  if (f.q) {
+    return wordsMatch(f.q,
+      (m.productName || '') + ' ' + (m.retailer || '') + ' ' + (m.externalId || ''));
+  }
+  return true;
+}
+
+function productMatchesFilter(p) {
+  const f = LIST_FILTERS.products;
+  if (!f.q) return true;
+  const mine = (DATA.listings || []).filter((l) => l.productKey === p.key);
+  return wordsMatch(f.q,
+    (p.name || '') + ' ' + (p.notes || '') + ' ' + mine.map((l) => l.retailer).join(' '));
+}
+
+function runMatchesFilter(r) {
+  const f = LIST_FILTERS.activity;
+  if (f.shop && r.retailer !== f.shop) return false;
+  if (f.outcome && r.outcome !== f.outcome) return false;
+  if (f.q) {
+    return wordsMatch(f.q, (r.productName || '') + ' ' + (r.retailer || '') + ' ' +
+      (r.outcome || '') + ' ' + (r.reason || ''));
+  }
+  return true;
+}
+
+function changeMatchesFilter(o) {
+  const f = LIST_FILTERS.activity;
+  if (f.shop && o.retailer !== f.shop) return false;
+  // Outcome is a run word; a change has none, so that chip leaves changes alone.
+  if (f.q) {
+    return wordsMatch(f.q,
+      (o.productName || '') + ' ' + (o.retailer || '') + ' ' + (o.state || ''));
+  }
+  return true;
+}
+
+function listChip(label, n, active, onClick, disabled) {
+  const b = el('button', 'chip', label);
+  b.type = 'button';
+  b.setAttribute('aria-pressed', active ? 'true' : 'false');
+  if (n !== null) b.appendChild(el('span', 'n', String(n)));
+  if (disabled) b.disabled = true;
+  else b.addEventListener('click', onClick);
+  return b;
+}
+
+/**
+ * One row of chips for one field of one filter. Counts are of what the
+ * *other* filters allow \u2014 the finds rule \u2014 so a chip always tells the
+ * truth about what pressing it would give you.
+ */
+function chipGroup(filter, field, rows, matches, options, allLabel) {
+  const row = el('div', 'chips');
+  const countFor = (value) => {
+    const was = filter[field];
+    filter[field] = value;
+    let n = 0;
+    for (const r of rows) if (matches(r)) n++;
+    filter[field] = was;
+    return n;
+  };
+  row.appendChild(listChip(allLabel, countFor(''), !filter[field], () => {
+    filter[field] = '';
+    render();
+  }));
+  for (const o of options) {
+    const n = countFor(o.value);
+    row.appendChild(listChip(o.label, n, filter[field] === o.value, () => {
+      filter[field] = filter[field] === o.value ? '' : o.value;
+      render();
+    }, n === 0 && filter[field] !== o.value));
+  }
+  return row;
+}
+
+function shopOptions(rows) {
+  const names = [];
+  for (const r of rows) {
+    if (r.retailer && names.indexOf(r.retailer) === -1) names.push(r.retailer);
+  }
+  names.sort();
+  return names.map((name) => ({ value: name, label: name }));
+}
+
+function clearListFilter(key) {
+  const f = LIST_FILTERS[key];
+  for (const k in f) f[k] = '';
+  const box = document.getElementById('flt-' + key + '-q');
+  if (box) box.value = '';
+  render();
+}
+
+function filterCountLine(id, shown, total, anyActive, key) {
+  const node = document.getElementById(id);
+  if (!node) return;
+  node.textContent = '';
+  if (!total) return;
+  node.append(shown === total ? 'All ' + total : 'Showing ' + shown + ' of ' + total);
+  if (anyActive) {
+    const b = el('button', 'small', 'Clear filters');
+    b.style.marginLeft = '8px';
+    b.addEventListener('click', () => clearListFilter(key));
+    node.appendChild(b);
+  }
+}
+
+/**
+ * Draw one tab's filter bar and hand back the rows that pass it.
+ *
+ * A short list hides the bar and resets its filter \u2014 a filter you can
+ * neither see nor clear must not be allowed to hide anything.
+ */
+function renderMissionsBar(all) {
+  const bar = document.getElementById('flt-missions');
+  const f = LIST_FILTERS.missions;
+  if (all.length < FILTER_FROM) {
+    bar.hidden = true;
+    f.shop = ''; f.status = ''; f.mode = ''; f.q = '';
+    const box = document.getElementById('flt-missions-q');
+    if (box) box.value = '';
+    return all;
+  }
+  bar.hidden = false;
+  const chips = document.getElementById('flt-missions-chips');
+  chips.textContent = '';
+  chips.appendChild(chipGroup(f, 'shop', all, missionMatchesFilter,
+    shopOptions(all), 'All shops'));
+  chips.appendChild(chipGroup(f, 'status', all, missionMatchesFilter, [
+    { value: 'pre', label: 'Pre-order' },
+    { value: 'in', label: 'In stock' },
+    { value: 'out', label: 'Out of stock' },
+    { value: 'blind', label: 'Not reading' },
+  ], 'Any status'));
+  chips.appendChild(chipGroup(f, 'mode', all, missionMatchesFilter, [
+    { value: 'armed', label: 'Armed' },
+    { value: 'watching', label: 'Watching' },
+    { value: 'off', label: 'Paused' },
+  ], 'Any mode'));
+  const shown = all.filter(missionMatchesFilter);
+  filterCountLine('flt-missions-count', shown.length, all.length,
+    !!(f.shop || f.status || f.mode || f.q), 'missions');
+  return shown;
+}
+
+function renderProductsBar(all) {
+  const bar = document.getElementById('flt-products');
+  const f = LIST_FILTERS.products;
+  if (all.length < FILTER_FROM) {
+    bar.hidden = true;
+    f.q = '';
+    const box = document.getElementById('flt-products-q');
+    if (box) box.value = '';
+    return all;
+  }
+  bar.hidden = false;
+  const shown = all.filter(productMatchesFilter);
+  filterCountLine('flt-products-count', shown.length, all.length, !!f.q, 'products');
+  return shown;
+}
+
+function renderActivityBar(runs, changes) {
+  const bar = document.getElementById('flt-activity');
+  const f = LIST_FILTERS.activity;
+  if (runs.length + changes.length < FILTER_FROM) {
+    bar.hidden = true;
+    f.shop = ''; f.outcome = ''; f.q = '';
+    const box = document.getElementById('flt-activity-q');
+    if (box) box.value = '';
+    return { runs: runs, changes: changes };
+  }
+  bar.hidden = false;
+  const chips = document.getElementById('flt-activity-chips');
+  chips.textContent = '';
+  // Runs have an outcome; changes never do. That is how one bar tells the
+  // two kinds of row apart without either table having to say.
+  const activityMatches = (x) =>
+    x.outcome !== undefined ? runMatchesFilter(x) : changeMatchesFilter(x);
+  const everything = runs.concat(changes);
+  chips.appendChild(chipGroup(f, 'shop', everything, activityMatches,
+    shopOptions(everything), 'All shops'));
+  const outcomes = [];
+  for (const r of runs) {
+    if (r.outcome && outcomes.indexOf(r.outcome) === -1) outcomes.push(r.outcome);
+  }
+  outcomes.sort();
+  if (outcomes.length > 1) {
+    chips.appendChild(chipGroup(f, 'outcome', runs, runMatchesFilter,
+      outcomes.map((o) => ({ value: o, label: o.split('_').join(' ') })), 'Any outcome'));
+  }
+  const shownRuns = runs.filter(runMatchesFilter);
+  const shownChanges = changes.filter(changeMatchesFilter);
+  filterCountLine('flt-activity-count', shownRuns.length + shownChanges.length,
+    everything.length, !!(f.shop || f.outcome || f.q), 'activity');
+  return { runs: shownRuns, changes: shownChanges };
+}
+
 function render() {
   const missions = document.getElementById('missions');
   missions.textContent = '';
+  const shownMissions = renderMissionsBar(DATA.missions);
   if (!DATA.missions.length) {
     missions.appendChild(emptyBlock('Nothing is being watched yet.',
       'Add a product on the Products tab, paste a listing URL, and a mission is created for you.'));
+  } else if (!shownMissions.length) {
+    missions.appendChild(emptyBlock('Nothing matches those filters.',
+      DATA.missions.length + ' missions are hidden \u2014 clear the filters above to see them.'));
   }
-  for (const m of DATA.missions) missions.appendChild(missionCard(m));
+  for (const m of shownMissions) missions.appendChild(missionCard(m));
 
   const products = document.getElementById('products');
   products.textContent = '';
+  const shownProducts = renderProductsBar(DATA.products);
   if (!DATA.products.length) {
     products.appendChild(emptyBlock('No products yet.', 'Add one with the form above.'));
+  } else if (!shownProducts.length) {
+    products.appendChild(emptyBlock('Nothing matches that search.',
+      DATA.products.length + ' products are hidden \u2014 clear the search above to see them.'));
   }
-  for (const p of DATA.products) products.appendChild(productCard(p));
+  for (const p of shownProducts) products.appendChild(productCard(p));
+
+  const act = renderActivityBar(DATA.runs, DATA.changes);
 
   const runsCard = document.getElementById('runs-card');
   runsCard.textContent = '';
@@ -3254,19 +3518,22 @@ function render() {
     .filter(Boolean)
     .sort()
     .pop();
-  runsCard.appendChild(runTable(DATA.runs, 'Nothing has run yet.', newestCheck));
+  runsCard.appendChild(runTable(act.runs,
+    DATA.runs.length ? 'No runs match those filters.' : 'Nothing has run yet.',
+    newestCheck));
 
   const changesCard = document.getElementById('changes-card');
   changesCard.textContent = '';
-  if (!DATA.changes.length) {
-    changesCard.appendChild(el('div', 'meta', 'Nothing has changed yet.'));
+  if (!act.changes.length) {
+    changesCard.appendChild(el('div', 'meta',
+      DATA.changes.length ? 'No changes match those filters.' : 'Nothing has changed yet.'));
   } else {
     const table = el('table');
     const body = el('tbody');
     const head = el('tr');
     for (const h of ['When', 'Product', 'Retailer', 'Now']) head.appendChild(el('th', null, h));
     body.appendChild(head);
-    for (const o of DATA.changes) {
+    for (const o of act.changes) {
       const tr = el('tr');
       tr.appendChild(el('td', 'meta nowrap', ago(o.at)));
       tr.appendChild(el('td', null, o.productName));
@@ -3970,6 +4237,21 @@ document.getElementById('refresh').addEventListener('click', (e) =>
 document.getElementById('find-q').addEventListener('input', (e) => {
   FIND_FILTER.q = String(e.target.value || '').trim();
   renderFinds();
+});
+
+// The other lists' search boxes. Static in the markup for the same reason as
+// the finds box: a rebuilt input loses your cursor every thirty seconds.
+document.getElementById('flt-missions-q').addEventListener('input', (e) => {
+  LIST_FILTERS.missions.q = String(e.target.value || '').trim();
+  render();
+});
+document.getElementById('flt-products-q').addEventListener('input', (e) => {
+  LIST_FILTERS.products.q = String(e.target.value || '').trim();
+  render();
+});
+document.getElementById('flt-activity-q').addEventListener('input', (e) => {
+  LIST_FILTERS.activity.q = String(e.target.value || '').trim();
+  render();
 });
 
 // \u2500\u2500 Installing, and quick adds \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
