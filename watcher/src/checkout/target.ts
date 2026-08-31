@@ -10,14 +10,13 @@
  * flow records a clean failure instead of clicking the wrong thing.
  *
  * Target uses `data-test` attributes across its storefront, which is why the
- * candidates below are data-test based with text fallbacks. The product-page
- * and cart selectors were verified at the sitting (31 Aug 2026): probed on
- * the real pages, screenshotted with the match highlighted, and approved.
- * The checkout screens — `checkoutButton`'s signed-in behavior and
- * `placeOrder` — are still unverified, because the buy profile's session had
- * lapsed that day and only a person signs in. Until a mini-sitting proves
- * them, this flow can only ever end in `dry_run` or a named failure —
- * `live` has no meaning before every selector on the money path is proven.
+ * candidates below are data-test based with text fallbacks. Every selector
+ * was verified at the sitting (31 Aug 2026): probed on the real pages —
+ * product, signed-in cart, and the checkout review screen with the saved
+ * card in play — screenshotted with the match highlighted, and approved by
+ * a person. What still stands between this file and money moving is the
+ * `live` config flag and an armed mission under a spend cap, which is
+ * exactly the distance that should remain.
  *
  * ── What this file will not do ──────────────────────────────────────────────
  *
@@ -69,13 +68,18 @@ export const TARGET_SELECTORS = {
     candidates: ['[data-test="cart-summary-fulfillment"]'],
     verified: true,
   },
+  // Verified at the sitting's second half (31 Aug 2026): probed in the real
+  // signed-in buy profile — the cart button read "Check out", the review page
+  // showed the saved card and address, and the place-order button was located,
+  // boxed, photographed and approved by Roberto. It was never clicked; the
+  // first click happens on a night he picks, live, armed, capped.
   checkoutButton: {
     candidates: ['[data-test="checkout-button"]'],
-    verified: false,
+    verified: true,
   },
   placeOrder: {
     candidates: ['[data-test="placeOrderButton"]'],
-    verified: false,
+    verified: true,
   },
   removeItem: {
     candidates: ['[data-test="cartItem-deleteBtn"]', 'button:has-text("Remove")'],

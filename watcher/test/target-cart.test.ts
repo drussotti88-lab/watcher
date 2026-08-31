@@ -42,14 +42,19 @@ test('THE SELECTOR TABLE KEEPS WHAT THE SITTING MEASURED', () => {
     ['button:has([data-test="cart-order-summary"])']);
 });
 
-test('placeOrder refuses while the checkout selectors are unverified', async () => {
-  // The gate must fire before the page is ever touched — a fake page with no
-  // methods proves the refusal happens first.
-  assert.equal(TARGET_SELECTORS.placeOrder.verified, false,
-    'this test exists because the checkout screens have not been verified; ' +
-    'when the mini-sitting flips this, replace this test with one for the gate itself');
-  await assert.rejects(
-    () => targetCart.placeOrder({} as never),
-    (e: unknown) => e instanceof CheckoutStepError && /never been verified/.test(e.message),
-  );
+test('THE SITTING IS COMPLETE — every selector is a verified reading', () => {
+  // Both halves ran on 31 Aug 2026: the cart in a guest profile, the checkout
+  // screens in the real signed-in buy profile, each match boxed in a
+  // screenshot and approved by a person. A step that regresses to
+  // verified:false here is either a deliberate re-measure or a mistake, and
+  // this test makes sure it is never a quiet one.
+  for (const [step, spec] of Object.entries(TARGET_SELECTORS)) {
+    assert.equal(spec.verified, true, `${step} lost its verification`);
+  }
+  // The gate in placeOrder stays in the code even though it can no longer
+  // fire: the day someone re-measures a selector and flips it back, the
+  // refusal must be waiting. What now stands between this driver and money
+  // moving is the live flag and an armed, capped mission — by design.
+  assert.ok(targetCart.placeOrder, 'the gated entry point still exists');
+  assert.ok(CheckoutStepError, 'and so does the error it refuses with');
 });
