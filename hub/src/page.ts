@@ -201,6 +201,16 @@ button.small { padding: 4px 10px; font-size: 12px; border-radius: var(--r-sm); }
 .s-unknown, .s-unchecked, .s-queue { background: var(--warn-bg); color: var(--warn); }
 .flag { background: var(--alert-bg); color: var(--alert); }
 .info { background: var(--accent-soft); color: var(--accent); }
+.fresh { background: var(--accent); color: #fff; }
+/* The release radar: a compact calendar of what drops when. */
+.radar { margin-bottom: 14px; }
+.radar h3 { margin: 0 0 2px; font-size: 13px; letter-spacing: .05em;
+            text-transform: uppercase; color: var(--muted); }
+.radar h3.today { color: var(--accent); }
+.radar .rrow { display: flex; gap: 8px; align-items: baseline; padding: 5px 0;
+               border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.radar .rrow:last-child { border-bottom: 0; }
+.radar .rgroup { margin-bottom: 10px; }
 .stale { color: var(--alert); font-weight: 600; }
 /* The "why you are seeing this" line. Quieter than the facts above it, because
    it explains rather than informs. */
@@ -460,6 +470,7 @@ ${FONTS}<style>${STYLE}</style></head>
       <strong>Forget</strong> means never offer this again, and is remembered,
       so the next sweep will not re-suggest it.
     </p>
+    <div class="card radar" id="release-radar" hidden></div>
     <div class="filters" id="finds-filters">
       <input type="search" id="find-q" placeholder="Search these finds"
              autocomplete="off" autocapitalize="off" spellcheck="false">
@@ -493,6 +504,10 @@ ${FONTS}<style>${STYLE}</style></head>
           <label class="f">Most to spend in 24 hours
             <span class="hint">in dollars — nothing can be armed without this</span>
             <input type="number" name="spendCapDay" step="0.01" min="0" placeholder="unset">
+          </label>
+          <label class="f">Sweep for new products every
+            <span class="hint">hours — how often the catalogues are re-read</span>
+            <input type="number" name="sweepEveryHours" step="1" min="1" placeholder="24">
           </label>
         </div>
         <p class="sub" style="margin:0">
@@ -1719,7 +1734,11 @@ function render() {
     sf.querySelector('[name=spendCapDay]').value =
       st.spendCapDay === null || st.spendCapDay === undefined ? '' : st.spendCapDay;
   }
+  if (document.activeElement !== sf.querySelector('[name=sweepEveryHours]')) {
+    sf.querySelector('[name=sweepEveryHours]').value = st.sweepEveryHours || '';
+  }
 
+  renderRadar();
   renderFinds();
 
   const hf = document.getElementById('hours-form');
@@ -1807,7 +1826,14 @@ function findReason(d) {
  * unusable. A hard refresh clearing it is the right amount of memory for
  * something you set while looking at a list.
  */
-const FIND_FILTER = { shop: '', state: '', q: '', showDormant: false };
+const FIND_FILTER = { shop: '', state: '', q: '', showDormant: false, fresh: false };
+
+/** First seen inside the last two days — the news, as opposed to the list. */
+const FRESH_MS = 48 * 3600 * 1000;
+function isFresh(d) {
+  const t = Date.parse(d.firstSeenAt || '');
+  return isFinite(t) && Date.now() - t < FRESH_MS;
+}
 
 /**
  * What each kind of sealed product usually costs at a shop that is not
@@ -1843,6 +1869,7 @@ function findMatches(d) {
   if (f.state === 'pre' && !d.isPreOrder) return false;
   if (f.state === 'in' && (d.isPreOrder || d.state !== 'in')) return false;
   if (f.state === 'out' && (d.isPreOrder || d.state !== 'out')) return false;
+  if (f.fresh && !isFresh(d)) return false;
   if (f.q) {
     const hay = ((d.name || '') + ' ' + (d.kind || '') + ' ' + (d.retailer || '')).toLowerCase();
     // Every word, in any order. Typing two words should narrow, not fail.
@@ -1919,6 +1946,86 @@ function renderFindFilters(all) {
   states.appendChild(pick('pre', 'Pre-order'));
   states.appendChild(pick('in', 'In stock'));
   states.appendChild(pick('out', 'Out of stock'));
+
+  // The news chip. Independent of status — a fresh pre-order and a fresh
+  // restock are both "what showed up since yesterday", which is the question
+  // this chip answers.
+  const forFresh = () => all.filter((d) => {
+    const was = FIND_FILTER.fresh;
+    FIND_FILTER.fresh = true;
+    const ok = findMatches(d);
+    FIND_FILTER.fresh = was;
+    return ok;
+  }).length;
+  const nFresh = forFresh();
+  states.appendChild(chip('New (48h)', nFresh, FIND_FILTER.fresh, () => {
+    FIND_FILTER.fresh = !FIND_FILTER.fresh;
+    renderFinds();
+  }, nFresh === 0 && !FIND_FILTER.fresh));
+}
+
+/**
+ * The release radar: every known street date ahead of today, as a calendar.
+ *
+ * Discovery answers "what exists"; the radar answers "when do I need to be
+ * awake". It merges what you are watching with what the sweep found, because
+ * on a release morning the distinction is bookkeeping — dated missions come
+ * first (deduped by name, the mission wins), and Target is the only shop
+ * that publishes dates ahead, so most rows will be Target's; that is a fact
+ * about the retailers, not a bug in the radar.
+ */
+function renderRadar() {
+  const host = document.getElementById('release-radar');
+  if (!host) return;
+  const entries = [];
+  const seen = {};
+  for (const m of DATA.missions) {
+    if (!m.releaseDate) continue;
+    const days = daysUntil(m.releaseDate);
+    if (days === null || days < 0) continue;
+    entries.push({ name: m.productName, retailer: m.retailer, date: m.releaseDate,
+      days: days, watching: true, armed: !!m.armed, url: m.url, pre: !!m.isPreOrder });
+    seen[String(m.productName).toLowerCase()] = true;
+  }
+  for (const d of DATA.discoveries || []) {
+    if (!d.releaseDate) continue;
+    const days = daysUntil(d.releaseDate);
+    if (days === null || days < 0) continue;
+    if (seen[String(d.name).toLowerCase()]) continue;
+    entries.push({ name: d.name, retailer: d.retailer, date: d.releaseDate,
+      days: days, watching: false, armed: false, url: d.url, pre: !!d.isPreOrder });
+  }
+  host.textContent = '';
+  if (!entries.length) { host.hidden = true; return; }
+  host.hidden = false;
+  host.appendChild(el('div', 'name', 'Release radar'));
+  host.appendChild(el('div', 'meta', 'Every known street date ahead, soonest first.'));
+  entries.sort((a, b) => a.days - b.days || String(a.name).localeCompare(String(b.name)));
+  const groups = [
+    { label: 'Drops today', today: true, match: (e) => e.days === 0 },
+    { label: 'Tomorrow', match: (e) => e.days === 1 },
+    { label: 'This week', match: (e) => e.days >= 2 && e.days <= 7 },
+    { label: 'Later', match: (e) => e.days > 7 },
+  ];
+  for (const g of groups) {
+    const mine = entries.filter(g.match);
+    if (!mine.length) continue;
+    const box = el('div', 'rgroup');
+    box.appendChild(el('h3', g.today ? 'today' : null, g.label));
+    for (const e of mine) {
+      const row = el('div', 'rrow');
+      const a = el('a', null, shortName(e.name));
+      a.href = e.url; a.target = '_blank'; a.rel = 'noreferrer'; a.title = e.name;
+      row.appendChild(a);
+      row.appendChild(el('span', 'meta', (e.retailer ? e.retailer + ' · ' : '') + e.date +
+        (e.days > 1 ? ' · in ' + e.days + ' days' : '')));
+      if (e.armed) row.appendChild(el('span', 'pill s-in', 'ARMED'));
+      else if (e.watching) row.appendChild(el('span', 'pill info', 'watching'));
+      if (e.pre) row.appendChild(el('span', 'pill s-queue', 'PRE-ORDER'));
+      box.appendChild(row);
+    }
+    host.appendChild(box);
+  }
 }
 
 function renderFinds() {
@@ -1950,7 +2057,11 @@ function renderFinds() {
   // the honest version.
   const live = matched.filter((d) => findRank(d) < DORMANT_FROM);
   const dormant = matched.filter((d) => findRank(d) >= DORMANT_FROM);
-  const shown = FIND_FILTER.showDormant || live.length === 0 ? matched : live;
+  // The fresh filter unfolds the back catalogue: something that appeared
+  // yesterday is news even when its band says dormant, and a chip that
+  // promised three and folded one away would be lying.
+  const shown = FIND_FILTER.showDormant || FIND_FILTER.fresh || live.length === 0
+    ? matched : live;
 
   const count = document.getElementById('find-count');
   if (count) {
@@ -1978,6 +2089,7 @@ function renderFinds() {
       FIND_FILTER.shop = '';
       FIND_FILTER.state = '';
       FIND_FILTER.q = '';
+      FIND_FILTER.fresh = false;
       const box = document.getElementById('find-q');
       if (box) box.value = '';
       renderFinds();
@@ -2022,6 +2134,10 @@ function renderFinds() {
     left.appendChild(el('div', 'meta', facts.join(' · ')));
 
     const tags = el('div', 'tags');
+
+    // The news first: a find that appeared in the last two days is the reason
+    // to open this tab today rather than any other day.
+    if (isFresh(d)) tags.appendChild(el('span', 'pill fresh', 'NEW'));
 
     // What it is, before what we guessed about it. A pre-order takes the money
     // now and ships whenever the publisher says, so it is a different decision
@@ -2121,7 +2237,10 @@ function renderFinds() {
   }
 
   // The tail, and what it would cost you to look at it.
-  if (dormant.length > 0 && !FIND_FILTER.showDormant && live.length > 0) {
+  // No fold notice while the fresh filter is on — it unfolds everything it
+  // matches, so "N more from the back catalogue" would be counting rows that
+  // are already on screen.
+  if (dormant.length > 0 && !FIND_FILTER.showDormant && !FIND_FILTER.fresh && live.length > 0) {
     const more = el('div', 'card');
     more.appendChild(el('div', 'name',
       dormant.length + ' more from the back catalogue'));
@@ -2284,6 +2403,9 @@ document.getElementById('settings-form').addEventListener('submit', async (e) =>
       shippingAllowance: Number(f.shippingAllowance || 0),
       // Blank clears the cap — and with it, the ability to arm anything new.
       spendCapDay: f.spendCapDay === '' ? null : Number(f.spendCapDay),
+      // Blank leaves the sweep cadence as it is — there is no "no sweeps"
+      // spelling here on purpose.
+      ...(f.sweepEveryHours === '' ? {} : { sweepEveryHours: Number(f.sweepEveryHours) }),
     });
     load();
     return 'saved — applies to every mission';

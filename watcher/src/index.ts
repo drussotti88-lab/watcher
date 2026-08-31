@@ -29,7 +29,7 @@ import { searchUrl } from './readers/target-search.ts';
 import { makeBuyer } from './buy.ts';
 import { categoryUrl, pageCount } from './readers/pokemoncenter-search.ts';
 import { searchUrl as walmartSearchUrl } from './readers/walmart-search.ts';
-import { interleave, todayLocal, type SweepStep } from './plan.ts';
+import { deepPages, interleave, todayLocal, type SweepStep } from './plan.ts';
 import { Activity } from './activity.ts';
 import { runSetup } from './setup.ts';
 
@@ -103,10 +103,14 @@ const PC_CATEGORY = 'tcg-cards';
  *
  * 591 products is 19 pages. Reading all of them every sweep would spend the
  * retailer's patience re-reading a back catalogue that has not changed since
- * 2021 — so the walk is capped, and it starts from the front where the
- * catalogue puts the things that are actually moving.
+ * 2021 — so each sweep reads the front pages, where the catalogue puts what
+ * is actually moving, plus a rotating handful of deep pages (see
+ * `deepPages` in plan.ts) so the whole catalogue is still covered across
+ * successive sweeps. Same six-page budget as before; full coverage roughly
+ * every six days instead of never.
  */
-const PC_MAX_PAGES = 6;
+const PC_FRESH_PAGES = 3;
+const PC_DEEP_PER_SWEEP = 3;
 
 /**
  * Walmart, by search rather than by category.
@@ -359,13 +363,27 @@ async function runPasses(once: boolean): Promise<void> {
     const found = pcCandidates(scan.verdicts);
     let line = `sweep ${label}: ${scan.verdicts.length} products, ${found.length} worth a look`;
 
-    // Do not walk past the end of a category that is shorter than the cap.
+    // Do not walk past the end of a category that is shorter than planned.
     const pages = pageCount(scan.total);
     if (scan.total !== null) line += ` · ${scan.total} in category`;
-    if (step.page >= Math.min(pages, PC_MAX_PAGES)) {
+    if (step.page >= pages) {
       sweepPlan = sweepPlan.filter(
         (s) => !(s.retailer === PC_RETAILER && s.kind === 'pc' && s.page > step.page),
       );
+    }
+
+    // The front page knows how long the catalogue really is, so today's deep
+    // pages are planned here rather than guessed up front. Appended to the
+    // tail of the plan: the pacer spaces them out either way, and the fresh
+    // pages keep their place at the head.
+    if (step.page === 1 && scan.total !== null) {
+      const deep = deepPages(todayLocal(), pages, PC_FRESH_PAGES, PC_DEEP_PER_SWEEP).filter(
+        (p) => !sweepPlan.some((s) => s.kind === 'pc' && s.page === p),
+      );
+      for (const p of deep) {
+        sweepPlan.push({ retailer: PC_RETAILER, kind: 'pc', category: step.category, page: p });
+      }
+      if (deep.length) line += ` · deep pages today: ${deep.join(', ')}`;
     }
 
     if (found.length > 0) {
@@ -651,7 +669,10 @@ async function runPasses(once: boolean): Promise<void> {
           query,
           offset: 0,
         }));
-        const pcSteps: SweepStep[] = Array.from({ length: PC_MAX_PAGES }, (_, i) => ({
+        // Only the fresh pages are planned here; page one reports how long
+        // the catalogue actually is, and today's rotating deep pages are
+        // appended then, sized to the real count instead of a stale guess.
+        const pcSteps: SweepStep[] = Array.from({ length: PC_FRESH_PAGES }, (_, i) => ({
           retailer: PC_RETAILER,
           kind: 'pc' as const,
           category: PC_CATEGORY,

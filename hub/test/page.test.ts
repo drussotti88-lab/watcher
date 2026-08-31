@@ -1624,7 +1624,10 @@ test('a find recorded before any of this still renders', async () => {
   const bare = {
     id: 3, sourceId: 'target-tcg', externalId: '1', name: 'An older find',
     url: '', price: null, kind: '', confidence: '', foundBy: '', imageUrl: '',
-    status: 'new', firstSeenAt: new Date().toISOString(), alreadyHave: false,
+    // Genuinely older — a find first seen in the last 48h would honestly earn
+    // the NEW pill, and this test is about rows with nothing left to claim.
+    status: 'new', firstSeenAt: new Date(Date.now() - 5 * 86400000).toISOString(),
+    alreadyHave: false,
   };
   const h = await boot(withFinds([bare]));
   assert.match($(h, '#finds-list').textContent, /An older find/);
@@ -2201,4 +2204,106 @@ test('the finds bar is untouched by the other bars', async () => {
   const h = await boot({ ...LISTED, discoveries: MIXED });
   typeInto(h, 'flt-missions-q', 'charizard');
   assert.ok(findNames(h).length > 0, 'finds still show while missions are filtered');
+});
+
+// ── The release radar, and the NEW badge ─────────────────────────────────────
+
+const daysAhead = (n: number): string =>
+  new Date(Date.now() + n * 86400000).toISOString().slice(0, 10);
+
+test('THE RELEASE RADAR GROUPS EVERY DATED ITEM BY WHEN IT DROPS', async () => {
+  const d = JSON.parse(JSON.stringify(DASHBOARD));
+  d.missions[0].releaseDate = daysAhead(3);
+  d.missions[0].isPreOrder = true;
+  d.discoveries = [
+    { ...RICH_FIND, id: 31, name: 'Drops This Morning Box', releaseDate: daysAhead(0) },
+    { ...RICH_FIND, id: 32, name: 'Next Month Tin', releaseDate: daysAhead(20) },
+    { ...RICH_FIND, id: 33, name: 'Already Out Box', releaseDate: '2026-07-15' },
+    { ...RICH_FIND, id: 34, name: 'Undated Box', releaseDate: '' },
+  ];
+  const h = await boot(d);
+  const radar = $(h, '#release-radar');
+  assert.equal(radar.hidden, false);
+  const text = radar.textContent;
+  assert.match(text, /Drops today/);
+  assert.match(text, /Drops This Morning Box/);
+  assert.match(text, /This week/);
+  assert.match(text, /Pitch Black ETB/, 'the watched mission is on the radar too');
+  assert.match(text, /watching/i, 'and marked as watched');
+  assert.match(text, /Later/);
+  assert.match(text, /Next Month Tin/);
+  assert.doesNotMatch(text, /Already Out Box/, 'past dates are not news');
+  assert.doesNotMatch(text, /Undated Box/, 'no date, no radar');
+});
+
+test('the radar hides itself when nothing ahead is dated', async () => {
+  const h = await boot(withFinds([{ ...RICH_FIND, releaseDate: '2026-07-15' }]));
+  assert.equal(($(h, '#release-radar') as any).hidden, true);
+});
+
+test('a mission and a find for the same product appear once, as the mission', async () => {
+  const d = JSON.parse(JSON.stringify(DASHBOARD));
+  d.missions[0].releaseDate = daysAhead(2);
+  d.discoveries = [{ ...RICH_FIND, id: 35, name: 'Pitch Black ETB', releaseDate: daysAhead(2) }];
+  const h = await boot(d);
+  const rows = [...h.doc.querySelectorAll('#release-radar .rrow')];
+  assert.equal(rows.length, 1, 'deduped by name');
+  assert.match(rows[0]!.textContent ?? '', /watching/i);
+});
+
+test('A FIND FIRST SEEN THIS WEEK WEARS A NEW PILL, AN OLD ONE DOES NOT', async () => {
+  const old = new Date(Date.now() - 5 * 86400000).toISOString();
+  const h = await boot(withFinds([
+    { ...RICH_FIND, id: 41, name: 'Fresh Box', firstSeenAt: new Date().toISOString() },
+    { ...RICH_FIND, id: 42, name: 'Stale Box', firstSeenAt: old },
+  ]));
+  const cards = [...h.doc.querySelectorAll('#finds-list .card')];
+  const withNew = cards.filter((c) =>
+    [...c.querySelectorAll('.pill')].some((p) => p.textContent === 'NEW'));
+  assert.equal(withNew.length, 1);
+  assert.match(withNew[0]!.textContent ?? '', /Fresh Box/);
+});
+
+test('the New chip narrows to the last 48 hours and unfolds the dormant', async () => {
+  const old = new Date(Date.now() - 5 * 86400000).toISOString();
+  const h = await boot(withFinds([
+    { ...RICH_FIND, id: 41, name: 'Fresh Box', firstSeenAt: new Date().toISOString() },
+    // Fresh but dormant-banded: no signal, sealed guess, long released.
+    { ...RICH_FIND, id: 43, name: 'Fresh Deep Cut', firstSeenAt: new Date().toISOString(),
+      signal: '', confidence: 'sealed', releaseDate: '2021-06-01' },
+    { ...RICH_FIND, id: 42, name: 'Stale Box', firstSeenAt: old },
+  ]));
+  const chip = chips(h, 'find-states').find((c) => c.startsWith('New (48h)'));
+  assert.equal(chip, 'New (48h)2', 'the chip counts what it would show');
+  pressChip(h, 'find-states', 'New (48h)');
+  const names = findNames(h);
+  assert.deepEqual(names.sort(), ['Fresh Box', 'Fresh Deep Cut'],
+    'fresh wins over the dormant fold — news is news');
+  pressChip(h, 'find-states', 'New (48h)');
+  assert.ok(findNames(h).includes('Stale Box'), 'pressing again clears it');
+});
+
+test('the sweep cadence is editable in settings and rides the same save', async () => {
+  const d = JSON.parse(JSON.stringify(DASHBOARD));
+  d.settings = { taxRate: 0, shippingAllowance: 0, sweepEveryHours: 6 };
+  const h = await boot(d);
+  const box = $(h, '[name=sweepEveryHours]') as HTMLInputElement;
+  assert.equal(box.value, '6', 'the current cadence is shown');
+  box.value = '4';
+  submit($(h, '#settings-form'), h.dom.window);
+  await h.settle();
+  const call = h.calls.find((c) => c.path === '/api/settings' && c.method === 'POST');
+  assert.ok(call);
+  assert.equal(call!.body.sweepEveryHours, 4);
+});
+
+test('a blank cadence box leaves the cadence alone rather than zeroing it', async () => {
+  const h = await boot(DASHBOARD);
+  const box = $(h, '[name=sweepEveryHours]') as HTMLInputElement;
+  box.value = '';
+  submit($(h, '#settings-form'), h.dom.window);
+  await h.settle();
+  const call = h.calls.find((c) => c.path === '/api/settings' && c.method === 'POST');
+  assert.ok(call);
+  assert.ok(!('sweepEveryHours' in call!.body), 'absent, not null, not zero');
 });
