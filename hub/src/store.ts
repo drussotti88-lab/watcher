@@ -2214,6 +2214,10 @@ export async function keepDiscovery(
     name: found.name,
     msrp: found.price ?? null,
     imageUrl: found.imageUrl,
+    // The sweep read the street date off the retailer's own page; dropping it
+    // here left every kept product saying "no release date" while the
+    // discovery row underneath it knew better.
+    releaseDate: found.releaseDate || null,
   });
   const listing = await addListing(db, userId, {
     productKey: product.key,

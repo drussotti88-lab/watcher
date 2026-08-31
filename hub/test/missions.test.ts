@@ -999,3 +999,17 @@ test('a find with no picture is blank rather than broken', async () => {
   const [found] = await store.discoveriesToReview(db, USER);
   assert.equal(found!.imageUrl, '');
 });
+
+test('a kept find brings its street date to the product', async () => {
+  // The sweep read the date off the retailer's own page. Dropping it at Keep
+  // left every kept product saying "no release date" while the discovery row
+  // underneath knew better.
+  const db = await withTargetSource();
+  await store.recordDiscoveries(db, USER, 'target-tcg', [
+    sighting({ releaseDate: '2026-09-16' }),
+  ], true);
+  const [found] = await store.discoveriesToReview(db, USER);
+  await store.keepDiscovery(db, USER, found!.id);
+  const [product] = await store.listProducts(db, USER);
+  assert.equal(product!.releaseDate, '2026-09-16');
+});

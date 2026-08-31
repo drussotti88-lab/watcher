@@ -1467,7 +1467,11 @@ async function keepDiscovery(db2, userId, id) {
   const product = await upsertProduct(db2, userId, {
     name: found.name,
     msrp: found.price ?? null,
-    imageUrl: found.imageUrl
+    imageUrl: found.imageUrl,
+    // The sweep read the street date off the retailer's own page; dropping it
+    // here left every kept product saying "no release date" while the
+    // discovery row underneath it knew better.
+    releaseDate: found.releaseDate || null
   });
   const listing = await addListing(db2, userId, {
     productKey: product.key,
