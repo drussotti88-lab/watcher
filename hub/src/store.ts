@@ -2202,7 +2202,7 @@ export async function keepDiscovery(
   db: Sql,
   userId: number,
   id: number,
-): Promise<{ productKey: string; listingId: number }> {
+): Promise<{ productKey: string; listingId: number; missionId: number }> {
   const found = await getDiscovery(db, userId, id);
   if (!found) throw new Error('no such discovery');
   if (found.status !== 'new') throw new Error(`this one was already ${found.status}`);
@@ -2222,12 +2222,23 @@ export async function keepDiscovery(
     url: found.url,
   });
 
+  // Watching, never armed. For weeks Keep stopped at the listing, and the
+  // difference was invisible until release week: seventeen kept finds, three
+  // missions, and nothing polling the other fourteen. Keeping something IS
+  // the decision to watch it — quick-add already worked this way, and a find
+  // you kept but nothing looks at is a decision the system quietly ignored.
+  // Arming stays a separate, deliberate act; this creates eyes, not a wallet.
+  const mission = await upsertMission(db, userId, {
+    listingId: listing.id,
+    label: product.name,
+  });
+
   await db.query(
     `UPDATE discoveries SET status = 'kept', decided_at = now(), product_key = $3
       WHERE user_id = $1 AND id = $2`,
     [userId, id, product.key],
   );
-  return { productKey: product.key, listingId: listing.id };
+  return { productKey: product.key, listingId: listing.id, missionId: mission.id };
 }
 
 

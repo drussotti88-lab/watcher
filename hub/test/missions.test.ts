@@ -664,9 +664,12 @@ test('a sweep result waits for a decision, carrying what the sweep thought', asy
   assert.equal(found!.alreadyHave, false);
 });
 
-test('KEEPING MAKES SOMETHING WATCHABLE AND NOTHING ARMED', async () => {
-  // The safety property of the whole feature. A sweep is a machine's guess;
-  // spending is a decision. Keeping creates a product and a listing, and stops.
+test('KEEPING MAKES SOMETHING WATCHED AND NOTHING ARMED', async () => {
+  // The safety property is about money, not about missions: a sweep is a
+  // machine's guess and spending is a decision, so nothing a Keep creates may
+  // be armed. But keeping IS the decision to watch — this used to stop at the
+  // listing, and the difference was invisible until release week: seventeen
+  // kept finds, three missions, nothing polling the rest. Eyes, not a wallet.
   const { db, id } = await withDiscovery();
   const kept = await store.keepDiscovery(db, USER, id);
 
@@ -678,7 +681,11 @@ test('KEEPING MAKES SOMETHING WATCHABLE AND NOTHING ARMED', async () => {
   assert.equal(listings.length, 1);
   assert.equal(listings[0]!.externalId, '1010892076');
   assert.equal(kept.productKey, products[0]!.key);
-  assert.equal(missions.length, 0, 'no mission — and therefore nothing that can spend');
+  assert.equal(missions.length, 1, 'kept means watched — a mission exists');
+  assert.equal(missions[0]!.id, kept.missionId);
+  assert.equal(missions[0]!.enabled, true, 'watching from the moment it is kept');
+  assert.equal(missions[0]!.armed, false, 'and NEVER armed — arming is its own act');
+  assert.equal(missions[0]!.ceiling, null, 'no ceiling either: nothing here can spend');
 });
 
 test('a kept find leaves the review list', async () => {

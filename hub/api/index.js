@@ -1475,12 +1475,16 @@ async function keepDiscovery(db2, userId, id) {
     externalId: found.externalId,
     url: found.url
   });
+  const mission = await upsertMission(db2, userId, {
+    listingId: listing.id,
+    label: product.name
+  });
   await db2.query(
     `UPDATE discoveries SET status = 'kept', decided_at = now(), product_key = $3
       WHERE user_id = $1 AND id = $2`,
     [userId, id, product.key]
   );
-  return { productKey: product.key, listingId: listing.id };
+  return { productKey: product.key, listingId: listing.id, missionId: mission.id };
 }
 function isSweepDue(lastSweptAt, everyHours, now = Date.now()) {
   if (!Number.isFinite(everyHours) || everyHours <= 0) return false;
@@ -2350,9 +2354,10 @@ ${FONTS}<style>${STYLE}</style></head>
   <section id="tab-finds" hidden>
     <h2 style="margin-top:0">What the sweep turned up</h2>
     <p class="sub" style="margin:-6px 0 14px">
-      A sweep proposes; you decide. <strong>Keep</strong> makes it a product with
-      a listing you can watch \u2014 it does not arm anything, and it never will:
-      a machine's guess and a decision about money are two different things.
+      A sweep proposes; you decide. <strong>Keep</strong> starts watching it \u2014
+      a product, a listing, and a mission with eyes on the page. It does not
+      arm anything, and it never will: a machine's guess and a decision about
+      money are two different things.
       <strong>Forget</strong> means never offer this again, and is remembered,
       so the next sweep will not re-suggest it.
     </p>
