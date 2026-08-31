@@ -1,129 +1,91 @@
 # Watcher
 
-Watches retailers from **your machine, on your connection**, because that's the
-only way these three sites can be watched at all — and it's free, which the
-alternative isn't.
+Watches three retailers from **your machine, on your connection**, because that
+is the only way these three can be watched at all. Pokémon Center, Target and
+Walmart all refuse a datacentre outright; a real browser on a home connection
+isn't imitating a legitimate visitor, it is one.
 
-This first release does **two things**, deliberately. Until we know what Pokémon
-Center, Target and Walmart actually serve a real browser from your address,
-everything downstream is guesswork.
-
----
-
-## Setup
-
-```powershell
-cd C:\Users\danru\Pokemon\watcher
-npm install
-copy watcher.config.example.json watcher.config.json
-```
-
-`npm install` pulls Playwright — about 30 seconds. It does **not** download a
-browser, because the default config uses the Chrome you already have.
+**Setting this up for the first time? Read [SETUP.md](SETUP.md)** — or just
+double-click `1 - Set up`. This file is developer notes.
 
 ---
 
-## 1. Can this machine see them?
+## What it does today
 
-```powershell
-npm run probe
+- Reads a product page at all three retailers — price, stock, seller,
+  order limit, street date, pre-order.
+- Sweeps all three catalogues for things worth watching, and files them for
+  you to keep or forget.
+- Reports every check to the Hub, with a scrubbed activity log.
+- Paces itself per retailer, backs off when challenged, and sleeps outside the
+  hours you set.
+
+**It does not buy anything.** There is no checkout code in this repository —
+not disabled, not gated, unwritten.
+
+## Commands
+
+```
+npm run setup     first run: checks the machine, asks for the Hub and a token
+npm run watch     the real thing. Leave it running
+npm run stop      ask a running Watcher to stop cleanly, from anywhere
+npm run once      one pass, then exit. The first thing to try when something looks wrong
+npm run scan      read a Target search URL and sort it into what is worth watching
+npm run discover  the same scan, remembered, reported to the Hub
+npm run probe     open each retailer and report whether this machine can read it
+npm run inspect   dump everything one page will tell us, into probe-artifacts/
+npm test          the whole suite. No network, nothing spent
+npm run package   build the zip to hand to somebody else
 ```
 
-A Chrome window opens, visits each retailer, and reports back. Let it work —
-the window appearing is the point.
+## The two browser profiles
 
-You'll get something like:
+`chrome-profile-watch` is **signed out**, and that is the whole point. It does
+all the polling, generates all the traffic, and carries none of the risk — the
+worst case is a challenge that clears itself.
 
-```
-  RETAILER         MS     VERDICT
-  ──────────────────────────────────────────────────────────
-  pokemoncenter   4821  reachable — 412KB of real page
-                        "New Releases | Pokémon Center"
-  target          3140  CHALLENGED — Press-and-hold check
-  walmart         2903  reachable — 380KB of real page
-```
+`chrome-profile-buy` is signed in, opens rarely, and is the one that would ever
+hold payment details. Keeping it out of the polling loop is what stops the noisy
+half costing you the account.
 
-**This is the number that decides the architecture.** A cloud Worker got 403
-from all three. If a real browser here gets through, the Watcher is the data
-path and everything else follows.
-
-Note what this is *not*: a `curl` test. Bot protection reads the TLS handshake
-and header ordering, so a command-line client fails regardless of what address
-it comes from. Only a real browser making a real navigation answers this
-honestly.
-
----
-
-## 2. Sign in once
-
-If the probe shows challenges, do this before concluding anything:
-
-```powershell
-npm run browser
-```
-
-Opens the Watcher's **own** Chrome profile — separate from your everyday one, so
-it won't fight it and won't touch your normal session. Sign in to whichever of
-the three you have accounts with, then Ctrl+C.
-
-Then run `npm run probe` again. A signed-in session is treated very differently
-from a cold one, and this alone flips some retailers from challenged to fine.
-
----
-
-## What's here already
-
-The money rails are written and tested — 21 tests, no network, no spending:
-
-```powershell
-npm test
-```
-
-They cover every way an unattended buyer loses money at 3am:
-
-| Guard | Prevents |
-|---|---|
-| Price ceiling, checked twice | Detected at $30, charged $54 |
-| Duplicate lock | The loop runs 4× and buys 4 |
-| Per-run and per-day caps | Six fire at once, you wake to $500 |
-| Cart re-verification | Page said one thing, cart says another |
-| Fail closed on spend | Hub unreachable → keep watching, never buy |
-| Dry run | You cannot test a checkout by buying things |
-
-`live` is `false` in the config and should stay there until you've watched a dry
-run do the right thing.
-
----
-
-## What isn't built yet
-
-Stock reading per retailer, the sweep loop, Hub wiring, and the checkout flow
-itself. That's next, and the probe result shapes all of it — there's no point
-writing a Pokémon Center reader before knowing whether this machine can load a
-Pokémon Center page.
-
-The checkout step specifically needs building **together, with a browser window
-open**, because it depends on what each site's cart actually looks like. Writing
-those selectors blind would be guessing, and guessing is the one thing the whole
-design refuses to do.
-
----
+**Do not sign in to the watch profile.** An earlier version of this file said to,
+and it was wrong: it defeats the split entirely.
 
 ## Config
 
 `watcher.config.json` — gitignored, holds your Hub token, treat it like a saved
-password.
+password. `npm run setup` writes it for you.
 
 | Key | Meaning |
 |---|---|
-| `hub.url` / `hub.token` | Your deployed Worker. Blank runs standalone |
-| `browser.channel` | `chrome` uses your install. `chromium` makes Playwright fetch one |
+| `hub.url` / `hub.token` | The Hub, and your own token. Blank runs standalone |
+| `browser.channel` | `chrome` uses your install — the default, and the right one |
 | `browser.executablePath` | Only if Chrome is somewhere unusual |
-| `browser.headed` | `true` = you watch it work. Keep it that way for now |
-| `budget.perRun` / `perDay` | Hard spend caps. Refused loudly, never silently |
-| `live` | `false` stops before every submit. **Leave it false** |
-| `intervalSec` | Seconds between sweeps, once the loop exists |
+| `browser.headed` | `true` means you can watch it work |
+| `budget.perRun` / `perDay` | **Requests, not dollars.** How many page reads per pass and per day |
+| `live` | `false` stops before every submit. Nothing exists to submit yet |
+| `intervalSec` | Seconds between passes |
 
-The config refuses to load if `perRun` exceeds `perDay`, or if `live` is true
-with no Hub — spending has to be authorised somewhere that survives this process
-dying.
+`budget` is worth reading twice: it caps **how often the shops are touched**,
+not how much money could leave. There is no money cap yet — see the roadmap. A
+mission's price ceiling limits what one purchase may cost and nothing limits the
+total.
+
+## The money rails, honestly
+
+Written and tested, and not all of them are connected to anything yet:
+
+| Rail | State |
+|---|---|
+| Kill switch (`npm run stop`, and the app's toggle) | **built** |
+| Seller check — a marketplace listing is refused before the price is looked at | **built** |
+| Pre-order check — a pre-order is refused unless the mission allows one | **built** |
+| Cart re-verification (`verifyCart`) | written and tested; **nothing calls it**, because nothing fills a cart |
+| Dry run (`live: false`) | the switch exists; **there is no flow for it to interrupt** |
+| Per-run / per-day money cap | **not built** |
+| Duplicate lock per product per event | **not built** |
+
+The load-bearing rule underneath all of it: **fail open on watching, fail closed
+on spending.** A Hub that is briefly unreachable must not stop us looking at
+pages — but it must stop us buying, because an unreachable Hub is exactly when a
+duplicate purchase is most likely.
