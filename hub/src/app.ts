@@ -140,6 +140,15 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
         },
       });
     }
+    // iOS falls back to probing these fixed paths when a page carries no
+    // apple-touch-icon link. Serving them means no page on this app can ever
+    // hand the home screen a blank tile.
+    if (request.method === 'GET' &&
+        (path === '/apple-touch-icon.png' || path === '/apple-touch-icon-precomposed.png')) {
+      const icon = iconResponse('192');
+      if (icon) return icon;
+    }
+
     if (request.method === 'GET' && path.startsWith('/icon-') && path.endsWith('.png')) {
       const icon = iconResponse(path.slice('/icon-'.length, -'.png'.length));
       if (icon) return icon;
