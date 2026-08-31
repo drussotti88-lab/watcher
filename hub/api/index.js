@@ -2363,11 +2363,14 @@ function dashboardPage() {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Vault Watch</title>
-<link rel="manifest" href="/manifest.webmanifest">
+<link rel="manifest" href="/manifest.webmanifest?v=3">
 <meta name="theme-color" content="#09080e">
-<link rel="icon" href="/icon-192.png" sizes="192x192" type="image/png">
+<link rel="icon" href="/icon-192.png?v=3" sizes="192x192" type="image/png">
 <!-- iOS ignores the manifest for the home-screen icon and the status bar. -->
-<link rel="apple-touch-icon" href="/icon-192.png">
+<!-- The version tag is load-bearing: the icons are served immutable, so a
+     new drawing under the old URL is a new drawing nobody's phone will ever
+     fetch. Bump ?v= whenever the art changes. -->
+<link rel="apple-touch-icon" href="/icon-192.png?v=3">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Vault Watch">
@@ -4861,9 +4864,9 @@ var MANIFEST = {
   theme_color: "#09080e",
   categories: ["shopping", "utilities"],
   icons: [
-    { src: "/icon-192.png", sizes: "192x192", type: "image/png", purpose: "any" },
-    { src: "/icon-512.png", sizes: "512x512", type: "image/png", purpose: "any" },
-    { src: "/icon-maskable.png", sizes: "512x512", type: "image/png", purpose: "maskable" }
+    { src: "/icon-192.png?v=3", sizes: "192x192", type: "image/png", purpose: "any" },
+    { src: "/icon-512.png?v=3", sizes: "512x512", type: "image/png", purpose: "any" },
+    { src: "/icon-maskable.png?v=3", sizes: "512x512", type: "image/png", purpose: "maskable" }
   ],
   shortcuts: [
     { name: "Add a listing", short_name: "Add", url: "/add" }
