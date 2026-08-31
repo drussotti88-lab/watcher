@@ -110,7 +110,12 @@ for (const [w, h, label] of [[390, 844, 'phone'], [1280, 900, 'desktop']] as con
   await page.screenshot({ path: `/home/claude/scratch/hubshots/${tag}-${label}-activity.png` });
   await page.click('[data-tab=missions]');
   await page.waitForTimeout(300);
-  await page.getByText('Settings & run history').first().click();
+  await page.click('.vt [data-view=grid]');
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: `/home/claude/scratch/hubshots/${tag}-${label}-grid.png` });
+  await page.click('.vt [data-view=list]');
+  await page.waitForTimeout(200);
+  await page.getByText('Settings').first().click();
   await page.waitForTimeout(400);
   await page.screenshot({ path: `/home/claude/scratch/hubshots/${tag}-${label}-popup.png` });
   await page.close();

@@ -93,15 +93,12 @@ body { margin: 0; color: var(--ink); font: 15px/1.55 var(--sans);
 main { max-width: 1040px; margin: 0 auto; padding: 28px 20px 96px; }
 
 header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
-/* The mark: an accent tile with a centred dot — the closest thing to a poké
-   ball that stays abstract enough to sit in a corner all day. */
-.mark { width: 32px; height: 32px; border-radius: 10px; flex: none;
-        background: linear-gradient(135deg, #948ce6, #6a61cf);
+/* The mark: the creature's eye from the dnacardvault logo, redrawn as SVG —
+   the same drawing the PWA icons are rendered from. */
+.mark { width: 34px; height: 34px; border-radius: 10px; flex: none;
+        background: #0b0817 url("data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20512%20512%22%3E%0A%20%20%3Cdefs%3E%0A%20%20%20%20%3CradialGradient%20id%3D%22bg%22%20cx%3D%2250%25%22%20cy%3D%2242%25%22%20r%3D%2275%25%22%3E%0A%20%20%20%20%20%20%3Cstop%20offset%3D%220%25%22%20stop-color%3D%22%231b1230%22%2F%3E%0A%20%20%20%20%20%20%3Cstop%20offset%3D%22100%25%22%20stop-color%3D%22%230b0817%22%2F%3E%0A%20%20%20%20%3C%2FradialGradient%3E%0A%20%20%20%20%3ClinearGradient%20id%3D%22lidTop%22%20x1%3D%220%22%20y1%3D%220%22%20x2%3D%221%22%20y2%3D%221%22%3E%0A%20%20%20%20%20%20%3Cstop%20offset%3D%220%25%22%20stop-color%3D%22%23552f8e%22%2F%3E%0A%20%20%20%20%20%20%3Cstop%20offset%3D%2255%25%22%20stop-color%3D%22%2343257a%22%2F%3E%0A%20%20%20%20%20%20%3Cstop%20offset%3D%22100%25%22%20stop-color%3D%22%232a1650%22%2F%3E%0A%20%20%20%20%3C%2FlinearGradient%3E%0A%20%20%20%20%3CradialGradient%20id%3D%22iris%22%20cx%3D%2242%25%22%20cy%3D%2238%25%22%20r%3D%2270%25%22%3E%0A%20%20%20%20%20%20%3Cstop%20offset%3D%220%25%22%20stop-color%3D%22%23bff3ff%22%2F%3E%0A%20%20%20%20%20%20%3Cstop%20offset%3D%2230%25%22%20stop-color%3D%22%235fd7ff%22%2F%3E%0A%20%20%20%20%20%20%3Cstop%20offset%3D%2262%25%22%20stop-color%3D%22%232f7ff2%22%2F%3E%0A%20%20%20%20%20%20%3Cstop%20offset%3D%22100%25%22%20stop-color%3D%22%231b3fa8%22%2F%3E%0A%20%20%20%20%3C%2FradialGradient%3E%0A%20%20%20%20%3CradialGradient%20id%3D%22glow%22%20cx%3D%2250%25%22%20cy%3D%2250%25%22%20r%3D%2250%25%22%3E%0A%20%20%20%20%20%20%3Cstop%20offset%3D%220%25%22%20stop-color%3D%22%2359c8ff%22%20stop-opacity%3D%22.5%22%2F%3E%0A%20%20%20%20%20%20%3Cstop%20offset%3D%22100%25%22%20stop-color%3D%22%2359c8ff%22%20stop-opacity%3D%220%22%2F%3E%0A%20%20%20%20%3C%2FradialGradient%3E%0A%20%20%20%20%3CclipPath%20id%3D%22eyecut%22%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M%2028%20252%20C%20100%20158%2C%20250%20134%2C%20372%20178%20L%20494%20272%20C%20420%20352%2C%20288%20384%2C%20178%20358%20C%2098%20338%2C%2048%20302%2C%2028%20252%20Z%22%2F%3E%0A%20%20%20%20%3C%2FclipPath%3E%0A%20%20%3C%2Fdefs%3E%0A%0A%20%20%3Crect%20width%3D%22512%22%20height%3D%22512%22%20fill%3D%22url(%23bg)%22%2F%3E%0A%20%20%3Ccircle%20cx%3D%22240%22%20cy%3D%22268%22%20r%3D%22205%22%20fill%3D%22url(%23glow)%22%2F%3E%0A%0A%20%20%3C!--%20the%20open%20eye%20--%3E%0A%20%20%3Cg%20clip-path%3D%22url(%23eyecut)%22%3E%0A%20%20%20%20%3Crect%20width%3D%22512%22%20height%3D%22512%22%20fill%3D%22%23120b22%22%2F%3E%0A%20%20%20%20%3Ccircle%20cx%3D%22234%22%20cy%3D%22266%22%20r%3D%22122%22%20fill%3D%22url(%23iris)%22%2F%3E%0A%20%20%20%20%3Ccircle%20cx%3D%22234%22%20cy%3D%22266%22%20r%3D%22122%22%20fill%3D%22none%22%20stroke%3D%22%230c1e56%22%20stroke-width%3D%2214%22%20opacity%3D%22.7%22%2F%3E%0A%20%20%20%20%3Cellipse%20cx%3D%22236%22%20cy%3D%22268%22%20rx%3D%2240%22%20ry%3D%2262%22%20fill%3D%22%2305070f%22%20transform%3D%22rotate(-8%20236%20268)%22%2F%3E%0A%20%20%20%20%3Ccircle%20cx%3D%22196%22%20cy%3D%22224%22%20r%3D%2224%22%20fill%3D%22%23eafcff%22%20opacity%3D%22.9%22%2F%3E%0A%20%20%20%20%3Ccircle%20cx%3D%22274%22%20cy%3D%22318%22%20r%3D%2211%22%20fill%3D%22%23bff3ff%22%20opacity%3D%22.5%22%2F%3E%0A%20%20%3C%2Fg%3E%0A%0A%20%20%3C!--%20the%20angular%20brow%2C%20diving%20to%20a%20sharp%20inner%20corner%20like%20the%20logo%20--%3E%0A%20%20%3Cpath%20d%3D%22M%2028%20252%20C%20100%20158%2C%20250%20134%2C%20372%20178%20L%20494%20272%20L%20512%2034%20L%200%2034%20Z%22%20fill%3D%22url(%23lidTop)%22%2F%3E%0A%20%20%3Cpath%20d%3D%22M%2028%20252%20C%20100%20158%2C%20250%20134%2C%20372%20178%20L%20494%20272%22%0A%20%20%20%20%20%20%20%20fill%3D%22none%22%20stroke%3D%22%23e35bd8%22%20stroke-width%3D%2211%22%20stroke-linecap%3D%22round%22%20opacity%3D%22.9%22%2F%3E%0A%20%20%3Cpath%20d%3D%22M%2028%20252%20C%20100%20158%2C%20250%20134%2C%20372%20178%20L%20494%20272%20C%20420%20352%2C%20288%20384%2C%20178%20358%20C%2098%20338%2C%2048%20302%2C%2028%20252%20Z%22%0A%20%20%20%20%20%20%20%20fill%3D%22none%22%20stroke%3D%22%23241143%22%20stroke-width%3D%2210%22%2F%3E%0A%3C%2Fsvg%3E%0A") center / cover no-repeat;
         box-shadow: 0 4px 14px rgba(127, 119, 221, .4);
-        display: inline-flex; align-items: center; justify-content: center;
-        vertical-align: -7px; margin-right: 10px; }
-.mark::before { content: ''; width: 10px; height: 10px; border-radius: 50%;
-                background: #fff; box-shadow: 0 0 0 3px rgba(9, 8, 14, .35); }
+        display: inline-flex; vertical-align: -9px; margin-right: 10px; }
 h1 { font: 800 26px/1.2 var(--display); margin: 0; letter-spacing: -0.02em; }
 h2 { font: 700 12px/1.4 var(--display); text-transform: uppercase; letter-spacing: .1em;
      color: var(--dim); margin: 32px 0 10px;
@@ -122,25 +119,46 @@ a { color: var(--accent); text-underline-offset: 2px; }
  * just as well for anyone who does not think to swipe a tab strip, so they
  * wrap: two short rows beat one row with a secret.
  */
-.tabs { display: flex; flex-wrap: wrap; gap: 2px; margin: 18px 0 16px;
+/*
+ * The nav. One element, two shapes: on a phone it is the sticky, blurred,
+ * WRAPPING tab bar (five tabs and their counts are wider than a phone, and a
+ * tab that is silently off-screen is a tab that does not exist); from 900px
+ * up it becomes the side panel, with the brand at the top.
+ */
+.shell { display: flex; align-items: stretch; min-height: 100vh; }
+.shell > main { flex: 1; min-width: 0; }
+.tabs { display: flex; flex-wrap: wrap; gap: 2px; align-items: center;
         border-bottom: 1px solid var(--line);
-        /* The tab strip stays put while the lists scroll under it — with the
-           app's own ground blurred through, so it reads as an app bar rather
-           than a row of links that happened to stick. */
         position: sticky; top: env(safe-area-inset-top, 0px); z-index: 30;
         background: rgba(9, 8, 14, .8);
         backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
+.shell { flex-direction: column; }
+.brand { display: flex; align-items: center; gap: 4px; padding: 8px 10px 8px 14px;
+         font: 800 16px/1.2 var(--display); letter-spacing: -0.01em; white-space: nowrap; }
 @media (max-width: 520px) {
   .tab { padding: 10px 11px; font-size: 13.5px; }
   .tab .count { margin-left: 4px; }
+  .brand-name { display: none; }
 }
 .tab { padding: 10px 16px; cursor: pointer; border: none; background: none;
        font: 500 14px/1.4 var(--sans); color: var(--muted);
        border-bottom: 2px solid transparent; border-radius: 0;
-       transition: color .12s, border-color .12s; }
+       transition: color .12s, border-color .12s, background .12s; }
 .tab:hover { color: var(--ink); }
 .tab.on { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
 .tab .count { font-family: var(--mono); font-size: 12px; opacity: .6; margin-left: 6px; }
+@media (min-width: 900px) {
+  .shell { flex-direction: row; }
+  .tabs { flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 3px;
+          width: 218px; flex: none; height: 100vh; top: 0; padding: 16px 12px;
+          border-bottom: none; border-right: 1px solid var(--line);
+          background: rgba(9, 8, 14, .55); }
+  .brand { padding: 6px 8px 18px; font-size: 18px; }
+  .tab { display: flex; align-items: center; text-align: left; width: 100%;
+         padding: 10px 12px; border-bottom: none; border-radius: 10px; }
+  .tab.on { background: var(--accent-soft); border-bottom-color: transparent; }
+  .tab .count { margin-left: auto; }
+}
 
 .bar { display: flex; gap: 8px; align-items: center; margin-bottom: 18px; flex-wrap: wrap; }
 /* flex-basis 0, not the card column's 260px: with a 260px floor the spacer
@@ -185,6 +203,16 @@ button.small { padding: 4px 10px; font-size: 12px; border-radius: var(--r-sm); b
 .chipgroups { display: grid; gap: 6px; }
 /* The shop switcher: the chips, promoted. Same behaviour, tab-sized targets,
    because "which shop am I looking at" is the first question on these pages. */
+/* List/grid switcher, and the grid it switches to. The grid restyles the
+   SAME cards CSS-only: image on top, facts under it, actions at the foot —
+   nothing about what a card says changes with how it is laid out. */
+.listtools { display: flex; justify-content: flex-end; margin: 0 0 10px; }
+.vt { display: flex; gap: 4px; }
+.vt button { font-size: 15px; line-height: 1; padding: 6px 10px; border-radius: var(--r-sm);
+             border: 1px solid var(--line); background: var(--panel-2); color: var(--muted);
+             cursor: pointer; }
+.vt button[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent);
+                                  color: var(--accent); }
 .seg { gap: 8px; }
 .seg .chip { padding: 9px 18px; min-height: 36px; font-size: 13px;
              border-radius: 10px; }
@@ -251,6 +279,18 @@ button.small { padding: 4px 10px; font-size: 12px; border-radius: var(--r-sm); b
 .flag { background: var(--alert-bg); color: var(--alert); }
 .info { background: var(--accent-soft); color: var(--accent); }
 .fresh { background: var(--accent); color: #fff; }
+/* The grid restyles the same cards; it lives below the rules it overrides so
+   the pinned .pill/.right definitions stay the first (and canonical) ones. */
+.gridded { display: grid; grid-template-columns: repeat(auto-fill, minmax(228px, 1fr));
+           gap: 12px; align-items: start; }
+.gridded .card { margin-bottom: 0; }
+.gridded .row { display: block; }
+.gridded .thumb, .gridded .thumb.lg { width: 100%; height: 150px; margin-bottom: 10px; }
+.gridded .right { text-align: left; min-width: 0; margin-top: 8px; }
+.gridded .empty, .gridded > .card.foldnote { grid-column: 1 / -1; }
+/* A pill that is wider than its grid column trims itself rather than
+   escaping the card. */
+.gridded .pill { max-width: 100%; overflow: hidden; text-overflow: ellipsis; display: inline-block; line-height: 22px; }
 /* The release radar: a compact calendar of what drops when. */
 .radar { margin-bottom: 14px; }
 .radar h3 { margin: 12px 0 2px; font-size: 12px; letter-spacing: .08em;
@@ -411,10 +451,10 @@ export function loginPage(message = '', handle = ''): string {
   return `<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Hub</title>${FONTS}<style>${STYLE}</style></head>
+<title>Vault Watch</title>${FONTS}<style>${STYLE}</style></head>
 <body><main class="login">
   <div class="card">
-    <h1><span class="mark"></span>Hub</h1>
+    <h1><span class="mark"></span>Vault Watch</h1>
     <p class="sub" style="margin:6px 0 0">Sign in to see what you're watching.</p>
     <form method="POST" action="/login" style="margin-top:20px" class="stack">
       <!-- Blank name means the owner and the deployment password, which is how
@@ -437,7 +477,7 @@ export function dashboardPage(): string {
 <html lang="en"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Hub</title>
+<title>Vault Watch</title>
 <link rel="manifest" href="/manifest.webmanifest">
 <meta name="theme-color" content="#09080e">
 <link rel="icon" href="/icon-192.png" sizes="192x192" type="image/png">
@@ -445,13 +485,21 @@ export function dashboardPage(): string {
 <link rel="apple-touch-icon" href="/icon-192.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="Hub">
+<meta name="apple-mobile-web-app-title" content="Vault Watch">
 ${FONTS}<style>${STYLE}</style></head>
-<body><main>
+<body><div class="shell">
+  <nav class="tabs" aria-label="Sections">
+    <div class="brand"><span class="mark"></span><span class="brand-name">Vault Watch</span></div>
+    <button class="tab on" data-tab="missions">Missions<span class="count" id="c-missions"></span></button>
+    <button class="tab" data-tab="products">Products<span class="count" id="c-products"></span></button>
+    <button class="tab" data-tab="activity">Activity<span class="count" id="c-activity"></span></button>
+    <button class="tab" data-tab="finds">Finds<span class="count" id="c-finds"></span></button>
+    <button class="tab" data-tab="settings">Settings</button>
+  </nav>
+<main>
   <header>
     <div>
-      <h1><span class="mark"></span>Hub <span class="who" id="who"></span></h1>
-      <span class="sub" id="summary">loading…</span>
+      <span class="sub" id="summary">loading…</span> <span class="who" id="who"></span>
     </div>
     <button id="install" class="small" hidden>Install</button>
   </header>
@@ -491,13 +539,6 @@ ${FONTS}<style>${STYLE}</style></head>
 
   <div class="card banner alert" id="queue-banner" hidden></div>
 
-  <div class="tabs">
-    <button class="tab on" data-tab="missions">Missions<span class="count" id="c-missions"></span></button>
-    <button class="tab" data-tab="products">Products<span class="count" id="c-products"></span></button>
-    <button class="tab" data-tab="activity">Activity<span class="count" id="c-activity"></span></button>
-    <button class="tab" data-tab="finds">Finds<span class="count" id="c-finds"></span></button>
-    <button class="tab" data-tab="settings">Settings</button>
-  </div>
 
   <div class="bar">
     <button id="add-open" class="primary">Add product</button>
@@ -510,6 +551,7 @@ ${FONTS}<style>${STYLE}</style></head>
   </div>
 
   <section id="tab-missions">
+  <div class="listtools"><div class="vt" data-list="missions"><button type="button" data-view="list" title="List view">☰</button><button type="button" data-view="grid" title="Grid view">▦</button></div></div>
     <div class="filters" id="flt-missions" hidden>
       <input type="search" id="flt-missions-q" placeholder="Search missions"
              autocomplete="off" autocapitalize="off" spellcheck="false">
@@ -520,6 +562,7 @@ ${FONTS}<style>${STYLE}</style></head>
   </section>
 
   <section id="tab-products" hidden>
+  <div class="listtools"><div class="vt" data-list="products"><button type="button" data-view="list" title="List view">☰</button><button type="button" data-view="grid" title="Grid view">▦</button></div></div>
     <div class="filters" id="flt-products" hidden>
       <div class="chips seg" id="flt-products-shops"></div>
       <input type="search" id="flt-products-q" placeholder="Search products"
@@ -559,6 +602,7 @@ ${FONTS}<style>${STYLE}</style></head>
       so the next sweep will not re-suggest it.
     </p>
     <div class="card radar" id="release-radar" hidden></div>
+  <div class="listtools"><div class="vt" data-list="finds"><button type="button" data-view="list" title="List view">☰</button><button type="button" data-view="grid" title="Grid view">▦</button></div></div>
     <div class="filters" id="finds-filters">
       <div class="chips seg" id="find-shops"></div>
       <input type="search" id="find-q" placeholder="Search these finds"
@@ -745,6 +789,7 @@ ${FONTS}<style>${STYLE}</style></head>
     </div>
   </dialog>
 </main>
+</div>
 <script>
 const money = (n) => n === null || n === undefined ? '—' : '$' + Number(n).toFixed(2);
 
@@ -951,9 +996,18 @@ function renderDetail(force) {
   if (!DETAIL) return;
   const d = document.getElementById('detail-dialog');
   if (!force && d.contains(document.activeElement)) return;
+  // The run history is a snapshot: it fetches once when opened, and the
+  // thirty-second refresh leaves it be. Everything else refills from DATA.
+  if (!force && DETAIL.kind === 'mission-runs') return;
   const title = document.getElementById('detail-title');
   const body = document.getElementById('detail-body');
-  if (DETAIL.kind === 'mission') {
+  if (DETAIL.kind === 'mission-runs') {
+    const m = DATA.missions.find((x) => x.id === DETAIL.key);
+    if (!m) { closeDetail(); return; }
+    title.textContent = shortName(m.productName) + ' — runs';
+    body.textContent = '';
+    body.appendChild(missionRunsPanel(m));
+  } else if (DETAIL.kind === 'mission') {
     const m = DATA.missions.find((x) => x.id === DETAIL.key);
     // The thing this pop-up was about can vanish under it — deleted from
     // another device, say. A dialog about nothing closes rather than lying.
@@ -1150,11 +1204,16 @@ function missionCard(m) {
   // Tags go below the whole row, full width. Nested inside the title column
   // they were competing with the price for space and wrapping at odd points.
   card.appendChild(flags);
-  const more = el('button', 'small', 'Settings & run history');
-  more.addEventListener('click', () => openDetail('mission', m.id));
+  // Two buttons, two questions: "change how this is watched" and "what has
+  // it done". Bundled they made every look at the history walk past the
+  // spending controls.
+  const settingsBtn = el('button', 'small', 'Settings');
+  settingsBtn.addEventListener('click', () => openDetail('mission', m.id));
+  const runsBtn = el('button', 'small', 'Run history');
+  runsBtn.addEventListener('click', () => openDetail('mission-runs', m.id));
   const acts = el('div', 'actions');
   acts.style.marginTop = '12px';
-  acts.appendChild(more);
+  acts.append(settingsBtn, runsBtn);
   card.appendChild(acts);
   return card;
 }
@@ -1267,6 +1326,8 @@ function missionPanel(m) {
           checkEverySeconds: Number(f.checkEverySeconds),
         });
         load();
+        // Saving is the end of the errand; the pop-up closing is the ack.
+        closeDetail();
         return 'saved';
       });
   });
@@ -1295,24 +1356,35 @@ function missionPanel(m) {
     await withButton(e.target, 'Deleting…', msg, async () => {
       await api('DELETE', '/api/missions/' + m.id);
       load();
+      closeDetail();
       return 'deleted';
     });
   });
 
   wrap.appendChild(form);
+  return wrap;
+}
 
-  const runs = el('div');
-  runs.style.marginTop = '12px';
-  const btn = el('button', 'small', 'Load this mission’s runs');
-  btn.addEventListener('click', async () => {
-    await withButton(btn, 'Loading…', null, async () => {
-      const data = await api('GET', '/api/missions/' + m.id + '/runs');
-      btn.remove();
-      runs.appendChild(runTable(data.runs, 'This mission has not run yet.', m.lastCheckedAt));
+/**
+ * The run history, in its own pop-up. Fetched on open rather than behind a
+ * second "load" click — pressing the Run history button already said what
+ * you wanted. A snapshot on purpose: renderDetail leaves it alone on the
+ * thirty-second refresh, because a history that rewrites itself under your
+ * eyes reads as a glitch, and Close/reopen is the natural "refresh".
+ */
+function missionRunsPanel(m) {
+  const wrap = el('div');
+  wrap.style.marginTop = '10px';
+  wrap.appendChild(el('div', 'meta', 'Loading…'));
+  api('GET', '/api/missions/' + m.id + '/runs')
+    .then((data) => {
+      wrap.textContent = '';
+      wrap.appendChild(runTable(data.runs, 'This mission has not run yet.', m.lastCheckedAt));
+    })
+    .catch((err) => {
+      wrap.textContent = '';
+      wrap.appendChild(el('div', 'msg bad', err.message));
     });
-  });
-  runs.appendChild(btn);
-  wrap.appendChild(runs);
   return wrap;
 }
 
@@ -1534,6 +1606,7 @@ function productPanel(p, listings) {
         notes: f.notes,
       });
       load();
+      closeDetail();
       return 'saved';
     });
   });
@@ -1543,6 +1616,7 @@ function productPanel(p, listings) {
     await withButton(e.target, 'Deleting…', editMsg, async () => {
       await api('DELETE', '/api/products/' + encodeURIComponent(p.key));
       load();
+      closeDetail();
       return 'deleted';
     });
   });
@@ -1576,6 +1650,32 @@ function savedShop(key) {
 }
 function saveShop(key, value) {
   try { localStorage.setItem('shop:' + key, value); } catch (e) { /* fine */ }
+}
+
+/**
+ * List or grid, per page, remembered like the shop pick: how you like to look
+ * at a list is a fact about you, not about today's list.
+ */
+function savedView(key) {
+  try { return localStorage.getItem('view:' + key) === 'grid' ? 'grid' : 'list'; }
+  catch (e) { return 'list'; }
+}
+const VIEWS = {
+  missions: savedView('missions'),
+  products: savedView('products'),
+  finds: savedView('finds'),
+};
+function applyViews() {
+  const hosts = { missions: 'missions', products: 'products', finds: 'finds-list' };
+  for (const key in hosts) {
+    const host = document.getElementById(hosts[key]);
+    if (host) host.classList.toggle('gridded', VIEWS[key] === 'grid');
+  }
+  for (const box of document.querySelectorAll('.vt')) {
+    for (const b of box.querySelectorAll('button')) {
+      b.setAttribute('aria-pressed', VIEWS[box.dataset.list] === b.dataset.view ? 'true' : 'false');
+    }
+  }
 }
 
 const LIST_FILTERS = {
@@ -1924,6 +2024,7 @@ function render() {
   renderRadar();
   renderFinds();
   renderDetail();
+  applyViews();
 
   const hf = document.getElementById('hours-form');
   if (document.activeElement !== hf.querySelector('[name=activeFrom]')) {
@@ -2608,6 +2709,16 @@ function closeAdd() {
 
 document.getElementById('add-open').addEventListener('click', openAdd);
 addDialog.querySelector('[data-act=add-close]').addEventListener('click', closeAdd);
+
+for (const box of document.querySelectorAll('.vt')) {
+  for (const b of box.querySelectorAll('button')) {
+    b.addEventListener('click', () => {
+      VIEWS[box.dataset.list] = b.dataset.view;
+      try { localStorage.setItem('view:' + box.dataset.list, b.dataset.view); } catch (e) { /* fine */ }
+      applyViews();
+    });
+  }
+}
 
 const detailDialog = document.getElementById('detail-dialog');
 detailDialog.querySelector('[data-act=detail-close]').addEventListener('click', closeDetail);

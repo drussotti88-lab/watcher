@@ -147,7 +147,7 @@ const submit = (form: any, win: any): void => {
 /** Open a card's detail pop-up the way a person does: by pressing its button. */
 const openMission = (h: Harness, idx = 0): void => {
   const btns = [...h.doc.querySelectorAll('#missions button')]
-    .filter((b) => b.textContent === 'Settings & run history');
+    .filter((b) => b.textContent === 'Settings');
   assert.ok(btns[idx], 'a mission card should offer its pop-up');
   (btns[idx] as HTMLButtonElement).click();
 };
@@ -2430,4 +2430,89 @@ test('a hand in the pop-up form is not interrupted by the refresh', async () => 
 
   const after = $(h, 'form[data-mission="1"]').querySelector('[name=ceiling]');
   assert.equal(after.value, '123.45', 'a redraw under the cursor eats keystrokes');
+});
+
+// ── Two buttons, two questions; and the pop-up knows when it is done ─────────
+
+test('RUN HISTORY IS ITS OWN BUTTON AND FETCHES ON OPEN', async () => {
+  const h = await boot();
+  h.reply('GET /api/missions/1/runs', { runs: [
+    { startedAt: new Date().toISOString(), productName: 'Pitch Black ETB',
+      outcome: 'in_stock', reason: 'in stock at $49.99', price: 49.99, ms: 800 },
+  ]});
+  const btn = [...h.doc.querySelectorAll('#missions button')]
+    .find((b) => b.textContent === 'Run history');
+  assert.ok(btn, 'the card offers the history directly');
+  (btn as HTMLButtonElement).click();
+  await h.settle();
+  assert.equal(($(h, '#detail-dialog') as any).open, true);
+  assert.match($(h, '#detail-title').textContent ?? '', /runs/);
+  assert.match($(h, '#detail-body').textContent ?? '', /in stock at \$49\.99/,
+    'no second load click — pressing the button already said what you wanted');
+  assert.ok(!$(h, '#detail-body').querySelector('[name=ceiling]'),
+    'and the spending controls are not along for the ride');
+});
+
+test('saving mission settings closes the pop-up', async () => {
+  const h = await boot();
+  openMission(h);
+  const form = $(h, 'form[data-mission="1"]');
+  h.reply('POST /api/missions', { mission: {} });
+  submit(form, h.dom.window);
+  await h.settle();
+  assert.equal(($(h, '#detail-dialog') as any).open, false, 'saved means done means closed');
+});
+
+test('deleting a product closes its pop-up', async () => {
+  const h = await boot();
+  (h.doc.querySelector('[data-tab=products]') as any).click();
+  openProduct(h);
+  h.reply('DELETE /api/products/prd_etb', {});
+  const del = $(h, '#detail-dialog').querySelector('[data-act=delete-product]');
+  assert.ok(del);
+  (del as HTMLButtonElement).click();
+  await h.settle();
+  assert.equal(($(h, '#detail-dialog') as any).open, false);
+});
+
+// ── Vault Watch, the side nav, and the grid ──────────────────────────────────
+
+test('THE APP IS CALLED VAULT WATCH EVERYWHERE A NAME APPEARS', async () => {
+  const html = dashboardPage();
+  assert.match(html, /<title>Vault Watch<\/title>/);
+  assert.match(html, /apple-mobile-web-app-title" content="Vault Watch"/);
+  assert.match(html, /class="brand-name">Vault Watch</);
+  assert.doesNotMatch(html, /<title>Hub<\/title>/);
+});
+
+test('the nav is one element with two shapes — sidebar CSS exists from 900px', async () => {
+  const css = dashboardPage();
+  const wide = /@media \(min-width: 900px\) \{([\s\S]*?)\n\}/.exec(css)?.[1] ?? '';
+  assert.match(wide, /flex-direction: column/, 'the tabs stack vertically on desktop');
+  assert.match(wide, /border-right/, 'and read as a side panel');
+});
+
+test('THE GRID VIEW IS A TOGGLE, AND IT IS REMEMBERED', async () => {
+  const h = await boot();
+  const missions = $(h, '#missions');
+  assert.equal(missions.classList.contains('gridded'), false, 'list is the default');
+
+  const gridBtn = h.doc.querySelector('.vt[data-list="missions"] [data-view="grid"]') as HTMLButtonElement;
+  assert.ok(gridBtn, 'the toggle exists');
+  gridBtn.click();
+  assert.equal(missions.classList.contains('gridded'), true);
+  assert.equal(gridBtn.getAttribute('aria-pressed'), 'true');
+  assert.equal(h.dom.window.localStorage.getItem('view:missions'), 'grid',
+    'how you like to look at a list is remembered');
+
+  const listBtn = h.doc.querySelector('.vt[data-list="missions"] [data-view="list"]') as HTMLButtonElement;
+  listBtn.click();
+  assert.equal(missions.classList.contains('gridded'), false);
+});
+
+test('each list has its own view toggle', async () => {
+  const h = await boot();
+  for (const list of ['missions', 'products', 'finds']) {
+    assert.ok(h.doc.querySelector('.vt[data-list="' + list + '"]'), list + ' has a toggle');
+  }
 });
