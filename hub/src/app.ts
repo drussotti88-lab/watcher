@@ -217,9 +217,13 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       // Watcher that died mid-checkout — both worth seeing at a glance.
       const authorisations = await store.openAuthorisations(db, userId);
       const committed = await store.committedLast24h(db, userId);
+      // Waiting rooms seen in the last half hour. A queue is the loudest
+      // early signal a retailer gives — it belongs on the front of the app,
+      // not buried in the activity log.
+      const queues = await store.queueSightings(db, userId, 30);
       return json({
         missions, runs, changes, products, listings, settings, discoveries, sweep, now, you,
-        authorisations, committed,
+        authorisations, committed, queues,
       });
     }
 

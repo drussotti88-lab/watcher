@@ -2282,6 +2282,34 @@ export async function requestSweep(db: Sql, userId: number, sourceId: string): P
   return rows.length > 0;
 }
 
+/**
+ * Waiting rooms seen recently — one row per retailer, newest sighting first.
+ *
+ * A queue at a retailer means everyone is being made to wait because
+ * something is dropping, which makes it the loudest early signal this system
+ * ever receives. Matched on the words the Watcher writes (its 'QUEUE:' sweep
+ * lines, and the 'waiting room' challenge wording on checks) because a queue
+ * is by definition a page the Watcher could not read — there is no cleaner
+ * column to ask. The wording is a contract, pinned by tests in both packages.
+ */
+export async function queueSightings(
+  db: Sql,
+  userId: number,
+  minutes = 30,
+): Promise<{ retailer: string; at: string }[]> {
+  const rows = await db.query<{ retailer: string; at: string }>(
+    `SELECT retailer, max(at) AS at
+       FROM activity
+      WHERE user_id = $1
+        AND at > now() - ($2 || ' minutes')::interval
+        AND (message ILIKE '%waiting room%' OR message LIKE 'QUEUE:%')
+      GROUP BY retailer
+      ORDER BY max(at) DESC`,
+    [userId, String(minutes)],
+  );
+  return rows.map((r) => ({ retailer: r.retailer, at: String(r.at) }));
+}
+
 /** What the page needs to render the sweep button and say when it last ran. */
 export async function sweepState(
   db: Sql,

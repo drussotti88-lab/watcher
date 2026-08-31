@@ -203,3 +203,34 @@ test('a retailer that states no count is null, not zero', async () => {
   await store.recordActivity(db, A, [line({ availableQuantity: null })]);
   assert.equal((await store.recentActivity(db, A))[0]!.availableQuantity, null);
 });
+
+// ── Queue sightings: the loudest signal gets a front-page query ─────────────
+
+test('A QUEUE SIGHTING SURFACES PER SHOP, AND AGES OUT', async () => {
+  const db = await twoUsers();
+  await store.recordActivity(db, A, [
+    // A sweep that ran into a waiting room writes the QUEUE line...
+    line({ kind: 'sweep', retailer: 'Pokemon Center',
+      message: 'QUEUE: waiting room is up at Pokemon Center — a drop may be live' }),
+    // ...and a mission check that hit one carries the challenge wording.
+    line({ retailer: 'Target', message: 'blocked: challenge: Queue-it waiting room' }),
+    // An hour-old sighting is history, not an alarm.
+    line({ kind: 'sweep', retailer: 'Walmart',
+      at: new Date(Date.now() - 60 * 60000).toISOString(),
+      message: 'QUEUE: waiting room is up at Walmart — a drop may be live' }),
+    // An ordinary line mentions no queue and must not trip the match.
+    line({ retailer: 'Target', message: 'out, $49.99' }),
+  ]);
+  const seen = await store.queueSightings(db, A, 30);
+  assert.deepEqual(seen.map((s) => s.retailer).sort(), ['Pokemon Center', 'Target']);
+  for (const s of seen) assert.ok(!Number.isNaN(Date.parse(s.at)), 'a real timestamp rides along');
+});
+
+test('another user’s queue is not my alarm', async () => {
+  const db = await twoUsers();
+  await store.recordActivity(db, B, [
+    line({ kind: 'sweep', retailer: 'Walmart',
+      message: 'QUEUE: waiting room is up at Walmart — a drop may be live' }),
+  ]);
+  assert.deepEqual(await store.queueSightings(db, A, 30), []);
+});

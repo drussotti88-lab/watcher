@@ -12,7 +12,7 @@ import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { Config } from './config.ts';
 
-export { detectChallenge, type Challenge } from './challenge.ts';
+export { detectChallenge, isQueue, type Challenge } from './challenge.ts';
 export {
   readWhenReady,
   settleRead,

@@ -30,6 +30,7 @@ import { makeBuyer } from './buy.ts';
 import { categoryUrl, pageCount } from './readers/pokemoncenter-search.ts';
 import { searchUrl as walmartSearchUrl } from './readers/walmart-search.ts';
 import { deepPages, interleave, todayLocal, type SweepStep } from './plan.ts';
+import { isQueue } from './challenge.ts';
 import { Activity } from './activity.ts';
 import { runSetup } from './setup.ts';
 
@@ -321,6 +322,42 @@ async function runPasses(once: boolean): Promise<void> {
    * splits the one budget evenly between watching and looking for new things.
    */
   /** One page of a Pokémon Center category. */
+  /**
+   * A sweep hit a challenge; queue or wall decides the reaction.
+   *
+   * A wall means "you have been noticed" and earns the long stand-down. A
+   * waiting room means "everyone waits because something is DROPPING" — the
+   * loudest early signal a retailer gives — so it earns a shout instead:
+   * this sweep's steps for that retailer are dropped (they are all behind
+   * the same queue), but the pacer is left alone, so watching looks again at
+   * the ordinary pace and catches the moment the queue comes down. The
+   * 'QUEUE:' message is what the Hub's alarm looks for.
+   */
+  const sweepChallenged = (retailer: string, label: string, reason: string): void => {
+    sweepPlan = sweepPlan.filter((s) => s.retailer !== retailer);
+    if (isQueue(reason)) {
+      console.log(
+        `  ${timestamp()}  QUEUE at ${retailer} — waiting room is up; a drop may be live`,
+      );
+      activity.record({
+        kind: 'sweep',
+        level: 'warn',
+        retailer,
+        message: `QUEUE: waiting room is up at ${retailer} — a drop may be live`,
+      });
+      return;
+    }
+    const until = pacer.challenged(retailer, Date.now());
+    const mins = Math.round((until - Date.now()) / 60000);
+    console.log(`  ${timestamp()}  sweep ${label} challenged — standing down ${mins}m`);
+    activity.record({
+      kind: 'sweep',
+      level: 'warn',
+      retailer,
+      message: `challenged during sweep — standing down ${mins}m, ${retailer} steps dropped`,
+    });
+  };
+
   const sweepPokemonCenter = async (step: {
     category: string;
     page: number;
@@ -333,18 +370,9 @@ async function runPasses(once: boolean): Promise<void> {
     );
 
     if (scan.challenged) {
-      const until = pacer.challenged(PC_RETAILER, Date.now());
-      const mins = Math.round((until - Date.now()) / 60000);
-      // Drop this retailer's remaining steps only. Target's are unaffected —
+      // Drops this retailer's remaining steps only. Target's are unaffected —
       // that is the point of the plan carrying a retailer per step.
-      sweepPlan = sweepPlan.filter((s) => s.retailer !== PC_RETAILER);
-      console.log(`  ${timestamp()}  sweep ${label} challenged — standing down ${mins}m`);
-      activity.record({
-        kind: 'sweep',
-        level: 'warn',
-        retailer: PC_RETAILER,
-        message: `challenged during sweep — standing down ${mins}m, ${PC_RETAILER} steps dropped`,
-      });
+      sweepChallenged(PC_RETAILER, label, scan.challengeReason);
       return;
     }
 
@@ -405,16 +433,7 @@ async function runPasses(once: boolean): Promise<void> {
     const scan = await scanWalmartSearch(browser, walmartSearchUrl(step.query, step.page));
 
     if (scan.challenged) {
-      const until = pacer.challenged(WALMART_RETAILER, Date.now());
-      const mins = Math.round((until - Date.now()) / 60000);
-      sweepPlan = sweepPlan.filter((s) => s.retailer !== WALMART_RETAILER);
-      console.log(`  ${timestamp()}  sweep ${label} challenged — standing down ${mins}m`);
-      activity.record({
-        kind: 'sweep',
-        level: 'warn',
-        retailer: WALMART_RETAILER,
-        message: `challenged during sweep — standing down ${mins}m, ${WALMART_RETAILER} steps dropped`,
-      });
+      sweepChallenged(WALMART_RETAILER, label, scan.challengeReason);
       return;
     }
 
@@ -515,21 +534,11 @@ async function runPasses(once: boolean): Promise<void> {
       const scan = await scanTargetSearch(browser, searchUrl(query, offset));
 
       if (scan.challenged) {
-        // Standing down is about the retailer, not about this query. Drop the
-        // rest of *Target's* plan rather than walking into the same wall
-        // thirteen times — and only Target's. Before the plan carried a
-        // retailer per step this cleared everything, which would now mean one
-        // shop's challenge silently cancelling the other shop's sweep.
-        const until = pacer.challenged(SWEEP_RETAILER, Date.now());
-        const mins = Math.round((until - Date.now()) / 60000);
-        sweepPlan = sweepPlan.filter((s) => s.retailer !== SWEEP_RETAILER);
-        console.log(`  ${timestamp()}  sweep challenged — standing down ${mins}m`);
-        activity.record({
-          kind: 'sweep',
-          level: 'warn',
-          retailer: SWEEP_RETAILER,
-          message: `challenged during sweep — standing down ${mins}m, plan abandoned`,
-        });
+        // The reaction is about the retailer, not about this query — the rest
+        // of *Target's* plan goes rather than walking into the same wall
+        // thirteen times, and only Target's. Queue vs wall is decided in
+        // sweepChallenged, same as the other two shops.
+        sweepChallenged(SWEEP_RETAILER, label, scan.challengeReason);
       } else if (scan.note) {
         console.log(`  ${timestamp()}  sweep ${label}: ${scan.note}`);
         activity.record({

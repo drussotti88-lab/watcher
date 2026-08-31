@@ -2357,3 +2357,23 @@ test('a broken storage does not take the page down with it', async () => {
   pressChip(h, 'find-shops', 'Walmart');
   assert.ok(findNames(h).length > 0, 'filtering still works with storage refused');
 });
+
+// ── The queue alarm ──────────────────────────────────────────────────────────
+
+test('A WAITING ROOM PUTS AN ALARM AT THE TOP OF THE APP', async () => {
+  const d = JSON.parse(JSON.stringify(DASHBOARD));
+  d.queues = [{ retailer: 'Pokemon Center', at: new Date(Date.now() - 3 * 60000).toISOString() }];
+  const h = await boot(d);
+  const qb = $(h, '#queue-banner');
+  assert.equal(qb.hidden, false);
+  assert.match(qb.textContent, /WAITING ROOM UP AT POKEMON CENTER/);
+  assert.match(qb.textContent, /drop is likely live/);
+  const a = qb.querySelector('a') as HTMLAnchorElement;
+  assert.ok(a, 'there is a way straight to the shop');
+  assert.equal(a.href, 'https://www.pokemoncenter.com/');
+});
+
+test('no sightings, no alarm', async () => {
+  const h = await boot(DASHBOARD);
+  assert.equal(($(h, '#queue-banner') as any).hidden, true);
+});

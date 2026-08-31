@@ -22,6 +22,7 @@
  * check the detection half worked.
  */
 import type { Browser } from './browser.ts';
+import { isQueue } from './challenge.ts';
 import { DEFAULT_SETTINGS, type Hub, type Mission, type ObservationOut, type RunOut, type Settings } from './hub.ts';
 import { Pacer, isDue, nextUp } from './rate.ts';
 import { readListing, type Reading } from './read.ts';
@@ -80,11 +81,16 @@ export function judge(
   };
 
   // A challenge is about us, not the product. Worth a run: it is the thing you
-  // want to see when the numbers stop moving.
+  // want to see when the numbers stop moving. A QUEUE is the exception — that
+  // one is about the product: retailers put up waiting rooms when something
+  // is dropping, so its run says so instead of apologising.
   if (reading.challenged) {
+    const reason = isQueue(reading.challengeReason)
+      ? 'waiting room is up — a drop may be live, get in line yourself now'
+      : `${reading.challengeReason} — standing down`;
     return {
       observation,
-      run: { ...base, outcome: 'blocked', reason: `${reading.challengeReason} — standing down` },
+      run: { ...base, outcome: 'blocked', reason },
     };
   }
 
@@ -392,7 +398,18 @@ export async function pass(missions: Mission[], pacer: Pacer, deps: WatchDeps): 
         .join(' · '),
     });
 
-    if (reading.challenged) {
+    if (reading.challenged && isQueue(reading.challengeReason)) {
+      // A waiting room, not a wall. No long stand-down — the next pass should
+      // look again at the ordinary pace, because the interesting moment is
+      // when the queue comes DOWN. The rest of this retailer's checks are
+      // skipped this pass only: every one of its pages is behind the same
+      // queue, and reading N copies of the waiting room proves nothing.
+      result.blocked.push(`${mission.retailer}: WAITING ROOM UP — drop likely live`);
+      log(`  QUEUE at ${mission.retailer} — waiting room is up; a drop may be live`);
+      for (let i = remaining.length - 1; i >= 0; i -= 1) {
+        if (remaining[i]!.retailer === mission.retailer) remaining.splice(i, 1);
+      }
+    } else if (reading.challenged) {
       const until = pacer.challenged(mission.retailer, now());
       const mins = Math.round((until - now()) / 60000);
       result.blocked.push(`${mission.retailer}: ${reading.challengeReason}, ${mins}m`);

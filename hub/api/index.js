@@ -1504,6 +1504,19 @@ async function requestSweep(db2, userId, sourceId) {
   );
   return rows.length > 0;
 }
+async function queueSightings(db2, userId, minutes = 30) {
+  const rows = await db2.query(
+    `SELECT retailer, max(at) AS at
+       FROM activity
+      WHERE user_id = $1
+        AND at > now() - ($2 || ' minutes')::interval
+        AND (message ILIKE '%waiting room%' OR message LIKE 'QUEUE:%')
+      GROUP BY retailer
+      ORDER BY max(at) DESC`,
+    [userId, String(minutes)]
+  );
+  return rows.map((r) => ({ retailer: r.retailer, at: String(r.at) }));
+}
 async function sweepState(db2, userId, sourceId, everyHours) {
   const source = await getSource(db2, userId, sourceId);
   if (!source) return { queued: false, lastSweptAt: null, lastStatus: "" };
@@ -2273,6 +2286,9 @@ ${FONTS}<style>${STYLE}</style></head>
       The Watcher is looking at nothing. Turn it back on under Settings \u2192 When to watch.
     </div>
   </div>
+
+  <div class="card" id="queue-banner" hidden
+       style="border-color:rgba(240,131,107,.55); background:rgba(240,131,107,.12)"></div>
 
   <div class="tabs">
     <button class="tab on" data-tab="missions">Missions<span class="count" id="c-missions"></span></button>
@@ -3661,6 +3677,33 @@ function render() {
   const banner = document.getElementById('paused-banner');
   banner.hidden = !st.paused;
 
+  // The queue alarm. A waiting room at a shop means a drop is likely live
+  // RIGHT NOW, and the one useful thing this app can do with that is put it
+  // at the top of every tab with a link \u2014 getting in line is a person's job,
+  // and the queue position is the scarce thing.
+  const SHOP_URL = {
+    'Target': 'https://www.target.com',
+    'Walmart': 'https://www.walmart.com',
+    'Pokemon Center': 'https://www.pokemoncenter.com',
+  };
+  const qb = document.getElementById('queue-banner');
+  qb.textContent = '';
+  const queues = DATA.queues || [];
+  qb.hidden = queues.length === 0;
+  for (const q of queues) {
+    qb.appendChild(el('div', 'name',
+      'WAITING ROOM UP AT ' + (q.retailer || 'A SHOP').toUpperCase()));
+    const meta = el('div', 'meta');
+    meta.append('Seen ' + ago(q.at) + ' \u2014 a drop is likely live. Get in line from any device: ');
+    const a = el('a', null, 'open ' + (q.retailer || 'the shop'));
+    a.href = SHOP_URL[q.retailer] || 'https://www.' +
+      String(q.retailer || '').toLowerCase().split(' ').join('') + '.com';
+    a.target = '_blank';
+    a.rel = 'noreferrer';
+    meta.appendChild(a);
+    qb.appendChild(meta);
+  }
+
   // The two buttons that change what the Watcher is doing, labelled with the
   // action rather than the state. "Turn watcher on" when it is off is
   // unambiguous; a toggle labelled "Paused" leaves you guessing whether that
@@ -4704,6 +4747,7 @@ function createHandler(db2, env2) {
       const you = await userHandle(db2, userId);
       const authorisations = await openAuthorisations(db2, userId);
       const committed = await committedLast24h(db2, userId);
+      const queues = await queueSightings(db2, userId, 30);
       return json({
         missions,
         runs,
@@ -4716,7 +4760,8 @@ function createHandler(db2, env2) {
         now,
         you,
         authorisations,
-        committed
+        committed,
+        queues
       });
     }
     if (request.method === "GET" && path.startsWith("/api/missions/") && path.endsWith("/runs")) {

@@ -410,6 +410,9 @@ ${FONTS}<style>${STYLE}</style></head>
     </div>
   </div>
 
+  <div class="card" id="queue-banner" hidden
+       style="border-color:rgba(240,131,107,.55); background:rgba(240,131,107,.12)"></div>
+
   <div class="tabs">
     <button class="tab on" data-tab="missions">Missions<span class="count" id="c-missions"></span></button>
     <button class="tab" data-tab="products">Products<span class="count" id="c-products"></span></button>
@@ -1796,6 +1799,33 @@ function render() {
   renderMoney();
   const banner = document.getElementById('paused-banner');
   banner.hidden = !st.paused;
+
+  // The queue alarm. A waiting room at a shop means a drop is likely live
+  // RIGHT NOW, and the one useful thing this app can do with that is put it
+  // at the top of every tab with a link — getting in line is a person's job,
+  // and the queue position is the scarce thing.
+  const SHOP_URL = {
+    'Target': 'https://www.target.com',
+    'Walmart': 'https://www.walmart.com',
+    'Pokemon Center': 'https://www.pokemoncenter.com',
+  };
+  const qb = document.getElementById('queue-banner');
+  qb.textContent = '';
+  const queues = DATA.queues || [];
+  qb.hidden = queues.length === 0;
+  for (const q of queues) {
+    qb.appendChild(el('div', 'name',
+      'WAITING ROOM UP AT ' + (q.retailer || 'A SHOP').toUpperCase()));
+    const meta = el('div', 'meta');
+    meta.append('Seen ' + ago(q.at) + ' — a drop is likely live. Get in line from any device: ');
+    const a = el('a', null, 'open ' + (q.retailer || 'the shop'));
+    a.href = SHOP_URL[q.retailer] || 'https://www.' +
+      String(q.retailer || '').toLowerCase().split(' ').join('') + '.com';
+    a.target = '_blank';
+    a.rel = 'noreferrer';
+    meta.appendChild(a);
+    qb.appendChild(meta);
+  }
 
   // The two buttons that change what the Watcher is doing, labelled with the
   // action rather than the state. "Turn watcher on" when it is off is

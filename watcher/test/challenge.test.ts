@@ -12,7 +12,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { detectChallenge } from '../src/challenge.ts';
+import { detectChallenge, isQueue } from '../src/challenge.ts';
 
 // -------------------------------------------------------------- healthy pages
 
@@ -105,4 +105,12 @@ test('detection reads title and text, never raw markup', () => {
   // If this were matched against HTML, the script URL alone would trip it.
   const html = '<script src="https://ak.walmartimages.com/akamai/bundle.js"></script>';
   assert.equal(detectChallenge('Walmart.com', html).challenged, false);
+});
+
+test('a queue is told apart from a wall — they demand opposite reactions', () => {
+  assert.equal(isQueue('Queue-it waiting room'), true);
+  assert.equal(isQueue('CAPTCHA'), false);
+  assert.equal(isQueue('Cloudflare challenge'), false);
+  assert.equal(isQueue('Access denied'), false);
+  assert.equal(isQueue(''), false);
 });

@@ -633,3 +633,43 @@ test('a watching-only mission never reaches the buyer', async () => {
   );
   assert.equal(invoked, 0, 'watching means watching');
 });
+
+// ── A queue is a signal, not a wall ──────────────────────────────────────────
+
+test('A WAITING ROOM DOES NOT STAND THE RETAILER DOWN', async () => {
+  // A wall means "go away"; a queue means "something is dropping RIGHT NOW".
+  // Standing down for half an hour on a queue is leaving the store at the
+  // moment the doors opened — the pass skips the rest of that retailer (every
+  // page is behind the same queue) but the next pass looks again on schedule.
+  const { hub, runs } = recorder();
+  const pacer = new Pacer(STEADY, () => 0);
+  const missions = [
+    mission({ id: 1, retailer: 'Pokemon Center' }),
+    mission({ id: 2, retailer: 'Pokemon Center' }),
+    mission({ id: 3, retailer: 'Target' }),
+  ];
+
+  const result = await pass(missions, pacer, {
+    browser,
+    hub,
+    now: () => T0,
+    read: reads((retailer) =>
+      retailer === 'Pokemon Center'
+        ? reading({ challenged: true, challengeReason: 'Queue-it waiting room', state: 'unknown' })
+        : reading(),
+    ),
+  });
+
+  assert.equal(result.checked, 2, 'the second queued-shop mission was skipped this pass');
+  assert.equal(pacer.standingDown('Pokemon Center', T0), false,
+    'no long stand-down — the interesting moment is when the queue comes DOWN');
+  assert.equal(result.blocked.length, 1);
+  assert.match(result.blocked[0]!, /WAITING ROOM UP/);
+  assert.match(result.blocked[0]!, /drop likely live/);
+  // The run says what a person should do about it, not that we apologised.
+  const blockedRun = runs.find((r) => r.outcome === 'blocked');
+  assert.ok(blockedRun);
+  assert.match(blockedRun!.reason, /waiting room is up/);
+  assert.match(blockedRun!.reason, /get in line yourself/);
+  assert.doesNotMatch(blockedRun!.reason, /standing down/);
+});

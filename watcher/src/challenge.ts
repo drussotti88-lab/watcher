@@ -59,6 +59,24 @@ export interface Challenge {
   reason: string;
 }
 
+/**
+ * Is this challenge a waiting room rather than a wall?
+ *
+ * The two demand opposite reactions. A block means "you have been noticed —
+ * go away for a while", and standing down is the only polite answer. A queue
+ * means "everyone is being made to wait because something is DROPPING", and
+ * standing down for half an hour is walking out of the store at the exact
+ * moment the doors opened. The queue is the loudest early signal a retailer
+ * ever gives us; callers use this to shout instead of retreat.
+ *
+ * Joining a queue and waiting like anyone else is the front door, used as
+ * designed. What the design still refuses is getting *past* one — bot checks
+ * and CAPTCHAs at the queue's end are a person's job, never this code's.
+ */
+export function isQueue(reason: string): boolean {
+  return reason === 'Queue-it waiting room';
+}
+
 /** Is this a challenge page rather than a real one? Title + visible text only. */
 export function detectChallenge(title: string, visibleText: string): Challenge {
   const text = visibleText.slice(0, 8000);
