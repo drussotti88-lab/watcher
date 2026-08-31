@@ -144,6 +144,11 @@ button.small { padding: 4px 10px; font-size: 12px; border-radius: var(--r-sm); }
 .filters input[type=search] { width: 100%; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .chipgroups { display: grid; gap: 6px; }
+/* The shop switcher: the chips, promoted. Same behaviour, tab-sized targets,
+   because "which shop am I looking at" is the first question on these pages. */
+.seg { gap: 8px; }
+.seg .chip { padding: 9px 18px; min-height: 36px; font-size: 13px;
+             border-radius: 10px; }
 .chip {
   font: 500 12px/1 var(--sans); letter-spacing: .01em;
   padding: 6px 11px; border-radius: 999px; cursor: pointer;
@@ -435,6 +440,7 @@ ${FONTS}<style>${STYLE}</style></head>
 
   <section id="tab-products" hidden>
     <div class="filters" id="flt-products" hidden>
+      <div class="chips seg" id="flt-products-shops"></div>
       <input type="search" id="flt-products-q" placeholder="Search products"
              autocomplete="off" autocapitalize="off" spellcheck="false">
       <div class="sub" id="flt-products-count"></div>
@@ -472,9 +478,9 @@ ${FONTS}<style>${STYLE}</style></head>
     </p>
     <div class="card radar" id="release-radar" hidden></div>
     <div class="filters" id="finds-filters">
+      <div class="chips seg" id="find-shops"></div>
       <input type="search" id="find-q" placeholder="Search these finds"
              autocomplete="off" autocapitalize="off" spellcheck="false">
-      <div class="chips" id="find-shops"></div>
       <div class="chips" id="find-states"></div>
       <div class="sub" id="find-count"></div>
     </div>
@@ -1411,9 +1417,26 @@ function productPanel(p, listings) {
  * which is the right amount of memory for something set while looking at
  * a list. One bar per tab; the activity bar covers runs and changes both.
  */
+/**
+ * The remembered shop pick, one per page.
+ *
+ * The only filter that survives a hard refresh, on purpose: "I mostly look at
+ * Target here" is a fact about the person, not about today's list, so it is
+ * the one worth keeping. Everything else stays module state and dies with the
+ * tab, which is the right lifetime for a narrowing set mid-look. try/catch
+ * because storage can be absent or refused, and a filter must never be the
+ * reason the page did not render.
+ */
+function savedShop(key) {
+  try { return localStorage.getItem('shop:' + key) || ''; } catch (e) { return ''; }
+}
+function saveShop(key, value) {
+  try { localStorage.setItem('shop:' + key, value); } catch (e) { /* fine */ }
+}
+
 const LIST_FILTERS = {
   missions: { q: '', shop: '', status: '', mode: '' },
-  products: { q: '' },
+  products: { q: '', shop: savedShop('products') },
   activity: { q: '', shop: '', outcome: '' },
 };
 
@@ -1448,8 +1471,12 @@ function missionMatchesFilter(m) {
 
 function productMatchesFilter(p) {
   const f = LIST_FILTERS.products;
-  if (!f.q) return true;
   const mine = (DATA.listings || []).filter((l) => l.productKey === p.key);
+  // A product is "at" a shop when any of its listings is. One with no
+  // listings answers to no shop segment except All — which is honest: it is
+  // not buyable anywhere yet.
+  if (f.shop && !mine.some((l) => l.retailer === f.shop)) return false;
+  if (!f.q) return true;
   return wordsMatch(f.q,
     (p.name || '') + ' ' + (p.notes || '') + ' ' + mine.map((l) => l.retailer).join(' '));
 }
@@ -1491,8 +1518,13 @@ function listChip(label, n, active, onClick, disabled) {
  * *other* filters allow — the finds rule — so a chip always tells the
  * truth about what pressing it would give you.
  */
-function chipGroup(filter, field, rows, matches, options, allLabel) {
+function chipGroup(filter, field, rows, matches, options, allLabel, onSet) {
   const row = el('div', 'chips');
+  const set = (value) => {
+    filter[field] = value;
+    if (onSet) onSet(value);
+    render();
+  };
   const countFor = (value) => {
     const was = filter[field];
     filter[field] = value;
@@ -1501,15 +1533,11 @@ function chipGroup(filter, field, rows, matches, options, allLabel) {
     filter[field] = was;
     return n;
   };
-  row.appendChild(listChip(allLabel, countFor(''), !filter[field], () => {
-    filter[field] = '';
-    render();
-  }));
+  row.appendChild(listChip(allLabel, countFor(''), !filter[field], () => set('')));
   for (const o of options) {
     const n = countFor(o.value);
     row.appendChild(listChip(o.label, n, filter[field] === o.value, () => {
-      filter[field] = filter[field] === o.value ? '' : o.value;
-      render();
+      set(filter[field] === o.value ? '' : o.value);
     }, n === 0 && filter[field] !== o.value));
   }
   return row;
@@ -1527,6 +1555,7 @@ function shopOptions(rows) {
 function clearListFilter(key) {
   const f = LIST_FILTERS[key];
   for (const k in f) f[k] = '';
+  if (key === 'products') saveShop('products', '');
   const box = document.getElementById('flt-' + key + '-q');
   if (box) box.value = '';
   render();
@@ -1587,16 +1616,26 @@ function renderMissionsBar(all) {
 function renderProductsBar(all) {
   const bar = document.getElementById('flt-products');
   const f = LIST_FILTERS.products;
-  if (all.length < FILTER_FROM) {
+  const box = document.getElementById('flt-products-q');
+  // The shop switcher earns its place as soon as there are two products; the
+  // search box waits for a list long enough to need searching. Different
+  // thresholds because they answer different questions.
+  if (all.length < 2) {
     bar.hidden = true;
     f.q = '';
-    const box = document.getElementById('flt-products-q');
     if (box) box.value = '';
     return all;
   }
   bar.hidden = false;
+  if (box) box.hidden = all.length < FILTER_FROM;
+  if (box && box.hidden && f.q) { f.q = ''; box.value = ''; }
+  const shops = document.getElementById('flt-products-shops');
+  shops.textContent = '';
+  shops.appendChild(chipGroup(f, 'shop', all, productMatchesFilter,
+    shopOptions(DATA.listings || []), 'All shops',
+    (v) => saveShop('products', v)));
   const shown = all.filter(productMatchesFilter);
-  filterCountLine('flt-products-count', shown.length, all.length, !!f.q, 'products');
+  filterCountLine('flt-products-count', shown.length, all.length, !!(f.q || f.shop), 'products');
   return shown;
 }
 
@@ -1655,8 +1694,8 @@ function render() {
   if (!DATA.products.length) {
     products.appendChild(emptyBlock('No products yet.', 'Add one with the form above.'));
   } else if (!shownProducts.length) {
-    products.appendChild(emptyBlock('Nothing matches that search.',
-      DATA.products.length + ' products are hidden — clear the search above to see them.'));
+    products.appendChild(emptyBlock('Nothing matches those filters.',
+      DATA.products.length + ' products are hidden — clear the filters above to see them.'));
   }
   for (const p of shownProducts) products.appendChild(productCard(p));
 
@@ -1826,7 +1865,9 @@ function findReason(d) {
  * unusable. A hard refresh clearing it is the right amount of memory for
  * something you set while looking at a list.
  */
-const FIND_FILTER = { shop: '', state: '', q: '', showDormant: false, fresh: false };
+const FIND_FILTER = {
+  shop: savedShop('finds'), state: '', q: '', showDormant: false, fresh: false,
+};
 
 /** First seen inside the last two days — the news, as opposed to the list. */
 const FRESH_MS = 48 * 3600 * 1000;
@@ -1909,6 +1950,7 @@ function renderFindFilters(all) {
 
   shops.appendChild(chip('All shops', forShop(''), !FIND_FILTER.shop, () => {
     FIND_FILTER.shop = '';
+    saveShop('finds', '');
     renderFinds();
   }));
   const names = [];
@@ -1920,6 +1962,7 @@ function renderFindFilters(all) {
     const n = forShop(name);
     shops.appendChild(chip(name, n, FIND_FILTER.shop === name, () => {
       FIND_FILTER.shop = FIND_FILTER.shop === name ? '' : name;
+      saveShop('finds', FIND_FILTER.shop);
       renderFinds();
     }, n === 0 && FIND_FILTER.shop !== name));
   }
@@ -2090,6 +2133,7 @@ function renderFinds() {
       FIND_FILTER.state = '';
       FIND_FILTER.q = '';
       FIND_FILTER.fresh = false;
+      saveShop('finds', '');
       const box = document.getElementById('find-q');
       if (box) box.value = '';
       renderFinds();

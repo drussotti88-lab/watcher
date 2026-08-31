@@ -2307,3 +2307,53 @@ test('a blank cadence box leaves the cadence alone rather than zeroing it', asyn
   assert.ok(call);
   assert.ok(!('sweepEveryHours' in call!.body), 'absent, not null, not zero');
 });
+
+// ── The shop switcher: chips promoted to segments, and remembered ────────────
+
+test('THE PRODUCTS SHOP BAR NARROWS BY WHERE THE LISTINGS ARE', async () => {
+  const d = JSON.parse(JSON.stringify(DASHBOARD));
+  d.products = [
+    { key: 'p1', name: 'Alpha ETB', releaseDate: null, msrp: 49.99, imageUrl: '', notes: '' },
+    { key: 'p2', name: 'Charlie Tin', releaseDate: null, msrp: 24.99, imageUrl: '', notes: '' },
+  ];
+  d.listings = [
+    { ...DASHBOARD.listings[0], id: 1, productKey: 'p1', retailer: 'Target' },
+    { ...DASHBOARD.listings[0], id: 2, productKey: 'p2', retailer: 'Walmart' },
+  ];
+  d.missions = [];
+  const h = await boot(d);
+  assert.equal(($(h, '#flt-products') as any).hidden, false,
+    'two products are enough for the shop bar');
+  assert.equal(($(h, '#flt-products-q') as any).hidden, true,
+    'but not enough to need a search box');
+  const segs = chips(h, 'flt-products-shops');
+  assert.ok(segs.find((c) => c === 'Target1'), segs.join(' | '));
+  assert.ok(segs.find((c) => c === 'Walmart1'));
+
+  pressChip(h, 'flt-products-shops', 'Walmart');
+  assert.deepEqual(productNames(h), ['Charlie Tin']);
+  assert.equal(h.dom.window.localStorage.getItem('shop:products'), 'Walmart',
+    'the pick is written down for next time');
+  pressChip(h, 'flt-products-shops', 'All shops');
+  assert.equal(productNames(h).length, 2);
+  assert.equal(h.dom.window.localStorage.getItem('shop:products'), '');
+});
+
+test('the finds shop pick is written down too, and pressing again clears it', async () => {
+  const h = await boot(withFinds(MIXED));
+  pressChip(h, 'find-shops', 'Target');
+  assert.equal(h.dom.window.localStorage.getItem('shop:finds'), 'Target');
+  pressChip(h, 'find-shops', 'Target');
+  assert.equal(h.dom.window.localStorage.getItem('shop:finds'), '');
+});
+
+test('a broken storage does not take the page down with it', async () => {
+  // Private windows and locked-down browsers throw on localStorage access;
+  // a filter convenience must never be why the dashboard rendered nothing.
+  const h = await boot(withFinds(MIXED));
+  Object.defineProperty(h.dom.window, 'localStorage', {
+    get() { throw new Error('denied'); },
+  });
+  pressChip(h, 'find-shops', 'Walmart');
+  assert.ok(findNames(h).length > 0, 'filtering still works with storage refused');
+});
