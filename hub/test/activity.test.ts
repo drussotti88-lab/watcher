@@ -40,10 +40,10 @@ test('a batch of lines lands as rows and comes back newest first', async () => {
   assert.equal(rows[0]!.ms, 1180);
 });
 
-test('the Watcher clock is kept, not the moment the row arrived', async () => {
+test('Phantom clock is kept, not the moment the row arrived', async () => {
   // A batch buffered through an outage arrives late. If the Hub stamped it on
   // receipt, every line of the outage would share one timestamp and the log
-  // would say the Watcher went quiet and then did a thousand things at once.
+  // would say Phantom went quiet and then did a thousand things at once.
   const db = await twoUsers();
   const when = new Date(Date.now() - 3 * 3600_000).toISOString();
   await store.recordActivity(db, A, [line({ at: when })]);

@@ -408,7 +408,7 @@ test('A PAST STREET DATE IS HISTORY — dropped from the note AND the report', a
 });
 
 test('release DAY still counts — today is a schedule, not history', async () => {
-  // The hours logic wakes the Watcher on release day; a reader that nulled
+  // The hours logic wakes Phantom on release day; a reader that nulled
   // today's date would sleep through the one morning that matters.
   const read = readTargetBodies([streetFixture], '1010892076', Date.parse('2026-09-16T08:00:00Z'));
   assert.equal(read.preOrder.releaseDate, '2026-09-16');

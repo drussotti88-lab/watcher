@@ -310,7 +310,7 @@ export async function finishSweep(
   /**
    * Is the sweep actually over?
    *
-   * A Watcher-side sweep is thirteen queries reported one at a time, and every
+   * A Phantom-side sweep is thirteen queries reported one at a time, and every
    * one of them used to stamp last_swept_at and clear the manual request. So a
    * sweep marked itself finished after its first query: a restart part-way
    * through lost the remaining twelve *and* left nothing due for another day.
@@ -354,9 +354,9 @@ export async function logEvent(
 }
 
 /**
- * What the Watcher should be looking at.
+ * What Phantom should be looking at.
  *
- * Everything with a retailer alias and a URL we can reach. The Watcher pulls
+ * Everything with a retailer alias and a URL we can reach. Phantom pulls
  * this on every run rather than holding its own list, so adding a watch is one
  * row here and never a redeploy of the thing on the desk.
  */
@@ -664,7 +664,7 @@ export async function countUsers(db: Sql): Promise<number> {
 }
 
 /**
- * Whose Watcher presents this token?
+ * Whose Phantom presents this token?
  *
  * Takes the hash, never the token: the column holds a hash and the comparison
  * happens in the database on hashes alone, so a leaked table is not a set of
@@ -776,7 +776,7 @@ export async function upsertUser(
 }
 
 /**
- * Give a user's Watcher its own token, by storing the hash of one.
+ * Give a user's Phantom its own token, by storing the hash of one.
  *
  * Takes a hash for the same reason `upsertUser` takes one: the token itself
  * exists for a moment in the CLI that generated it and in the file it is
@@ -830,11 +830,11 @@ export interface Settings {
    */
   shippingAllowance: number;
   /**
-   * When the Watcher is allowed to look, as HH:MM in `timezone`.
+   * When Phantom is allowed to look, as HH:MM in `timezone`.
    *
    * Target runs its scheduled drops in the small hours, so polling all day is
    * mostly traffic spent on a page that will not change — and traffic is the
-   * one thing that earns a challenge and takes the Watcher off the air at the
+   * one thing that earns a challenge and takes Phantom off the air at the
    * moment it matters. Equal values mean no restriction, which is the default
    * and the old behaviour.
    *
@@ -865,7 +865,7 @@ export interface Settings {
    *
    * Null means unset, and unset means nothing can be armed. The cap is checked
    * here, at grant time, against the sum of live authorisations — never on the
-   * Watcher, whose process can die and forget.
+   * Phantom, whose process can die and forget.
    */
   spendCapDay: number | null;
   /**
@@ -1189,7 +1189,7 @@ const MISSION_SELECT = `
  * Every mission, in the order you care about them.
  *
  * In stock first, because that is the thing you opened the page to see. A
- * LEFT JOIN on watch_state, so a mission the Watcher has never reached still
+ * LEFT JOIN on watch_state, so a mission Phantom has never reached still
  * appears — marked unchecked rather than quietly missing.
  */
 export async function listMissions(db: Sql, userId: number): Promise<MissionRow[]> {
@@ -1221,11 +1221,11 @@ export async function getMission(
   return rows[0] ? toMission(rows[0]) : null;
 }
 
-/** Missions the Watcher should be polling right now. */
+/** Missions Phantom should be polling right now. */
 /**
  * Ask for a mission to be checked on the next pass, whatever its schedule says.
  *
- * This is the "Test run" button. It cannot make a check happen — the Watcher
+ * This is the "Test run" button. It cannot make a check happen — Phantom
  * owns the browser and the retailer owns the budget — so it records a request
  * and lets the next pass honour it. Saying "checking now" and meaning "queued"
  * would be the same species of lie as a $30 ceiling that accepts $45.
@@ -1246,7 +1246,7 @@ export async function activeMissions(db: Sql, userId: number): Promise<MissionRo
 /**
  * Refuse to arm a mission that has not been told what it may spend.
  *
- * `armed` with no ceiling is an open cheque. The Watcher's decision layer
+ * `armed` with no ceiling is an open cheque. Phantom's decision layer
  * already treats it as unauthorised, but a rule enforced in one place is a rule
  * waiting to be forgotten in another — so it is refused here too, at the point
  * where a person could set it.
@@ -1393,12 +1393,12 @@ export async function committedLast24h(db: Sql, userId: number): Promise<number>
  * May this mission spend, right now? The one place that answer comes from.
  *
  * The amount is computed here from the Hub's own mission row — ceiling ×
- * quantity plus the shipping allowance — because the Watcher's opinion of what
+ * quantity plus the shipping allowance — because Phantom's opinion of what
  * it is about to spend is not evidence. Every refusal names itself, and the
  * two that matter most are load-bearing:
  *
  *   duplicate_prevented   the partial unique index found a live grant already.
- *                         Four checks racing, or a Watcher restarted mid-buy,
+ *                         Four checks racing, or a Phantom restarted mid-buy,
  *                         all collide here and nobody buys twice.
  *   budget_exhausted      the 24-hour sum of live grants would pass the cap.
  *
@@ -1503,7 +1503,7 @@ export async function requestAuthorisation(
 }
 
 /**
- * The Watcher says what became of a grant.
+ * Phantom says what became of a grant.
  *
  * 'spent' also disarms the mission: a mission is a pre-authorisation for ONE
  * purchase, and the purchase happened. Re-arming is a decision a person makes
@@ -1587,7 +1587,7 @@ function toAcquisition(r: Record<string, unknown>): AcquisitionRow {
  * Record a spent grant as a queued acquisition, from the Hub's own rows: the
  * mission names the product and quantity, the latest bought run names the
  * price actually paid. Idempotent on external_key ('auth-<grant id>') — a
- * resolve retried by a nervous Watcher queues one acquisition, not two.
+ * resolve retried by a nervous Phantom queues one acquisition, not two.
  * Pre-fills the vault match from the product's remembered vault_tcg_id, so
  * the second purchase of the same box is one click.
  */
@@ -1914,9 +1914,9 @@ export async function recentRuns(db: Sql, userId: number, limit = 50): Promise<R
   return rows.map(toRun);
 }
 
-// ─── What the Watcher saw ────────────────────────────────────────────────────
+// ─── What Phantom saw ────────────────────────────────────────────────────
 
-/** One reading of one listing, as the Watcher reports it. */
+/** One reading of one listing, as Phantom reports it. */
 export interface ObservationIn {
   listingId: number;
   /** The retailer's own name for this product. Replaces a slug guess. */
@@ -1952,7 +1952,7 @@ export interface RecordedObservation {
  * should leave a history of nothing, because nothing happened.
  *
  * The first sighting is marked `isFirst` rather than `changed`. Otherwise
- * turning the Watcher on announces every product at once, which is the same
+ * turning Phantom on announces every product at once, which is the same
  * mistake the discovery seeding logic exists to avoid.
  */
 export async function recordObservation(
@@ -1961,8 +1961,8 @@ export async function recordObservation(
   obs: ObservationIn,
 ): Promise<RecordedObservation> {
   // A reading names a listing by id, and that id arrives over the wire from a
-  // Watcher. If it is not this user's listing, nothing here may touch it —
-  // otherwise one person's Watcher could rewrite another person's stock and
+  // Phantom. If it is not this user's listing, nothing here may touch it —
+  // otherwise one person's Phantom could rewrite another person's stock and
   // price, which is the reading an armed mission acts on.
   const owns = await db.query<{ id: number }>(
     'SELECT id FROM listings WHERE user_id = $1 AND id = $2',
@@ -2057,7 +2057,7 @@ export async function recordObservation(
   // A pending "test run" is satisfied by a reading arriving, and by nothing
   // else. Clearing it when the request is *sent* would tick the box for a check
   // that never happened; clearing it here means the button stays lit until the
-  // Watcher actually looked.
+  // Phantom actually looked.
   await db.query(
     `UPDATE missions SET check_now_at = NULL
       WHERE user_id = $1 AND listing_id = $2 AND check_now_at IS NOT NULL`,
@@ -2166,7 +2166,7 @@ export async function recentObservations(db: Sql, userId: number, limit = 50): P
 // something completely different if they did not.
 
 export interface ActivityIn {
-  /** When it happened on the Watcher's clock, not when it arrived here. */
+  /** When it happened on Phantom's clock, not when it arrived here. */
   at?: string;
   kind: 'check' | 'pass' | 'hub' | 'browser' | 'startup' | 'sweep';
   level?: 'info' | 'warn' | 'error';
@@ -2178,7 +2178,7 @@ export interface ActivityIn {
   ms?: number | null;
   /** What the retailer said was available. Null means it did not say. */
   availableQuantity?: number | null;
-  /** Already scrubbed on the Watcher's machine. Scrubbed again on the way out. */
+  /** Already scrubbed on Phantom's machine. Scrubbed again on the way out. */
   message: string;
   detail?: string;
 }
@@ -2531,8 +2531,8 @@ export async function keepDiscovery(
 /**
  * Is a sweep due?
  *
- * Pure, and deliberately the Hub's decision rather than the Watcher's. The
- * Watcher is a process that restarts — sometimes several times an hour while
+ * Pure, and deliberately the Hub's decision rather than Phantom's. The
+ * Phantom is a process that restarts — sometimes several times an hour while
  * something is being fixed — and a restart must not mean another sweep. The
  * Hub already records when the last one finished, so it is the only thing that
  * can answer this without being wrong after a reboot.
@@ -2582,9 +2582,9 @@ export async function requestSweep(db: Sql, userId: number, sourceId: string): P
  *
  * A queue at a retailer means everyone is being made to wait because
  * something is dropping, which makes it the loudest early signal this system
- * ever receives. Matched on the words the Watcher writes (its 'QUEUE:' sweep
+ * ever receives. Matched on the words Phantom writes (its 'QUEUE:' sweep
  * lines, and the 'waiting room' challenge wording on checks) because a queue
- * is by definition a page the Watcher could not read — there is no cleaner
+ * is by definition a page Phantom could not read — there is no cleaner
  * column to ask. The wording is a contract, pinned by tests in both packages.
  */
 export async function queueSightings(
@@ -2606,7 +2606,7 @@ export async function queueSightings(
 }
 
 /**
- * Load-ins the Watcher has alarmed on: warehouse stock appearing on a watched
+ * Load-ins Phantom has alarmed on: warehouse stock appearing on a watched
  * listing that had none — Target's loudest pre-drop tell, readable hours
  * before the page turns buyable. A long window (12h by default) on purpose:
  * the load lands the evening before a small-hours drop, and the person who

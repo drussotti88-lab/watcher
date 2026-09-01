@@ -7,7 +7,7 @@
  *   An error occurred with your deployment
  *   FUNCTION_INVOCATION_TIMEOUT
  *
- * That arrives at the Watcher with a 504 and no JSON, which is how a wedged
+ * That arrives at Phantom with a 504 and no JSON, which is how a wedged
  * database connection got read as a parse error three layers away from its
  * cause. Getting in front of the platform's timeout means the Hub keeps the
  * pen: it can say what went wrong, in the shape the caller expects, and clean

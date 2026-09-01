@@ -38,7 +38,7 @@ test('the seed is safe to run twice', async () => {
   assert.equal(sources.length, 3, 'ON CONFLICT DO NOTHING throughout');
 });
 
-test('every source is via the Watcher — no datacentre fetches all three 403', async () => {
+test('every source is via Phantom — no datacentre fetches all three 403', async () => {
   const db = await seeded();
   for (const source of await store.listAllSources(db, USER)) {
     assert.equal(source.via, 'watcher', `${source.id} should not be fetched from a datacentre`);

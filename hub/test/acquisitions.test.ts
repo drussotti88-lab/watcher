@@ -1,6 +1,6 @@
 /**
  * A confirmed purchase becomes a queued acquisition, is reviewed, and lands in
- * the vault — the review-then-send half of the Phantom↔vault bridge, proven
+ * the vault — the review-then-send half of Phantom↔vault bridge, proven
  * against a real Postgres.
  */
 import { test } from 'node:test';

@@ -42,7 +42,7 @@ export function interleave<T>(...lists: readonly (readonly T[])[]): T[] {
  * almost never — but "almost" is doing real work in that sentence, so the
  * deep pages get covered too: a few per sweep, rotating with the date, so
  * the whole catalogue is read over successive days at the same per-sweep
- * cost. Derived from the date rather than stored, because the Watcher
+ * cost. Derived from the date rather than stored, because Phantom
  * restarts and a rotation that forgot where it was would forever re-read
  * the front of the back.
  *

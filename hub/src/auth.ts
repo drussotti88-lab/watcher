@@ -3,11 +3,11 @@
  *
  * Two callers, two mechanisms, and they are not interchangeable:
  *
- *   the Watcher   a bearer token, set once in its config file
+ *   Phantom   a bearer token, set once in its config file
  *   the browser   a password, exchanged for a signed cookie
  *
  * There are accounts now. There were not, and the gap was the whole problem:
- * every query underneath already filtered by user_id and every Watcher already
+ * every query underneath already filtered by user_id and every Phantom already
  * carried its own token, but the browser door had one password and always
  * answered as user 1. Handing a second person the link did not create a second
  * account — it handed them the first one, with the delete buttons attached.
@@ -57,7 +57,7 @@ export function safeEqual(a: string, b: string): boolean {
  * The payload is `<userId>:<expires>`. Older cookies carry a bare expiry with
  * no colon and are read as user 1 — see `readSession`. That is not politeness
  * to old data, it is so that deploying this does not sign Roberto out of a
- * dashboard whose Watcher is mid-pass.
+ * dashboard whose Phantom is mid-pass.
  */
 export async function mintSession(
   secret: string,
@@ -187,7 +187,7 @@ const NOBODY: Caller = { kind: 'none', userId: 0 };
  * SHA-256, hex. What the users table stores instead of a token.
  *
  * A leaked database must not hand anyone the ability to impersonate a
- * Watcher — the same standard a password gets, for the same reason.
+ * Phantom — the same standard a password gets, for the same reason.
  */
 export async function hashToken(token: string): Promise<string> {
   const bytes = new TextEncoder().encode(token);
@@ -213,14 +213,14 @@ export async function identify(
   if (header.startsWith('Bearer ')) {
     const token = header.slice(7);
 
-    // A per-user Watcher token, matched by its hash. This is the path every
-    // Watcher will use once there is more than one person.
+    // A per-user Phantom token, matched by its hash. This is the path every
+    // Phantom will use once there is more than one person.
     if (lookup) {
       const userId = await lookup(await hashToken(token));
       if (userId) return { kind: 'watcher', userId };
     }
 
-    // The single shared INGEST_TOKEN from the environment. Kept so the Watcher
+    // The single shared INGEST_TOKEN from the environment. Kept so Phantom
     // already running on a desk does not stop working the moment ownership
     // ships; it answers as the first user.
     if (env.INGEST_TOKEN && safeEqual(token, env.INGEST_TOKEN)) {
@@ -240,7 +240,7 @@ export async function identify(
   return NOBODY;
 }
 
-/** Given a token hash, whose Watcher is it? Returns 0 for nobody. */
+/** Given a token hash, whose Phantom is it? Returns 0 for nobody. */
 export type TokenLookup = (tokenHash: string) => Promise<number>;
 
 // ── Passwords ────────────────────────────────────────────────────────────────
@@ -293,7 +293,7 @@ export async function hashPassword(
  * Does this password match that stored hash?
  *
  * False for a malformed or empty stored hash rather than throwing, because the
- * empty string is a real and expected value: a user row that owns a Watcher
+ * empty string is a real and expected value: a user row that owns a Phantom
  * token but has no browser login at all stores exactly that, and it must mean
  * "cannot sign in", never "signs in with anything".
  */

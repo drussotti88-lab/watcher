@@ -22,7 +22,7 @@
  *   · It is bounded: a handful of reads per rung, and the whole run is over in
  *     a few minutes. There is no "leave it running overnight" mode on purpose.
  *
- * Run it with the live Watcher STOPPED, or the two of you are both spending
+ * Run it with the live Phantom STOPPED, or the two of you are both spending
  * Target's patience and neither number means anything.
  *
  *   node --experimental-strip-types scripts/probe-limit.ts [tcin] [url]
@@ -62,7 +62,7 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 
 async function main(): Promise<void> {
   const config = loadConfig();
-  const browser = new Browser(config.browser);
+  const browser = new Browser(config, 'watch');
   const results: RungResult[] = [];
   let stoppedBy = '';
 

@@ -488,7 +488,7 @@ test('THE TEST RUN BUTTON ACTUALLY ASKS FOR A TEST RUN', async () => {
 });
 
 test('the test run button says queued, never "checking now"', async () => {
-  // The Hub has no browser and the Watcher will not jump the retailer's pacing
+  // The Hub has no browser and Phantom will not jump the retailer's pacing
   // for a button click. Wording that promises otherwise is a claim neither of
   // them can keep.
   const h = await boot();
@@ -1099,22 +1099,28 @@ const inDays = (n: number): string =>
 const pills = (h: Harness): string =>
   [...h.doc.querySelectorAll('.pill')].map((p) => p.textContent).join(' | ');
 
-test('AN OUT-OF-STOCK ITEM WITH A KNOWN DROP DATE SAYS SO', async () => {
-  // Without this, a box dropping on Tuesday and a box that sold out in March
+test('AN OUT-OF-STOCK ITEM WITH A KNOWN RELEASE DATE SAYS SO', async () => {
+  // Without this, a box releasing on Tuesday and a box that sold out in March
   // render identically: one grey OUT OF STOCK pill each.
+  //
+  // RELEASES, not DROPS. A street date is when the product first exists; a
+  // drop is a retailer putting stock up, which happens many times afterwards
+  // and is never announced. Saying "drops in 18 days" promised stock on a day
+  // that only promises existence.
   const h = await boot(withRelease({ releaseDate: inDays(18) }));
-  assert.match(pills(h), /drops in 18 days/);
+  assert.match(pills(h), /releases in 18 days/);
+  assert.doesNotMatch(pills(h), /drops in/i, 'a street date never claims a drop');
 });
 
 test('the day itself is called out, not counted', async () => {
   const h = await boot(withRelease({ releaseDate: inDays(0) }));
-  assert.match(pills(h), /DROPS TODAY/);
-  assert.ok(!pills(h).includes('drops in 0 days'));
+  assert.match(pills(h), /RELEASES TODAY/);
+  assert.ok(!pills(h).includes('releases in 0 days'));
 });
 
 test('tomorrow reads as tomorrow', async () => {
   const h = await boot(withRelease({ releaseDate: inDays(1) }));
-  assert.match(pills(h), /drops tomorrow/);
+  assert.match(pills(h), /releases tomorrow/);
 });
 
 test('A COUNTDOWN THAT HAS GONE NEGATIVE IS NOT SHOWN', async () => {
@@ -1240,7 +1246,7 @@ test('a find you already watch is marked, not hidden', async () => {
 });
 
 test('a dashboard from before this feature does not break the page', async () => {
-  // The Watcher and the Hub deploy separately, and an old payload with no
+  // Phantom and the Hub deploy separately, and an old payload with no
   // discoveries key must render rather than throw.
   const base = JSON.parse(JSON.stringify(DASHBOARD));
   delete base.discoveries;
@@ -1319,17 +1325,17 @@ test('THE TOGGLE IS LABELLED WITH THE ACTION, NOT THE STATE', async () => {
   // A button that says "Paused" leaves you guessing whether that is what it
   // is or what it will do. These say what pressing them does.
   const running = await boot(withSweep({}, { paused: false }));
-  assert.equal($(running, '#watcher-toggle').textContent, 'Turn watcher off');
+  assert.equal($(running, '#phantom-toggle').textContent, 'Turn Phantom off');
 
   const stopped = await boot(withSweep({}, { paused: true }));
-  assert.equal($(stopped, '#watcher-toggle').textContent, 'Turn watcher on');
+  assert.equal($(stopped, '#phantom-toggle').textContent, 'Turn Phantom on');
 });
 
-test('turning the watcher off asks first, and then says so', async () => {
+test('turning Phantom off asks first, and then says so', async () => {
   const h = await boot(withSweep({}, { paused: false }));
   h.reply('POST /api/settings', { settings: {} });
 
-  $(h, '#watcher-toggle').click();
+  $(h, '#phantom-toggle').click();
   await h.settle();
 
   const asked = (h.dom.window as any).__confirms;
@@ -1348,7 +1354,7 @@ test('TURNING IT BACK ON DOES NOT ASK — STARTING IS NOT THE RISKY DIRECTION', 
   const h = await boot(withSweep({}, { paused: true }));
   h.reply('POST /api/settings', { settings: {} });
 
-  $(h, '#watcher-toggle').click();
+  $(h, '#phantom-toggle').click();
   await h.settle();
 
   assert.deepEqual((h.dom.window as any).__confirms, [], 'it should not have asked');
@@ -1376,7 +1382,7 @@ test('an already-queued sweep cannot be queued twice', async () => {
 
 test('the button says when the catalogue was last swept', async () => {
   const h = await boot(
-    withSweep({ lastSweptAt: new Date(Date.now() - 3600_000).toISOString(), lastStatus: 'watcher: 2 new' }),
+    withSweep({ lastSweptAt: new Date(Date.now() - 3600_000).toISOString(), lastStatus: 'Phantom: 2 new' }),
   );
   const title = $(h, '#sweep-now').title;
   assert.match(title, /last swept/);
@@ -1384,7 +1390,7 @@ test('the button says when the catalogue was last swept', async () => {
 });
 
 test('a dashboard with no sweep block still renders the bar', async () => {
-  // The Hub and the Watcher deploy separately; an older payload must not take
+  // The Hub and Phantom deploy separately; an older payload must not take
   // the page down.
   const base = JSON.parse(JSON.stringify(DASHBOARD));
   base.settings = { taxRate: 0, shippingAllowance: 0, paused: false };
@@ -1459,12 +1465,12 @@ test('THE SWEEP BUTTON SAYS SWEEPING WHILE IT IS SWEEPING', async () => {
 });
 
 test('before it starts it still says queued', async () => {
-  const h = await boot(withSweep({ queued: true, lastStatus: 'watcher: 2 new' }));
+  const h = await boot(withSweep({ queued: true, lastStatus: 'Phantom: 2 new' }));
   assert.equal($(h, '#sweep-now').textContent, 'sweep queued');
 });
 
 test('and when it is over it offers another', async () => {
-  const h = await boot(withSweep({ queued: false, lastStatus: 'watcher: 2 new' }));
+  const h = await boot(withSweep({ queued: false, lastStatus: 'Phantom: 2 new' }));
   assert.equal($(h, '#sweep-now').textContent, 'Run catalogue sweep');
   assert.equal($(h, '#sweep-now').disabled, false);
 });
@@ -1938,7 +1944,7 @@ test('a find with no price is not compared to anything', async () => {
 // ── Money on the page ────────────────────────────────────────────────────────
 
 test('AN OPEN GRANT PUTS A BANNER AT THE TOP, WITH A RELEASE PATH', async () => {
-  // A live grant is either a buy in progress or a Watcher that died between
+  // A live grant is either a buy in progress or a Phantom that died between
   // add-to-cart and the button. The second one is invisible everywhere else.
   const h = await boot({
     ...DASHBOARD,
@@ -2246,7 +2252,7 @@ test('THE RELEASE RADAR GROUPS EVERY DATED ITEM BY WHEN IT DROPS', async () => {
   const radar = $(h, '#release-radar');
   assert.equal(radar.hidden, false);
   const text = radar.textContent;
-  assert.match(text, /Drops today/);
+  assert.match(text, /Releases today/);
   assert.match(text, /Drops This Morning Box/);
   assert.match(text, /This week/);
   assert.match(text, /Pitch Black ETB/, 'the watched mission is on the radar too');

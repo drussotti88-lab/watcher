@@ -173,11 +173,11 @@ test('a fetch failure is recorded, not thrown, and leaves the cursor alone', asy
   assert.equal(events.length, 1, 'the failure should be in the ops log');
 });
 
-test('the watcher ingest path shares the same dedupe ledger', async () => {
+test('Phantom ingest path shares the same dedupe ledger', async () => {
   const db = await setup();
   await db.query(
     `INSERT INTO sources (id, label, retailer, kind, url, via, config, enabled, seeded)
-     VALUES ('pc', 'PC via watcher', 'Pokemon Center', 'watcher', '', 'watcher',
+     VALUES ('pc', 'PC via Phantom', 'Pokemon Center', 'watcher', '', 'watcher',
              '{}'::jsonb, true, true)`,
   );
 

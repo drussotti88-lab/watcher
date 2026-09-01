@@ -84,7 +84,7 @@ export function checkChrome(exists: (p: string) => boolean = existsSync, os = pl
     detail: found ? 'installed' : 'not found in the usual places',
     fix: found
       ? ''
-      : 'Install Google Chrome from google.com/chrome. The Watcher drives a real\n' +
+      : 'Install Google Chrome from google.com/chrome. Phantom drives a real\n' +
         '     Chrome on your own connection — that is the part that makes the shops\n' +
         '     answer at all.',
   };
@@ -206,7 +206,7 @@ const CONFIG_PATH = resolve(process.cwd(), 'watcher.config.json');
 
 /** The interactive half. Kept thin: everything worth testing is above. */
 export async function runSetup(): Promise<void> {
-  console.log('\n  Setting up this Watcher.\n');
+  console.log('\n  Setting up this Phantom.\n');
 
   // The machine first. An address and a token are no use on a computer that
   // cannot run the thing, and the failures that follow are unreadable.

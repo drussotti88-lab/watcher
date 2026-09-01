@@ -3,8 +3,8 @@
  *
  * Target runs its scheduled drops in the small hours, so polling all afternoon
  * is traffic spent on a page that will not change. That is not merely wasteful:
- * traffic is the one thing that earns a challenge, and a Watcher standing down
- * for four hours because it annoyed Target at lunchtime is a Watcher that is
+ * traffic is the one thing that earns a challenge, and a Phantom standing down
+ * for four hours because it annoyed Target at lunchtime is a Phantom that is
  * off the air at 3am when it matters.
  *
  * ── What this deliberately does not decide ──────────────────────────────────
@@ -55,7 +55,7 @@ export interface Wakefulness {
 }
 
 /**
- * Should the Watcher be looking at pages right now?
+ * Should Phantom be looking at pages right now?
  *
  * A window may cross midnight — 22:00 to 06:00 is one window, not two — which
  * is the case that a naive `from <= now && now < until` gets exactly backwards,
@@ -113,7 +113,7 @@ export function overrides(
 ): string {
   if (missions.some((m) => m.checkNow)) return 'a check was asked for by hand';
   if (missions.some((m) => m.releaseDate && String(m.releaseDate).slice(0, 10) === today)) {
-    return 'something drops today';
+    return 'something releases today';
   }
   return '';
 }

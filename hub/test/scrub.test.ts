@@ -1,18 +1,18 @@
 /**
  * The Hub's copy of the scrubber.
  *
- * Scrubbing happens on the Watcher's machine, before a line is written to disk
+ * Scrubbing happens on Phantom's machine, before a line is written to disk
  * or posted here. So why a second pass on the way out?
  *
  * Because the first one is a promise about code running somewhere else. A
- * Watcher on an old version, a line posted by hand with curl, a future ingest
+ * Phantom on an old version, a line posted by hand with curl, a future ingest
  * path nobody has written yet — the Hub cannot verify any of that, and "the
  * client said it was clean" is not a property, it is a hope. The export is the
  * moment data leaves for a third party, and that is the right place to check
  * rather than to trust.
  *
  * The two copies are deliberately identical files. This suite runs the same
- * corpus as the Watcher's, and additionally fails if they have drifted.
+ * corpus as Phantom's, and additionally fails if they have drifted.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -45,7 +45,7 @@ for (const c of corpus.clean) {
 test('THE TWO COPIES OF THE SCRUBBER HAVE NOT DRIFTED', () => {
   // Two packages, no shared module between them, so the only thing keeping
   // these honest is this assertion. A rule tightened on one side and not the
-  // other means the Watcher stops sending something the Hub still expects to
+  // other means Phantom stops sending something the Hub still expects to
   // strip, or worse, the reverse.
   const theirs = resolve(import.meta.dirname, '..', '..', 'watcher', 'src', 'scrub.ts');
   if (!existsSync(theirs)) {

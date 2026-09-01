@@ -14,7 +14,7 @@
  *
  * There is no scheduled entrypoint any more, and that is not a regression.
  * Vercel's Hobby plan runs cron once a day with an hour of slop, which is
- * useless for this. But the Hub never needed a scheduler: the Watcher on the
+ * useless for this. But the Hub never needed a scheduler: Phantom on the
  * desk already runs every minute, and it calls POST /sweep on whatever rhythm
  * we choose. The one thing cloud-side cron could have added — sweeping while
  * that machine is off — was ruled out when this Hub got 403 from all three
@@ -48,9 +48,9 @@ import { identifyListing } from './parsers/identify.ts';
 import { MANIFEST, SERVICE_WORKER, iconResponse } from './pwa.ts';
 
 /**
- * The source a Watcher-side sweep reports into.
+ * The source a Phantom-side sweep reports into.
  *
- * One name, in one place. The Watcher posts here and the Hub reads its
+ * One name, in one place. Phantom posts here and the Hub reads its
  * last_swept_at to decide when the next one is due, so the two must agree —
  * and a typo would mean sweeping forever because nothing ever recorded one.
  */
@@ -217,7 +217,7 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       });
     }
 
-    // Everything below is either the Watcher with its token or a signed-in
+    // Everything below is either Phantom with its token or a signed-in
     // browser. Fail closed: an unset password or token shuts that door rather
     // than opening it.
     const caller = await identify(request, env, (hash) => store.userByTokenHash(db, hash));
@@ -290,7 +290,7 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       const you = await store.userHandle(db, userId);
       // The money picture: what is committed right now, and any grant still
       // open. An open grant on the dashboard is either a buy in progress or a
-      // Watcher that died mid-checkout — both worth seeing at a glance.
+      // Phantom that died mid-checkout — both worth seeing at a glance.
       const authorisations = await store.openAuthorisations(db, userId);
       const committed = await store.committedLast24h(db, userId);
       // Waiting rooms seen in the last half hour. A queue is the loudest
@@ -448,7 +448,7 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       // page rather than presented as the product's real name.
       const product = await store.upsertProduct(db, userId, {
         name: typedName || parsed.name || `${parsed.retailer} ${parsed.externalId}`,
-        // Only a slug-derived name is a guess. Once the Watcher reads the page
+        // Only a slug-derived name is a guess. Once Phantom reads the page
         // it replaces it; a name typed here is final.
         nameIsGuess: !typedName,
         ...details,
@@ -505,9 +505,9 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
     }
 
     /**
-     * Permission to spend. The Watcher asks; this is the only yes there is.
+     * Permission to spend. Phantom asks; this is the only yes there is.
      *
-     * Deliberately allowed for both callers: the Watcher asks for real, and a
+     * Deliberately allowed for both callers: Phantom asks for real, and a
      * signed-in browser may ask to see what the answer would be. The grant
      * itself is idempotent-hostile on purpose — one live grant per mission,
      * ever, until something resolves it.
@@ -525,7 +525,7 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
      * a pre-authorisation for one purchase, and the purchase happened.
      *
      * A grant that is never resolved stays live and keeps counting against the
-     * cap. That is the fail-closed answer to a Watcher dying mid-checkout:
+     * cap. That is the fail-closed answer to a Phantom dying mid-checkout:
      * nobody knows whether money moved, so the money stays committed until a
      * person looks at their orders page and releases it by hand.
      */
@@ -544,14 +544,14 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
      * "Test run" — check this mission on the next pass, whatever its schedule.
      *
      * Answers 202, not 200, and the wording matters: the Hub has no browser and
-     * cannot make a check happen. It records the request; the Watcher honours it
+     * cannot make a check happen. It records the request; Phantom honours it
      * next pass, jumping the mission queue but never the per-retailer floor.
      */
     if (request.method === 'POST' && path.endsWith('/check-now') && path.startsWith('/api/missions/')) {
       const id = Number(path.split('/')[3]);
       if (!Number.isInteger(id)) return json({ error: 'bad mission id' }, 400);
       if (!(await store.requestCheckNow(db, userId, id))) return json({ error: 'no such mission' }, 404);
-      return json({ queued: id, note: 'the Watcher will check this on its next pass' }, 202);
+      return json({ queued: id, note: 'Phantom will check this on its next pass' }, 202);
     }
 
     if (request.method === 'DELETE' && path.startsWith('/api/missions/')) {
@@ -641,7 +641,7 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
     // and nothing more: no mission, nothing armed. A machine's guess and a
     // decision about money are kept a deliberate click apart.
 
-    /** Ask for a catalogue sweep on the Watcher's next pass. */
+    /** Ask for a catalogue sweep on Phantom's next pass. */
     if (request.method === 'POST' && path === '/api/sweep-now') {
       const asked = await store.requestSweep(db, userId, SWEEP_SOURCE);
       if (!asked) {
@@ -678,7 +678,7 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
     // ── The activity log ─────────────────────────────────────────────────────
 
     /**
-     * The Watcher posting what it did.
+     * Phantom posting what it did.
      *
      * Lines arrive already scrubbed on the machine that produced them. This
      * endpoint does not re-scrub on the way in, deliberately: doing it here
@@ -694,7 +694,7 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       const b = await body<{ lines?: store.ActivityIn[] }>();
       if (!b || !Array.isArray(b.lines)) return json({ error: 'need lines[]' }, 400);
 
-      // A cap, so a runaway Watcher cannot post a million rows in one request.
+      // A cap, so a runaway Phantom cannot post a million rows in one request.
       const lines = b.lines.slice(0, 500);
       const result = await store.recordActivity(db, userId, lines);
       const pruned = await store.pruneActivity(db, userId);
@@ -768,13 +768,13 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       return new Response(JSON.stringify({ ...bundle, warnings }, null, 2), {
         headers: {
           'Content-Type': 'application/json; charset=utf-8',
-          'Content-Disposition': `attachment; filename="watcher-activity-${now.slice(0, 10)}.json"`,
+          'Content-Disposition': `attachment; filename="phantom-activity-${now.slice(0, 10)}.json"`,
         },
       });
     }
 
     /**
-     * What the Watcher polls: enabled missions, with their mandate attached —
+     * What Phantom polls: enabled missions, with their mandate attached —
      * and the account settings, because the mandate is not complete without
      * them. A ceiling means item plus tax, and tax needs a rate.
      */
@@ -783,12 +783,12 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
         store.activeMissions(db, userId),
         store.getSettings(db, userId),
       ]);
-      // Whether to sweep is answered here rather than on the Watcher, because
-      // the Watcher restarts and the Hub remembers. See store.isSweepDue.
+      // Whether to sweep is answered here rather than on Phantom, because
+      // Phantom restarts and the Hub remembers. See store.isSweepDue.
       const state = await store.sweepState(db, userId, SWEEP_SOURCE, settings.sweepEveryHours);
       const sweep = {
         due: await store.sweepDue(db, userId, SWEEP_SOURCE, settings.sweepEveryHours),
-        // Asked for by hand, as opposed to falling due. The Watcher jumps the
+        // Asked for by hand, as opposed to falling due. Phantom jumps the
         // queue for one of these: somebody is watching the button.
         manual: state.queued,
         sourceId: SWEEP_SOURCE,
@@ -796,7 +796,7 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       return json({ missions, settings, sweep });
     }
 
-    /** The Watcher reporting a run it has already finished. */
+    /** Phantom reporting a run it has already finished. */
     if (request.method === 'POST' && path === '/api/runs') {
       const b = await body<{
         missionId?: number;
@@ -826,7 +826,7 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
     }
 
     /**
-     * The Watcher reporting what it saw.
+     * Phantom reporting what it saw.
      *
      * Accepts a batch, and answers per-item rather than all-or-nothing: one
      * unreadable listing must not throw away the other eleven readings in the
@@ -914,9 +914,9 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
     }
 
     /**
-     * Watcher ingest — the *discovery* path, not the watching one.
+     * Phantom ingest — the *discovery* path, not the watching one.
      *
-     * The Watcher posts what it saw on a category page the Hub cannot reach.
+     * Phantom posts what it saw on a category page the Hub cannot reach.
      * Identical downstream handling to a sweep: diff, seed-or-announce, mint
      * identity. This is how a SKU nobody has seen before becomes a product you
      * can then point a mission at.
@@ -974,15 +974,15 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       for (const item of toAnnounce) {
         await store.attachIdentity(db, userId, sourceId, source.retailer, item);
       }
-      // A Watcher-side sweep arrives as many posts, one per query. Only the
+      // A Phantom-side sweep arrives as many posts, one per query. Only the
       // last one finishes it — see the note on finishSweep. Absent means true,
       // so a caller that posts once (the CLI, a curl by hand) still completes.
       const complete = body.final !== false;
       const left = Number(body.remaining);
       const status = complete
         ? isFirstSweep
-          ? `seeded ${fresh.length} via watcher`
-          : `watcher: ${fresh.length} new`
+          ? `seeded ${fresh.length} via Phantom`
+          : `Phantom: ${fresh.length} new`
         : `sweeping — ${Number.isFinite(left) && left > 0 ? left : '?'} to go`;
       await store.finishSweep(db, userId, sourceId, status, clean.length, true, 0, complete);
 
@@ -1002,7 +1002,7 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
         announced: toAnnounce.length,
         seeded: isFirstSweep,
         // What was new, by name. The caller cannot work this out for itself —
-        // "new" is a question about everything ever seen, and the Watcher is a
+        // "new" is a question about everything ever seen, and Phantom is a
         // process that restarts. Empty on a first sweep, which is the point of
         // seeding silently rather than announcing a whole catalogue.
         names: toAnnounce.map((i) => i.name),
@@ -1013,7 +1013,7 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
     /**
      * Reachability check. The single most useful thing to run after deploying:
      * it answers, from Cloudflare's own egress, which sources this Worker can
-     * actually fetch — and therefore which ones have to move to the Watcher.
+     * actually fetch — and therefore which ones have to move to Phantom.
      */
     if ((request.method === 'POST' || request.method === 'GET') && path === '/probe') {
       const sources = await store.listAllSources(db, userId);
@@ -1025,7 +1025,7 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
             retailer: source.retailer,
             via: source.via,
             enabled: source.enabled,
-            verdict: 'watcher — never fetched from here',
+            verdict: 'Phantom — never fetched from here',
           });
           continue;
         }
@@ -1050,20 +1050,20 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
         summary:
           blocked === 0
             ? 'every hub source is reachable from here'
-            : `${blocked} source(s) blocked — those belong to the Watcher`,
+            : `${blocked} source(s) blocked — those belong to Phantom`,
         checks,
       });
     }
 
     /**
-     * What the Watcher should be looking at.
+     * What Phantom should be looking at.
      *
      * Two lists, and the distinction matters. `products` is the real answer —
      * every known product with a retailer id and a URL, which is what gets
      * polled for stock. `sources` is where to go hunting for products that
      * aren't known yet.
      *
-     * The Watcher holds no list of its own. Adding something to watch is a row
+     * Phantom holds no list of its own. Adding something to watch is a row
      * here, never a redeploy of the thing on the desk.
      */
     if (request.method === 'GET' && path === '/watchlist') {

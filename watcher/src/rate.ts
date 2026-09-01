@@ -81,7 +81,7 @@ export class Pacer {
    *
    * Refuses to go below the safe floor rather than trusting its caller: this
    * number arrives from a settings field, and the cost of a typo here is the
-   * block that takes the Watcher off the air during the drop it was tightened
+   * block that takes Phantom off the air during the drop it was tightened
    * for.
    */
   setBurstSpacing(ms: number | null): void {

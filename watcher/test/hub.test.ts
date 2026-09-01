@@ -347,7 +347,7 @@ test('A 200 THAT IS NOT JSON IS AN ERROR, not a TypeError three frames away', as
 });
 
 test('AN EMPTY ANSWER IS NOT AN EMPTY WATCHLIST', async () => {
-  // The difference matters: "you have no missions" makes the Watcher go quiet
+  // The difference matters: "you have no missions" makes Phantom go quiet
   // and look like it is working. An answer with no missions list is a broken
   // answer, and the loop should fall back to the list it already had.
   const impl = (async () =>

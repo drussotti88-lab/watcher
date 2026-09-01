@@ -65,12 +65,12 @@ test('THE LOCAL FILE NEVER HOLDS AN UNSCRUBBED LINE EITHER', () => {
   // while and the guarantee would be worth nothing.
   const d = dir();
   const log = new Activity({ dir: d, secrets: ['tok-abcdefgh12345678'] });
-  log.record({ kind: 'check', message: 'C:\\Users\\danru\\watcher failed, token tok-abcdefgh12345678' });
+  log.record({ kind: 'check', message: 'C:\\Users\\danru\\Phantom failed, token tok-abcdefgh12345678' });
 
   const written = readdirSync(d).map((f) => readFileSync(join(d, f), 'utf8')).join('');
   assert.ok(!written.includes('danru'), 'the account name is on disk');
   assert.ok(!written.includes('tok-abcdefgh12345678'), 'the token is on disk');
-  assert.ok(written.includes('watcher failed'), 'and the useful half survived');
+  assert.ok(written.includes('Phantom failed'), 'and the useful half survived');
 });
 
 test('record hands back the scrubbed line, so printing it is safe too', () => {

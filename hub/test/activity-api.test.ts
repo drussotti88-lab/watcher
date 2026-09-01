@@ -15,7 +15,7 @@ import { createHandler } from '../src/app.ts';
 import * as store from '../src/store.ts';
 import type { Env } from '../src/types.ts';
 
-const TOKEN = 'watcher-token-9f2c8a1b';
+const TOKEN = 'Phantom-token-9f2c8a1b';
 const PASSWORD = 'correct-horse-battery';
 
 const env: Env = {
@@ -59,7 +59,7 @@ const line = (over: Partial<store.ActivityIn> = {}): store.ActivityIn => ({
   ...over,
 });
 
-test('the Watcher can post a batch and gets a count back', async () => {
+test('Phantom can post a batch and gets a count back', async () => {
   const db = await TestDb.create();
   const res = await call(db, 'POST', '/api/activity', {
     token: TOKEN,
@@ -106,7 +106,7 @@ test('ingest prunes, so retention needs no scheduler', async () => {
 // ── the export ───────────────────────────────────────────────────────────────
 
 test('THE EXPORT SCRUBS AGAIN ON THE WAY OUT', async () => {
-  // The line below was posted raw, as a Watcher on an old version or a curl by
+  // The line below was posted raw, as a Phantom on an old version or a curl by
   // hand would post it. The Hub cannot verify what happened on that machine,
   // so it does not assume anything happened at all.
   const db = await TestDb.create();
@@ -117,7 +117,7 @@ test('THE EXPORT SCRUBS AGAIN ON THE WAY OUT', async () => {
         line({
           level: 'error',
           message: 'failed at https://www.target.com/p/x?visitor_id=018F2A9C3B4D5E6F7A8B&zip=37067',
-          detail: 'from C:\\Users\\danru\\Pokemon\\watcher, as someone@example.com',
+          detail: 'from C:\\Users\\danru\\Pokemon\\Phantom, as someone@example.com',
         }),
       ],
     },
@@ -183,7 +183,7 @@ test('the export arrives as a file, named for the day it was taken', async () =>
       headers: { Authorization: `Bearer ${TOKEN}` },
     }),
   );
-  assert.match(res.headers.get('content-disposition') ?? '', /attachment; filename="watcher-activity-\d{4}-\d{2}-\d{2}\.json"/);
+  assert.match(res.headers.get('content-disposition') ?? '', /attachment; filename="phantom-activity-\d{4}-\d{2}-\d{2}\.json"/);
 });
 
 test('the window is bounded, however large a number is asked for', async () => {

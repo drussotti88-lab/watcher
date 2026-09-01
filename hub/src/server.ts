@@ -146,7 +146,7 @@ export default async function handler(
     if (isConnectionFailure(err)) dropConnection();
     // A misconfigured database must say so loudly. The failure mode this
     // avoids is a Hub that answers /health cheerfully while dropping
-    // everything the Watcher posts to it.
+    // everything Phantom posts to it.
     response = new Response(
       JSON.stringify({ error: (err as Error).message }, null, 2),
       { status: 500, headers: { 'Content-Type': 'application/json; charset=utf-8' } },

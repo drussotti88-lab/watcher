@@ -9,7 +9,7 @@
  *
  * ── What is actually at risk here ────────────────────────────────────────────
  *
- * Not payment details: nothing in the Watcher has ever seen one, and the buy
+ * Not payment details: nothing in Phantom has ever seen one, and the buy
  * profile is a separate Chrome that this code does not drive. The real leaks
  * are duller and likelier:
  *

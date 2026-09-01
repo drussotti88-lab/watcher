@@ -296,7 +296,7 @@ button.small { padding: 4px 10px; font-size: 12px; border-radius: var(--r-sm); b
 /* A pill that is wider than its grid column trims itself rather than
    escaping the card. */
 .gridded .pill { max-width: 100%; overflow: hidden; text-overflow: ellipsis; display: inline-block; line-height: 22px; }
-/* The release radar: a compact calendar of what drops when. */
+/* The release radar: a compact calendar of street dates — when things first exist. */
 .radar { margin-bottom: 14px; }
 .radar h3 { margin: 12px 0 2px; font-size: 12px; letter-spacing: .08em;
             text-transform: uppercase; color: var(--muted);
@@ -583,7 +583,7 @@ ${FONTS}<style>${STYLE}</style></head>
     </form>
   </div>
 
-  <!-- A live grant is money committed: a buy in progress, or a Watcher that
+  <!-- A live grant is money committed: a buy in progress, or a Phantom that
        died mid-checkout. Both deserve the top of the page. Releasing is the
        recovery path for the second one — after a look at the orders page,
        because a grant nobody resolved means nobody knows whether money moved. -->
@@ -596,7 +596,7 @@ ${FONTS}<style>${STYLE}</style></head>
   <div class="card banner alert" id="paused-banner" hidden>
     <div class="name">Everything is paused</div>
     <div class="meta">
-      The Watcher is looking at nothing. Turn it back on under Settings → When to watch.
+      Phantom is looking at nothing. Turn it back on under Settings → When to watch.
     </div>
   </div>
 
@@ -612,7 +612,7 @@ ${FONTS}<style>${STYLE}</style></head>
   <div class="bar">
     <button id="add-open" class="primary">Add product</button>
     <button id="sweep-now">Run catalogue sweep</button>
-    <button id="watcher-toggle">Turn watcher off</button>
+    <button id="phantom-toggle">Turn Phantom off</button>
     <button id="refresh">Refresh</button>
     <label class="check sub"><input type="checkbox" id="auto" checked> auto every 30s</label>
     <span class="grow"></span>
@@ -740,7 +740,7 @@ ${FONTS}<style>${STYLE}</style></head>
     <p class="sub" style="margin:-6px 0 14px">
       Target runs its scheduled drops in the small hours, so polling all
       afternoon is traffic spent on a page that will not change — and traffic is
-      the one thing that earns a challenge, which would take the Watcher off the
+      the one thing that earns a challenge, which would take Phantom off the
       air at three in the morning when it matters. Leave both blank to watch
       around the clock.
     </p>
@@ -765,7 +765,7 @@ ${FONTS}<style>${STYLE}</style></head>
           </label>
         </div>
         <label class="f">Timezone
-          <span class="hint">e.g. America/Chicago — blank uses the Watcher's own clock</span>
+          <span class="hint">e.g. America/Chicago — blank uses Phantom's own clock</span>
           <input type="text" name="timezone" placeholder="">
         </label>
         <p class="sub" style="margin:0">
@@ -818,7 +818,7 @@ ${FONTS}<style>${STYLE}</style></head>
 
     <h2>Diagnostics</h2>
     <p class="sub" style="margin:-6px 0 14px">
-      Every check the Watcher makes is written down — the ones that worked as
+      Every check Phantom makes is written down — the ones that worked as
       well as the ones that did not, because a failure only means something
       next to the checks around it. This is how "it's failing a lot" turns
       into which retailer, how often, and with what error.
@@ -855,7 +855,7 @@ ${FONTS}<style>${STYLE}</style></head>
       <h3>Add a product</h3>
       <p class="sub" style="margin:-4px 0 12px">
         The thing itself. Only the name is needed — everything else can wait,
-        or be filled in from the page once the Watcher reads it.
+        or be filled in from the page once Phantom reads it.
       </p>
       <form class="stack" id="product-form" novalidate>
         <label class="f">Name
@@ -1005,7 +1005,29 @@ async function withButton(button, busyText, msgNode, fn) {
  * is in fact how it caught me for the fifth time, since the escaped regex I
  * put in the prose was eaten the same way the real one would have been.
  */
-function dropsIn(m) {
+/**
+ * Days until this product's RELEASE — its street date, when the expansion
+ * first exists on the market at all.
+ *
+ * ── Release is not a drop ────────────────────────────────────────────────────
+ *
+ * Two different events, and this system needs both, so the words are kept
+ * apart deliberately:
+ *
+ *   RELEASE  the publisher's street date. Happens ONCE per product, is known
+ *            weeks ahead, and is what pre-orders are timed against. Answers
+ *            "does this thing exist to buy yet?"
+ *   DROP     a retailer putting stock up. Happens MANY times per product, in
+ *            many forms — launch-day allocation, a midnight restock, a
+ *            quiet reload — and is never announced. Answers "can I buy one
+ *            right now?", and is what staged stock and waiting rooms warn of.
+ *
+ * A product releases once and drops forever after. Calling a street date a
+ * "drop" made the card say DROPS TODAY on a release day that carried no stock,
+ * and left us with no word at all for the 2am restock that is most of what we
+ * are actually hunting.
+ */
+function releasesIn(m) {
   if (!m.releaseDate || m.state === 'in') return null;
   const parts = String(m.releaseDate).slice(0, 10).split('-');
   if (parts.length !== 3) return null;
@@ -1021,7 +1043,7 @@ function dropsIn(m) {
  * Has the last check failed to read the page?
  *
  * State and confidence both unknown, on a mission that has actually been
- * checked, means the Watcher looked and came back with nothing. That is a
+ * checked, means Phantom looked and came back with nothing. That is a
  * different thing from "out of stock" and a different thing from "not looked
  * at yet", and the card has to say so rather than shrugging twice.
  */
@@ -1065,7 +1087,7 @@ function thumb(url, alt, big) {
   const cls = 'thumb' + (big ? ' lg' : '');
   if (!url) {
     const ph = el('div', cls + ' ph', '▦');
-    ph.title = 'no image yet — the Watcher fills this in on its first read';
+    ph.title = 'no image yet — Phantom fills this in on its first read';
     return ph;
   }
   const img = el('img', cls);
@@ -1275,12 +1297,12 @@ function missionCard(m) {
   // stock count cannot, it is zero until the moment it is not — so a bare OUT
   // OF STOCK pill on something dropping on Tuesday reads exactly like one on
   // something that sold out in March.
-  const drop = dropsIn(m);
-  if (drop !== null) {
+  const release = releasesIn(m);
+  if (release !== null) {
     flags.appendChild(el('span', 'pill flag',
-      drop === 0 ? 'DROPS TODAY' :
-      drop === 1 ? 'drops tomorrow' :
-      'drops in ' + drop + ' days · ' + m.releaseDate));
+      release === 0 ? 'RELEASES TODAY' :
+      release === 1 ? 'releases tomorrow' :
+      'releases in ' + release + ' days · ' + m.releaseDate));
   }
   if (m.note) {
     const note = el('div', 'meta', m.note);
@@ -1298,7 +1320,7 @@ function missionCard(m) {
     now.addEventListener('click', async (e) => {
       const ok = await withButton(e.target, 'Queueing…', null, async () => {
         await api('POST', '/api/missions/' + m.id + '/check-now');
-        return 'queued — the Watcher will check this on its next pass';
+        return 'queued — Phantom will check this on its next pass';
       });
       if (ok) { e.target.textContent = 'check queued'; e.target.disabled = true; }
     });
@@ -1493,7 +1515,7 @@ function missionPanel(m) {
   // "Test run" — ask for this one to be checked next pass.
   //
   // The wording on the button and in the reply both say *queued*, deliberately.
-  // The Hub has no browser, and the Watcher will not jump the retailer's
+  // The Hub has no browser, and Phantom will not jump the retailer's
   // pacing for a button click, so anything promising "checking now" would be
   // making a claim neither of them can keep.
   const checkNow = form.querySelector('[data-act=check-now]');
@@ -1501,7 +1523,7 @@ function missionPanel(m) {
   checkNow.addEventListener('click', async (e) => {
     const ok = await withButton(e.target, 'Queueing…', msg, async () => {
       await api('POST', '/api/missions/' + m.id + '/check-now');
-      return 'queued — the Watcher will check this on its next pass';
+      return 'queued — Phantom will check this on its next pass';
     });
     // withButton restores the label it started with, which is right for every
     // other button on this page and wrong for this one: the request outlives
@@ -2145,7 +2167,7 @@ function render() {
   const never = DATA.missions.filter((m) => m.state === 'unchecked').length;
   const blind = DATA.missions.filter(notReading).length;
   const parts = [];
-  // First, because a watcher that cannot read pages is not watching, and that
+  // First, because a Phantom that cannot read pages is not watching, and that
   // outranks anything else the line could say.
   if (blind) parts.push(blind + ' NOT READING');
   if (inStock) parts.push(inStock + ' in stock');
@@ -2243,12 +2265,12 @@ function render() {
     }
   }
 
-  // The two buttons that change what the Watcher is doing, labelled with the
-  // action rather than the state. "Turn watcher on" when it is off is
+  // The two buttons that change what Phantom is doing, labelled with the
+  // action rather than the state. "Turn Phantom on" when it is off is
   // unambiguous; a toggle labelled "Paused" leaves you guessing whether that
   // is the current state or what pressing it will do.
-  const toggle = document.getElementById('watcher-toggle');
-  toggle.textContent = st.paused ? 'Turn watcher on' : 'Turn watcher off';
+  const toggle = document.getElementById('phantom-toggle');
+  toggle.textContent = st.paused ? 'Turn Phantom on' : 'Turn Phantom off';
   toggle.className = st.paused ? 'primary' : '';
 
   // The sweep button says which of three things is true, because "queued" for
@@ -2691,10 +2713,10 @@ function renderRadar() {
   if (!entries.length) { host.hidden = true; return; }
   host.hidden = false;
   host.appendChild(el('div', 'name', 'Release radar'));
-  host.appendChild(el('div', 'meta', 'Every known street date ahead, soonest first.'));
+  host.appendChild(el('div', 'meta', 'Every known street date ahead, soonest first. A release is when a product first exists — a drop is a retailer putting stock up, which happens many times after.'));
   entries.sort((a, b) => a.days - b.days || String(a.name).localeCompare(String(b.name)));
   const groups = [
-    { label: 'Drops today', today: true, match: (e) => e.days === 0 },
+    { label: 'Releases today', today: true, match: (e) => e.days === 0 },
     { label: 'Tomorrow', match: (e) => e.days === 1 },
     { label: 'This week', match: (e) => e.days >= 2 && e.days <= 7 },
     { label: 'Later', match: (e) => e.days > 7 },
@@ -2973,7 +2995,7 @@ function renderMoney() {
     '$' + Number(DATA.committed || 0).toFixed(2) + ' of ' +
     (cap ? '$' + Number(cap).toFixed(2) : 'no cap') +
     ' is committed by ' + open.length + (open.length === 1 ? ' grant' : ' grants') +
-    '. A grant is a buy in progress, or a Watcher that died mid-checkout.';
+    '. A grant is a buy in progress, or a Phantom that died mid-checkout.';
 
   const list = document.getElementById('money-banner-list');
   list.textContent = '';
@@ -3175,7 +3197,7 @@ document.getElementById('diag-download').addEventListener('click', async (e) => 
     const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'watcher-activity-' + new Date().toISOString().slice(0, 10) + '.json';
+    a.download = 'phantom-activity-' + new Date().toISOString().slice(0, 10) + '.json';
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -3195,11 +3217,11 @@ document.getElementById('sweep-now').addEventListener('click', async (e) => {
   await withButton(e.target, 'Queueing…', null, async () => {
     await api('POST', '/api/sweep-now');
     load();
-    return 'queued — the Watcher sweeps a query per pass from here';
+    return 'queued — Phantom sweeps a query per pass from here';
   });
 });
 
-document.getElementById('watcher-toggle').addEventListener('click', async (e) => {
+document.getElementById('phantom-toggle').addEventListener('click', async (e) => {
   const turningOff = !(DATA.settings && DATA.settings.paused);
   // Only ever asked on the way to stopping. Starting something is not the
   // decision worth interrupting; stopping the thing that is meant to catch a
@@ -3210,7 +3232,7 @@ document.getElementById('watcher-toggle').addEventListener('click', async (e) =>
   await withButton(e.target, turningOff ? 'Stopping…' : 'Starting…', null, async () => {
     await api('POST', '/api/settings', { paused: turningOff });
     load();
-    return turningOff ? 'watcher off' : 'watcher on';
+    return turningOff ? 'Phantom off' : 'Phantom on';
   });
 });
 
@@ -3228,7 +3250,7 @@ document.getElementById('hours-form').addEventListener('submit', async (e) => {
     });
     load();
     return f.paused
-      ? 'paused — the Watcher will look at nothing until you turn this off'
+      ? 'paused — Phantom will look at nothing until you turn this off'
       : f.activeFrom
         ? 'saved — watching ' + f.activeFrom + ' to ' + f.activeUntil
         : 'saved — watching around the clock';

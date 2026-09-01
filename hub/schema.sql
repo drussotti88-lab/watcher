@@ -32,9 +32,9 @@ CREATE TABLE IF NOT EXISTS users (
   id          BIGSERIAL PRIMARY KEY,
   -- A label for a person, not a credential. "danru", "the spare laptop".
   handle      TEXT NOT NULL UNIQUE,
-  -- SHA-256 of the ingest token this user's Watcher presents. Hashed, never
+  -- SHA-256 of the ingest token this user's Phantom presents. Hashed, never
   -- stored plainly: a leaked database must not hand anyone the ability to
-  -- impersonate a Watcher, which is the same standard a password gets.
+  -- impersonate a Phantom, which is the same standard a password gets.
   token_hash  TEXT NOT NULL DEFAULT '',
   enabled     BOOLEAN NOT NULL DEFAULT true,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -55,7 +55,7 @@ CREATE TABLE IF NOT EXISTS sources (
   kind          TEXT NOT NULL,
   url           TEXT NOT NULL DEFAULT '',
   -- 'hub'     : the Hub fetches this itself (tolerant endpoints)
-  -- 'watcher' : unreachable from a datacenter; the Watcher posts it in
+  -- 'watcher' : unreachable from a datacenter; Phantom posts it in
   via           TEXT NOT NULL DEFAULT 'hub',
   -- JSON: { filters: ["pokemon"], childLimit: 5, selector: "..." }
   config        JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -182,7 +182,7 @@ CREATE INDEX IF NOT EXISTS listings_product_idx ON listings (product_key);
 --
 -- ONE mission per listing, enforced. Two armed missions pointing at the same
 -- listing is two purchases of the same item, and the whole point of the
--- duplicate guard in the Watcher is that this must be impossible rather than
+-- duplicate guard in Phantom is that this must be impossible rather than
 -- merely unlikely.
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS missions (
@@ -211,7 +211,7 @@ CREATE INDEX IF NOT EXISTS missions_active_idx ON missions (enabled, armed);
 
 -- "Test run": check this one now, whatever its schedule says.
 --
--- A request, not a command. The Watcher is the only thing with a browser, and
+-- A request, not a command. Phantom is the only thing with a browser, and
 -- it is the only thing that knows whether the retailer will have us — so this
 -- sets a flag the next pass picks up, jumping the mission queue but never the
 -- per-retailer floor. Cleared when a reading for that listing arrives, which is
@@ -287,7 +287,7 @@ CREATE INDEX IF NOT EXISTS mission_runs_recent_idx ON mission_runs (mission_id, 
 CREATE INDEX IF NOT EXISTS mission_runs_feed_idx ON mission_runs (started_at DESC);
 
 -- ---------------------------------------------------------------------------
--- What the Watcher saw
+-- What Phantom saw
 --
 -- Two tables on purpose, because "what is true now" and "what happened" want
 -- different shapes and different write rates. Both key on a LISTING, not on a
@@ -440,7 +440,7 @@ END $do$;
 -- ---------------------------------------------------------------------------
 -- The activity log
 --
--- Everything the Watcher did, one row per check, so a question like "why is
+-- Everything Phantom did, one row per check, so a question like "why is
 -- Target failing" has an answer that is not "look at the terminal window that
 -- scrolled past yesterday". This is the one table that deliberately breaks the
 -- write-only-when-something-changed rule at the top of store.ts, because for
@@ -454,7 +454,7 @@ END $do$;
 --     not erase the record of why it was failing — that is usually the moment
 --     you most want to look. They are plain numbers that may point at nothing.
 --
---   · message and detail arrive already scrubbed. The Watcher takes the
+--   · message and detail arrive already scrubbed. Phantom takes the
 --     secrets out on its own machine before posting (watcher/src/scrub.ts) and
 --     the Hub scrubs again on the way out. Nothing here is trusted to be clean
 --     just because the previous step said so.
@@ -527,7 +527,7 @@ CREATE INDEX IF NOT EXISTS discoveries_review_idx
 --
 -- Same shape as missions.check_now_at, and for the same reason: a request is a
 -- fact with a time on it, not a boolean somebody has to remember to clear. The
--- Watcher clears it by finishing, so a sweep that never ran stays queued rather
+-- Phantom clears it by finishing, so a sweep that never ran stays queued rather
 -- than being silently forgotten.
 ALTER TABLE sources ADD COLUMN IF NOT EXISTS sweep_now_at TIMESTAMPTZ;
 
@@ -552,17 +552,17 @@ ALTER TABLE missions ADD COLUMN IF NOT EXISTS preorder_policy TEXT NOT NULL DEFA
 --
 -- The browser door used to be a single shared password that always answered
 -- as user 1, while every query underneath already filtered by user_id and the
--- Watcher already carried a per-user token. So the storage was multi-user and
+-- Phantom already carried a per-user token. So the storage was multi-user and
 -- the front door was not: a second person handed the link and the password was
 -- not a second account, they were the first one — able to delete his missions,
--- move his ceilings and switch his Watcher off.
+-- move his ceilings and switch his Phantom off.
 --
 -- PBKDF2-HMAC-SHA256, salted per user, iterations recorded in the string so
 -- raising them later does not invalidate the passwords already set. Format:
 --   pbkdf2$sha256$<iterations>$<salt b64url>$<derived key b64url>
 --
 -- Empty means this user has no browser login at all — which is the right
--- default for a row that exists only to own a Watcher token.
+-- default for a row that exists only to own a Phantom token.
 ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT NOT NULL DEFAULT '';
 
 -- Names are typed by humans at a login box, so match them without case.
@@ -591,9 +591,9 @@ UPDATE sources
 -- because nothing had ever swept Walmart the 404 sat there unnoticed for as
 -- long as the source has existed.
 --
--- The Watcher searches Walmart by keyword now, with facet=retailer_type:Walmart
+-- Phantom searches Walmart by keyword now, with facet=retailer_type:Walmart
 -- to get their own stock rather than the resale market, so this URL is what the
--- app shows rather than what the Watcher fetches. It should still be true.
+-- app shows rather than what Phantom fetches. It should still be true.
 UPDATE sources
    SET url = 'https://www.walmart.com/search?q=pokemon+trading+cards&facet=retailer_type%3AWalmart',
        label = 'Walmart — sealed TCG'
@@ -663,14 +663,14 @@ UPDATE discoveries
 
 -- One row per permission to spend money.
 --
--- The Watcher never decides to buy; it asks, and this table is the answer and
+-- Phantom never decides to buy; it asks, and this table is the answer and
 -- the memory of the answer. Three properties carry all the weight:
 --
 --   · at most ONE live authorisation per mission, enforced by the partial
---     unique index below — four checks racing, or a Watcher restarting
+--     unique index below — four checks racing, or a Phantom restarting
 --     mid-buy, find the grant already taken and record duplicate_prevented
 --   · the 24-hour sum of live grants is what the daily cap is checked against,
---     so the cap is authoritative here and survives anything the Watcher does
+--     so the cap is authoritative here and survives anything Phantom does
 --   · a grant that vanished mid-checkout stays 'granted' until a person
 --     releases it. Fail closed: a crash between "add to cart" and "confirm" is
 --     exactly when nobody knows whether money moved, and the wrong response to
@@ -680,7 +680,7 @@ CREATE TABLE IF NOT EXISTS authorisations (
   user_id      BIGINT NOT NULL DEFAULT 1 REFERENCES users(id) ON DELETE CASCADE,
   mission_id   BIGINT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
   -- ceiling × quantity + the shipping allowance: the worst case this grant
-  -- permits, computed by the Hub from its own mission row. The Watcher's
+  -- permits, computed by the Hub from its own mission row. Phantom's
   -- opinion of the amount is not consulted.
   amount       NUMERIC(10, 2) NOT NULL,
   -- granted → spent | released. Nothing else, and no way back.

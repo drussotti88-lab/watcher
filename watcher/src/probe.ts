@@ -117,12 +117,12 @@ export function renderProbe(results: ProbeResult[]): string {
   lines.push('');
   if (ok === results.length) {
     lines.push('  All three reachable from this machine.');
-    lines.push('  The Watcher is the data path — that settles it.');
+    lines.push('  Phantom is the data path — that settles it.');
   } else if (challenged > 0) {
     lines.push(`  ${ok}/${results.length} clean, ${challenged} challenged.`);
     lines.push('');
     lines.push('  Before concluding anything: run  npm run browser  , sign in to the');
-    lines.push('  challenged sites in the Watcher\'s own Chrome, then probe again. A');
+    lines.push('  challenged sites in Phantom\'s own Chrome, then probe again. A');
     lines.push('  signed-in session is treated very differently from a cold one.');
   } else {
     lines.push(`  ${ok}/${results.length} reachable.`);

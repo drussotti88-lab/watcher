@@ -1,7 +1,7 @@
 /**
  * The activity log, written here and posted there.
  *
- * Until now everything the Watcher knew about its own health lived in a
+ * Until now everything Phantom knew about its own health lived in a
  * terminal window and died with it. "It's failing a lot" was a true statement
  * nobody could act on, because by the time anyone looked, the reasons had
  * scrolled away. This is the fix: one line per check, kept.
@@ -52,7 +52,7 @@ export interface ActivitySink {
 
 export interface ActivityOptions {
   sink?: ActivitySink;
-  /** Literal values to remove by value — this Watcher's own token, and so on. */
+  /** Literal values to remove by value — this Phantom's own token, and so on. */
   secrets?: readonly string[];
   /** Where the local files go. Blank disables the local half. */
   dir?: string;

@@ -6,7 +6,7 @@
  *
  *   **Fail open on watching. Fail closed on spending.**
  *
- * If the Hub is unreachable, the Watcher keeps looking at pages and buffers
+ * If the Hub is unreachable, Phantom keeps looking at pages and buffers
  * what it saw — losing an hour of readings because a serverless function was
  * cold is a bad trade. But it will not *buy* anything the Hub has not
  * authorised, because an unreachable Hub is exactly when a duplicate purchase
@@ -463,7 +463,7 @@ export class Hub {
    * Offer what a scan found to the discovery feed.
    *
    * The Hub owns the "is this new" judgement, and it has to: newness is a
-   * question about everything ever seen, and the Watcher is a process that
+   * question about everything ever seen, and Phantom is a process that
    * restarts. All this does is hand over what is on the page right now.
    */
   async ingest(

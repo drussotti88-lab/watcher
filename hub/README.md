@@ -1,6 +1,6 @@
 # Hub
 
-The Watcher's memory. It holds the watchlist, keeps the dedupe ledger, mints
+The Phantom's memory. It holds the watchlist, keeps the dedupe ledger, mints
 product identity, and sends the alerts. It does **not** watch anything itself.
 
 That last part is settled, not a design preference. A Hub in a datacentre gets
@@ -17,7 +17,7 @@ off by default — `notify.ts` posts nothing when no webhook is set.
 ## Why there is no cron
 
 Vercel's Hobby plan runs cron once a day, with up to an hour of slop. That
-would be fatal if the Hub were doing the watching — it isn't. The Watcher runs
+would be fatal if the Hub were doing the watching — it isn't. The Phantom runs
 every minute on your PC and calls `POST /sweep` on whatever rhythm suits.
 
 The one thing cloud cron could add is sweeping while your PC is off, and that
@@ -80,7 +80,7 @@ npx vercel env add INGEST_TOKEN production
 npm run deploy
 ```
 
-`INGEST_TOKEN` is a long random string you invent — it is what the Watcher
+`INGEST_TOKEN` is a long random string you invent — it is what the Phantom
 presents:
 
 ```bash
@@ -111,15 +111,15 @@ request needs `Authorization: Bearer <INGEST_TOKEN>`.
 | `GET` | `/` | password | The page |
 | `GET` | `/health` | — | Is it up, and what does each source look like |
 | `GET` | `/api/dashboard` | either | Everything the page renders, in one request |
-| `POST` | `/observations` | token | The Watcher reports what it saw |
+| `POST` | `/observations` | token | The Phantom reports what it saw |
 | `GET` | `/watchlist` | token | `products` to poll, and `sources` to hunt in |
-| `POST` | `/ingest` | token | The Watcher posts what it saw |
+| `POST` | `/ingest` | token | The Phantom posts what it saw |
 | `POST` | `/sweep` | token | Sweep sources the Hub can fetch itself (`?source=<id>` for one) |
 | `GET` | `/probe` | token | Which sources this deployment can actually reach |
 
 `/probe` is worth running once after deploying. It reports, from Vercel's own
 egress, which sources are fetchable — and every retailer that comes back
-`BLOCKED` belongs to the Watcher. Right now that is all of them, which is why
+`BLOCKED` belongs to the Phantom. Right now that is all of them, which is why
 `seed.sql` puts every source on `via = 'watcher'`.
 
 ## Products, listings, missions
@@ -139,7 +139,7 @@ Three things, and the distinction between them is the design:
 at the same listing is two purchases of the same item.
 
 **A mission cannot arm without a ceiling.** `armed` with no ceiling is an open
-cheque; it is refused where a person sets it, not only where the Watcher reads
+cheque; it is refused where a person sets it, not only where the Phantom reads
 it.
 
 **Seller policy defaults to `retailer_only`.** The point of this is buying at
@@ -165,7 +165,7 @@ the log line you find at 3am and learn nothing from.
 Each run records its duration, so detection-to-order time is measured rather
 than estimated.
 
-## Two tables for what the Watcher sees
+## Two tables for what the Phantom sees
 
 `watch_state` holds one row per **listing** and is **upserted on every check**, so the page can always say how stale a reading is. A dashboard that
 cannot tell you it is out of date is worse than no dashboard.
@@ -177,7 +177,7 @@ history readable, and why "in stock since" means what it says instead of
 resetting every time we look.
 
 The first ever sighting is recorded but not counted as a change. Otherwise
-switching the Watcher on announces everything at once — the same mistake the
+switching the Phantom on announces everything at once — the same mistake the
 discovery seeding logic exists to avoid.
 
 ## Design notes that matter
@@ -258,7 +258,7 @@ api/index.js       The deployed bundle. Generated and committed — do not edit
 src/server.ts      Vercel adapter — the only platform-specific file
 scripts/bundle.ts  Build options, shared by the build and the test that checks it
 src/app.ts         The API and pages, as Request → Response
-src/auth.ts        Bearer token for the Watcher, signed cookie for the browser
+src/auth.ts        Bearer token for the Phantom, signed cookie for the browser
 src/page.ts        The two HTML documents. No framework, no build step
 src/db.ts          The database seam: Sql interface + Postgres adapter
 src/store.ts       Every SQL statement. Nothing above here writes SQL

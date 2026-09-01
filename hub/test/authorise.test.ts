@@ -16,7 +16,7 @@ import { mintSession, COOKIE_NAME } from '../src/auth.ts';
 import type { Env } from '../src/types.ts';
 
 const PASSWORD = 'a-long-enough-password';
-const TOKEN = 'watcher-token';
+const TOKEN = 'Phantom-token';
 const env: Env = {
   DATABASE_URL: 'postgres://unused',
   DISCORD_WEBHOOK_URL: '',
@@ -64,7 +64,7 @@ test('AN ARMED MISSION WITHIN THE CAP IS GRANTED, ONCE', async () => {
   assert.equal(first.committed, 60, 'and the money is committed immediately');
 
   // The same mission asking again — a second check finding the same stock, or
-  // a Watcher that restarted mid-buy. This is the four-boxes bug, prevented.
+  // a Phantom that restarted mid-buy. This is the four-boxes bug, prevented.
   const second = await store.requestAuthorisation(db, 1, missionId);
   assert.equal(second.granted, false);
   assert.equal(second.refusal, 'duplicate_prevented');
@@ -190,7 +190,7 @@ const call = async (
   return { status: res.status, body: text ? JSON.parse(text) : null };
 };
 
-test('the Watcher can ask over the wire and resolve what it was granted', async () => {
+test('Phantom can ask over the wire and resolve what it was granted', async () => {
   const { db, missionId } = await setup({ cap: 200 });
   const granted = await call(db, 'POST', '/api/authorise', {
     token: TOKEN,
@@ -208,7 +208,7 @@ test('the Watcher can ask over the wire and resolve what it was granted', async 
 });
 
 test('a refusal over the wire is a 200 with the reason, not an error', async () => {
-  // The Watcher has to act on refusals — record them as runs — so a refusal is
+  // Phantom has to act on refusals — record them as runs — so a refusal is
   // an answer, not a failure.
   const { db, missionId } = await setup({ cap: null });
   const r = await call(db, 'POST', '/api/authorise', { token: TOKEN, body: { missionId } });

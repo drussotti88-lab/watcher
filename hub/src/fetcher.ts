@@ -58,7 +58,7 @@ export async function fetchText(
       const blocked = res.status === 403 || res.status === 429 || res.status === 503;
       throw new FetchError(
         `${res.status} ${res.statusText || ''}`.trim() +
-          (blocked ? ' — looks like a block; this source needs the Watcher' : ''),
+          (blocked ? ' — looks like a block; this source needs Phantom' : ''),
         res.status,
         blocked,
       );
@@ -121,7 +121,7 @@ export async function probeUrl(url: string, headers: Record<string, string> = {}
             ? 'sitemap'
             : `${bytes}B read`;
     } else if (blocked) {
-      note = 'blocked — this source needs the Watcher';
+      note = 'blocked — this source needs Phantom';
     } else if (!res.ok) {
       note = res.statusText || 'not ok';
     }

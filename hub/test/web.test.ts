@@ -32,7 +32,7 @@ import {
 import type { Env } from '../src/types.ts';
 
 const PASSWORD = 'a-long-enough-password';
-const TOKEN = 'watcher-token';
+const TOKEN = 'Phantom-token';
 
 const env: Env = {
   DATABASE_URL: 'postgres://unused',
@@ -164,7 +164,7 @@ test('NO PASSWORD SET MEANS CLOSED, never open', async () => {
   assert.equal(res.status, 401);
 });
 
-test('no ingest token set means the Watcher cannot get in either', async () => {
+test('no ingest token set means Phantom cannot get in either', async () => {
   const { db } = await setup();
   const closed: Env = { ...env, INGEST_TOKEN: undefined };
   const res = await createHandler(db, closed)(
@@ -229,7 +229,7 @@ test('a watch that has never been checked still appears, marked unchecked', asyn
   assert.ok(res.body.missions.every((w: any) => w.state === 'unchecked'));
 });
 
-test('the Watcher posts a reading and the page shows it', async () => {
+test('Phantom posts a reading and the page shows it', async () => {
   const { db, etb } = await setup();
   const post = await call(db, 'POST', '/observations', {
     token: TOKEN,
@@ -400,7 +400,7 @@ test('NOBODY IS USER ZERO, WHICH OWNS NOTHING', async () => {
   assert.equal(caller.userId, 0);
 });
 
-test('a per-user Watcher token is matched by its hash, not its text', async () => {
+test('a per-user Phantom token is matched by its hash, not its text', async () => {
   const seen: string[] = [];
   const caller = await identify(
     new Request('https://hub.test/', { headers: { Authorization: 'Bearer secret-token' } }),
@@ -419,7 +419,7 @@ test('a per-user Watcher token is matched by its hash, not its text', async () =
 });
 
 test('the shared environment token still answers, as the first user', async () => {
-  // The Watcher already running on a desk must not stop working the moment
+  // Phantom already running on a desk must not stop working the moment
   // ownership ships.
   const caller = await identify(
     new Request('https://hub.test/', { headers: { Authorization: 'Bearer env-token' } }),
@@ -462,7 +462,7 @@ async function hmacFor(secret: string, message: string): Promise<string> {
 
 //
 // The browser door used to hand out userId 1 to anyone who knew the one
-// password, while every query underneath filtered by user_id and every Watcher
+// password, while every query underneath filtered by user_id and every Phantom
 // carried its own token. These are the tests for closing that.
 
 test('a session says who it belongs to, and the signature is what makes that true', async () => {
@@ -477,7 +477,7 @@ test('a session says who it belongs to, and the signature is what makes that tru
 
 test('a cookie minted before accounts existed still signs its owner in', async () => {
   // The old payload was a bare expiry. Deploying accounts must not sign
-  // Roberto out of a dashboard whose Watcher is mid-pass.
+  // Roberto out of a dashboard whose Phantom is mid-pass.
   const expires = Date.now() + 3600_000;
   const legacy = `${expires}.${await hmacFor(PASSWORD, String(expires))}`;
   assert.equal(await readSession(PASSWORD, legacy), 1);
@@ -501,7 +501,7 @@ test('two identical passwords do not produce the same hash', async () => {
 });
 
 test('an empty stored hash means cannot sign in, never signs in with anything', async () => {
-  // A user row that owns a Watcher token but has no browser login stores
+  // A user row that owns a Phantom token but has no browser login stores
   // exactly this, so getting it wrong would open every such account.
   assert.equal(await verifyPassword('', ''), false);
   assert.equal(await verifyPassword('anything at all', ''), false);
@@ -584,7 +584,7 @@ test('a second person signed in sees their own dashboard, not the first personâ€
 
 test('a second person cannot delete the first personâ€™s mission', async () => {
   // Reading someone else's data is the embarrassing failure. Writing to it is
-  // the expensive one: these routes move ceilings and switch Watchers off.
+  // the expensive one: these routes move ceilings and switch Phantoms off.
   const { db, etbMission } = await setup();
   await db.query(`INSERT INTO users (id, handle, password_hash) VALUES (2, 'tester', '')`);
 

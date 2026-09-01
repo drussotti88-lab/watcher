@@ -1,5 +1,5 @@
 /**
- * A copy of the Watcher fit to hand to somebody else.
+ * A copy of Phantom fit to hand to somebody else.
  *
  * Built with `git archive`, which is the whole trick: it can only ever contain
  * *tracked* files. The browser profiles, the activity log and watcher.config.json
@@ -17,7 +17,7 @@ import { execFileSync } from 'node:child_process';
 import { statSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-const OUT = 'watcher-for-tester.zip';
+const OUT = 'Phantom-for-tester.zip';
 
 /** Anything matching these must never reach another person's machine. */
 const FORBIDDEN = [
@@ -31,7 +31,7 @@ const FORBIDDEN = [
 /**
  * git, always from the repository root.
  *
- * The cwd matters more than it looks. `git archive HEAD:watcher` run from
+ * The cwd matters more than it looks. `git archive HEAD:Phantom` run from
  * inside watcher/ resolves the path against the current prefix, finds nothing,
  * and cheerfully writes a 132-byte zip containing one empty directory — no
  * error, no warning, and a "packaged!" message. The check below caught it only
@@ -83,7 +83,7 @@ function main(): void {
   // HEAD, not the working tree. Whatever is half-edited on this desk right now
   // is not what somebody else should be starting from.
   git(
-    ['archive', '--format=zip', '--prefix=watcher/', '-o', resolve(root, OUT), 'HEAD:watcher'],
+    ['archive', '--format=zip', '--prefix=watcher/', '-o', resolve(root, OUT), 'HEAD:Phantom'],
     root,
   );
 
@@ -118,7 +118,7 @@ function main(): void {
   if (listing.length < 10 || !hasSetup) {
     console.error(
       `\n  Only ${listing.length} entries and ${hasSetup ? 'SETUP.md present' : 'no SETUP.md'}.` +
-        `\n  That is not a working copy of the Watcher. Nothing was sent.\n`,
+        `\n  That is not a working copy of Phantom. Nothing was sent.\n`,
     );
     process.exit(1);
   }

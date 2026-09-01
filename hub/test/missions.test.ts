@@ -18,7 +18,7 @@ import * as store from '../src/store.ts';
 import { identifyListing } from '../src/parsers/identify.ts';
 import type { Env } from '../src/types.ts';
 
-const TOKEN = 'watcher-token';
+const TOKEN = 'Phantom-token';
 const env: Env = {
   DATABASE_URL: 'postgres://unused',
   DISCORD_WEBHOOK_URL: '',
@@ -260,7 +260,7 @@ test('a run that never finishes stays visibly running', async () => {
   assert.equal(run!.finishedAt, '');
 });
 
-test('the Watcher can post a finished run over HTTP', async () => {
+test('Phantom can post a finished run over HTTP', async () => {
   const { db, missionId } = await withMission();
   const { status } = await call(db, 'POST', '/api/runs', {
     missionId,
@@ -297,7 +297,7 @@ test('mission run history is per mission, not one global pile', async () => {
 
 // ── Images ───────────────────────────────────────────────────────────────────
 
-test('the first image the Watcher sees is kept, and never overwritten', async () => {
+test('the first image Phantom sees is kept, and never overwritten', async () => {
   const { db, listingId } = await withMission();
   await store.recordObservation(db, USER, {
     listingId,
@@ -322,7 +322,7 @@ test('a reading with no image leaves the product alone', async () => {
   assert.equal((await store.listProducts(db, USER))[0]!.imageUrl, 'https://x/a.jpg');
 });
 
-test('the seller the Watcher saw is remembered on the listing', async () => {
+test('the seller Phantom saw is remembered on the listing', async () => {
   // So a mission's seller policy has something to read before the next check.
   const { db, listingId } = await withMission();
   await store.recordObservation(db, USER, {
@@ -349,7 +349,7 @@ test('the dashboard hands the page everything it renders, in one request', async
   assert.equal(body.missions[0].state, 'unchecked', 'never polled, and says so');
 });
 
-test('active missions are what the Watcher polls, and carry the mandate', async () => {
+test('active missions are what Phantom polls, and carry the mandate', async () => {
   const { db, listingId } = await withMission();
   await store.setSettings(db, USER, { spendCapDay: 500 });
   await call(db, 'POST', '/api/missions', { listingId, armed: true, ceiling: 49.99, quantity: 2 });
@@ -736,7 +736,7 @@ test('MY FINDS ARE NOT YOUR FINDS', async () => {
 
 // ── When a sweep is due ──────────────────────────────────────────────────────
 //
-// Deliberately the Hub's decision. The Watcher restarts — sometimes twice a
+// Deliberately the Hub's decision. Phantom restarts — sometimes twice a
 // minute while something is being fixed — and a restart must not mean another
 // sweep of the whole catalogue.
 
@@ -798,14 +798,14 @@ test('the button works even when sweeping is switched off entirely', async () =>
 
 test('A REQUEST IS CLEARED BY FINISHING, NEVER BY ASKING', async () => {
   // A sweep that was requested and never ran must stay queued. Clearing on
-  // read would drop it silently the first time the Watcher was asleep.
+  // read would drop it silently the first time Phantom was asleep.
   const db = await withSource();
   await store.requestSweep(db, USER, 'target-tcg');
 
   assert.equal(await store.sweepDue(db, USER, 'target-tcg', 24), true);
   assert.equal(await store.sweepDue(db, USER, 'target-tcg', 24), true, 'still queued after a read');
 
-  await store.finishSweep(db, USER, 'target-tcg', 'watcher: 3 new', 20, true);
+  await store.finishSweep(db, USER, 'target-tcg', 'Phantom: 3 new', 20, true);
   assert.equal((await store.sweepState(db, USER, 'target-tcg', 24)).queued, false);
 });
 
@@ -935,19 +935,19 @@ test('A MID-SWEEP REPORT DOES NOT MARK THE SWEEP DONE', async () => {
   const db = await withTargetSource();
   await store.requestSweep(db, USER, 'target-tcg');
 
-  await store.finishSweep(db, USER, 'target-tcg', 'watcher: 1 new', 24, true, 0, false);
+  await store.finishSweep(db, USER, 'target-tcg', 'Phantom: 1 new', 24, true, 0, false);
 
   const state = await store.sweepState(db, USER, 'target-tcg', 24);
   assert.equal(state.queued, true, 'the request must survive until the sweep really ends');
   assert.equal(state.lastSweptAt, null, 'and nothing has been swept yet');
-  assert.equal(state.lastStatus, 'watcher: 1 new', 'but progress is still reported');
+  assert.equal(state.lastStatus, 'Phantom: 1 new', 'but progress is still reported');
 });
 
 test('the last query does finish it', async () => {
   const db = await withTargetSource();
   await store.requestSweep(db, USER, 'target-tcg');
-  await store.finishSweep(db, USER, 'target-tcg', 'watcher: 1 new', 24, true, 0, false);
-  await store.finishSweep(db, USER, 'target-tcg', 'watcher: 3 new', 24, true, 0, true);
+  await store.finishSweep(db, USER, 'target-tcg', 'Phantom: 1 new', 24, true, 0, false);
+  await store.finishSweep(db, USER, 'target-tcg', 'Phantom: 3 new', 24, true, 0, true);
 
   const state = await store.sweepState(db, USER, 'target-tcg', 24);
   assert.equal(state.queued, false);
@@ -965,7 +965,7 @@ test('a caller that says nothing is treated as finishing, so the CLI still works
 
 test('A KEPT FIND BRINGS ITS PICTURE TO THE PRODUCT', async () => {
   // Otherwise every product created from a sweep starts blank and stays blank
-  // until the Watcher happens to read its page.
+  // until Phantom happens to read its page.
   const db = await withTargetSource();
   await store.recordDiscoveries(db, USER, 'target-tcg', [
     sighting({ imageUrl: 'https://target.scene7.com/is/image/Target/GUEST_abc?wid=300' }),

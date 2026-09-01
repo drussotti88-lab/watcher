@@ -1,12 +1,12 @@
 /**
  * The seam between the two halves.
  *
- * The Watcher and the Hub are separate programs in separate folders that only
+ * Phantom and the Hub are separate programs in separate folders that only
  * ever meet over three endpoints. Nothing else in either test suite would
- * notice if one side renamed a field — the Watcher would go on politely
+ * notice if one side renamed a field — Phantom would go on politely
  * reading `undefined` and reporting that everything is out of stock, forever.
  *
- * So these tests are written from the Watcher's side of the wire: they name the
+ * So these tests are written from Phantom's side of the wire: they name the
  * exact fields watcher/src/hub.ts destructures, and they go through the real
  * HTTP handler rather than the store, because the wire is what matters.
  */
@@ -20,7 +20,7 @@ import { TestDb } from './pg.ts';
 import { createHandler } from '../src/app.ts';
 import type { Env } from '../src/types.ts';
 
-const TOKEN = 'watcher-token';
+const TOKEN = 'Phantom-token';
 const env: Env = {
   DATABASE_URL: 'postgres://unused',
   DISCORD_WEBHOOK_URL: '',
@@ -103,19 +103,19 @@ const MISSION_FIELDS = [
   'checkNow',
 ] as const;
 
-test('/api/missions/active gives the Watcher every field it reads', async () => {
+test('/api/missions/active gives Phantom every field it reads', async () => {
   const { db } = await withMission();
   const { status, body } = await call(db, 'GET', '/api/missions/active');
 
   assert.equal(status, 200);
-  assert.ok(Array.isArray(body.missions), 'the Watcher does `data.missions ?? []`');
+  assert.ok(Array.isArray(body.missions), 'Phantom does `data.missions ?? []`');
   const [m] = body.missions;
   for (const field of MISSION_FIELDS) {
-    assert.ok(field in m, `the Watcher reads mission.${field} and the Hub did not send it`);
+    assert.ok(field in m, `Phantom reads mission.${field} and the Hub did not send it`);
   }
 });
 
-test('the mission the Watcher receives can actually be acted on', async () => {
+test('the mission Phantom receives can actually be acted on', async () => {
   // Not just present — usable. `url` is what Playwright navigates to and
   // `externalId` is what the per-retailer readers match on; a blank either way
   // is a mission that can never succeed.
@@ -130,7 +130,7 @@ test('the mission the Watcher receives can actually be acted on', async () => {
   assert.ok(m.checkEverySeconds >= 30);
 });
 
-test('a never-checked mission sends lastCheckedAt as empty, which the Watcher reads as due', async () => {
+test('a never-checked mission sends lastCheckedAt as empty, which Phantom reads as due', async () => {
   // watcher/src/rate.ts: `isDue(m.lastCheckedAt || null, …)` returns true for
   // null. If this ever became the string "null" or an epoch date, a brand new
   // mission would sit there looking already-checked.
@@ -139,14 +139,14 @@ test('a never-checked mission sends lastCheckedAt as empty, which the Watcher re
   assert.equal(body.missions[0].lastCheckedAt, '');
 });
 
-test('a paused mission is not handed to the Watcher at all', async () => {
+test('a paused mission is not handed to Phantom at all', async () => {
   const { db, listingId } = await withMission();
   await call(db, 'POST', '/api/missions', { listingId, enabled: false });
   const { body } = await call(db, 'GET', '/api/missions/active');
   assert.deepEqual(body.missions, []);
 });
 
-test('the Watcher can post exactly the observation shape it builds', async () => {
+test('Phantom can post exactly the observation shape it builds', async () => {
   // Copied field-for-field from watcher/src/watch.ts's judge(), including the
   // ones that are usually null.
   const { db, listingId } = await withMission();
@@ -191,7 +191,7 @@ test('a pre-order release date survives the round trip', async () => {
   assert.equal(body.missions[0].releaseDate, '2026-09-26');
 });
 
-test('the Watcher can post exactly the run shape it builds', async () => {
+test('Phantom can post exactly the run shape it builds', async () => {
   const { db, missionId } = await withMission();
   const { status, body } = await call(db, 'POST', '/api/runs', {
     missionId,
@@ -206,7 +206,7 @@ test('the Watcher can post exactly the run shape it builds', async () => {
   });
 
   assert.equal(status, 200);
-  assert.ok(body.run, 'the Watcher checks nothing, but a silent no-op would be worse');
+  assert.ok(body.run, 'Phantom checks nothing, but a silent no-op would be worse');
 
   const runs = await call(db, 'GET', `/api/missions/${missionId}/runs`);
   const [run] = runs.body.runs;
@@ -215,7 +215,7 @@ test('the Watcher can post exactly the run shape it builds', async () => {
   assert.equal(run.total, 49.99);
 });
 
-test('every outcome the Watcher can produce is one the Hub accepts', async () => {
+test('every outcome Phantom can produce is one the Hub accepts', async () => {
   // watcher/src/hub.ts's RunOutcome union, in full. A value the Hub rejects
   // would be buffered and retried forever, silently, by design.
   const { db, missionId } = await withMission();
@@ -229,8 +229,8 @@ test('every outcome the Watcher can produce is one the Hub accepts', async () =>
   }
 });
 
-test('the Watcher without its token gets nothing', async () => {
-  // The mirror of the above: these endpoints are the Watcher's, and a wrong
+test('Phantom without its token gets nothing', async () => {
+  // The mirror of the above: these endpoints are Phantom's, and a wrong
   // INGEST_TOKEN must fail loudly rather than look like an empty watchlist.
   const { db, listingId } = await withMission();
 
@@ -259,7 +259,7 @@ test('a test run is queued, not performed — and says so', async () => {
   assert.match(body.note, /next pass/);
 
   const active = await call(db, 'GET', '/api/missions/active');
-  assert.equal(active.body.missions[0].checkNow, true, 'and the Watcher is told');
+  assert.equal(active.body.missions[0].checkNow, true, 'and Phantom is told');
 });
 
 test('a test run on a mission that does not exist is a 404, not a silent no-op', async () => {
@@ -293,8 +293,8 @@ test('an ordinary mission is not flagged for a test run', async () => {
 
 // ── Settings: the half of the mandate that is not on the mission ─────────────
 
-test('the Watcher is sent the settings its ceiling rule depends on', async () => {
-  // A ceiling means item + tax. Without a rate the Watcher cannot judge a
+test('Phantom is sent the settings its ceiling rule depends on', async () => {
+  // A ceiling means item + tax. Without a rate Phantom cannot judge a
   // listed price against it, so this travels with the watchlist.
   const { db } = await withMission();
   const { body } = await call(db, 'GET', '/api/missions/active');
@@ -361,11 +361,11 @@ test('one setting can be changed without clearing the other', async () => {
 // ── The fourth endpoint: the activity log ────────────────────────────────────
 
 /**
- * Driven by the *real* Watcher classes, not by a hand-written request.
+ * Driven by the *real* Phantom classes, not by a hand-written request.
  *
  * Everything above names the fields watcher/src/hub.ts destructures, which
  * catches a rename on the Hub's side. This catches the other direction: it
- * imports the Watcher's own Activity and Hub, points their fetch at this
+ * imports Phantom's own Activity and Hub, points their fetch at this
  * handler, and asserts the line survives the whole round trip. If either side
  * changes the shape, this stops compiling or stops passing.
  */
@@ -373,7 +373,7 @@ const watcherSrc = resolve(import.meta.dirname, '..', '..', 'watcher', 'src');
 const haveWatcher = existsSync(join(watcherSrc, 'activity.ts'));
 
 test('THE WATCHER OWN CODE CAN POST A LOG LINE THIS HUB ACCEPTS', async (t) => {
-  if (!haveWatcher) return t.skip('the Watcher is not checked out beside the Hub');
+  if (!haveWatcher) return t.skip('Phantom is not checked out beside the Hub');
 
   const { Activity } = await import(join(watcherSrc, 'activity.ts'));
   const { Hub } = await import(join(watcherSrc, 'hub.ts'));
@@ -401,7 +401,7 @@ test('THE WATCHER OWN CODE CAN POST A LOG LINE THIS HUB ACCEPTS', async (t) => {
   });
 
   const { sent } = await log.flush(true);
-  assert.equal(sent, 1, 'the Hub rejected what the Watcher actually sends');
+  assert.equal(sent, 1, 'the Hub rejected what Phantom actually sends');
 
   const exported = await call(db, 'GET', '/api/activity/export');
   assert.equal(exported.status, 200);
@@ -418,7 +418,7 @@ test('THE WATCHER OWN CODE CAN POST A LOG LINE THIS HUB ACCEPTS', async (t) => {
 
 test('THE PRE-ORDER POLICY REACHES THE WATCHER, OR IT CANNOT ENFORCE IT', async () => {
   // judge() declines a pre-order on this field. If the Hub stopped sending it
-  // the Watcher would read undefined, which is not 'allow' — so it would fail
+  // Phantom would read undefined, which is not 'allow' — so it would fail
   // safe — but it would also silently ignore a mission set to allow them.
   const { db, listingId } = await withMission();
   await call(db, 'POST', '/api/missions', { listingId, preOrderPolicy: 'allow' });

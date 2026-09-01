@@ -1,4 +1,4 @@
-/** Shared shapes for the Watcher. */
+/** Shared shapes for Phantom. */
 
 export type Retailer = 'pokemoncenter' | 'target' | 'walmart';
 

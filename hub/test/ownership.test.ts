@@ -117,7 +117,7 @@ test('missions: I cannot see, delete or trigger theirs', async () => {
 
 test('OBSERVATIONS: MY WATCHER CANNOT REWRITE THEIR STOCK AND PRICE', async () => {
   // A reading names a listing by id and arrives over the wire. If it could land
-  // on someone else's listing, one person's Watcher could tell another
+  // on someone else's listing, one person's Phantom could tell another
   // person's armed mission that a $500 item is in stock at $5.
   const { db, theirListing } = await twoUsers();
 
@@ -184,7 +184,7 @@ test('sources and discoveries: the hunt is per owner', async () => {
   assert.equal((await store.knownIds(db, B, 'mine')).size, 0);
 });
 
-test('the watchlist the Watcher pulls is only its own', async () => {
+test('the watchlist Phantom pulls is only its own', async () => {
   const { db } = await twoUsers();
   assert.equal((await store.watchlist(db, A)).length, 1);
   assert.equal((await store.watchlist(db, B)).length, 1);

@@ -2,7 +2,7 @@
  * When to hurry, and which shops to look at.
  *
  * Two settings that change the shape of a pass, kept together because they
- * answer the same question — what is this Watcher allowed to spend its next
+ * answer the same question — what is this Phantom allowed to spend its next
  * request on — and kept pure so both are testable without a clock or a browser.
  *
  * ── Why a drop window exists ─────────────────────────────────────────────────
@@ -15,10 +15,39 @@
  *
  * So the burst is an *exception with an end*, not a new default. It opens
  * either because a person said so (with an expiry, because the failure mode of
- * a switch is leaving it on) or because something on the watchlist is released
- * today — the one day the shop is guaranteed to be interesting.
+ * a switch is leaving it on) or because a shop is showing STAGED STOCK.
+ *
+ * ── Why staged stock, and not a release date ─────────────────────────────────
+ *
+ * This used to open on "something on the watchlist releases today", and that
+ * was the wrong signal wearing the right clothes. A release date is the
+ * publisher's street date — the day a product first exists anywhere — and it
+ * says nothing about whether THIS retailer has any, or when they will put it
+ * up. Keying a burst to it bought a whole day of tightened pacing for an event
+ * that might never come, and stayed silent for the thing we actually care
+ * about: the 2am restock of a product released last March.
+ *
+ * Staged stock is the retailer's own inventory system saying the units are in
+ * the building and not yet sellable. Measured 1 Sep 2026: ~30,000 units
+ * readable against an unbuyable listing the evening before a 3am drop. That is
+ * a drop being loaded, it is specific to this shop, and it ends by itself when
+ * the stock sells — so the window opens on evidence and closes without anyone
+ * remembering to close it.
  */
 import type { Mission, Settings } from './hub.ts';
+import { STOCK_LOADED_MIN } from './watch.ts';
+
+/**
+ * Stock counted against a listing that cannot be sold yet.
+ *
+ * The same threshold the STOCK LOADED alarm uses, deliberately: the banner
+ * that says a drop is near and the pacing that acts on it must never disagree
+ * about what "near" means. Shelf quantities (8–20, display-capped) are below
+ * it and cannot open a window.
+ */
+function staged(m: Mission): boolean {
+  return (m.availableQuantity ?? 0) >= STOCK_LOADED_MIN && m.state !== 'in';
+}
 
 /** Today as YYYY-MM-DD in a named zone, or this machine's own when blank. */
 export function todayIn(timezone: string, now: number): string {
@@ -49,7 +78,7 @@ export interface DropWindow {
 /**
  * Is a drop window open right now?
  *
- * A manual window wins on its own; a release date opens one for the day. Both
+ * A manual window wins on its own; staged stock opens one on evidence. Both
  * require `burstSpacingSeconds` to be set at all — with no burst configured
  * there is nothing to open, and claiming a window while pacing normally would
  * put a lie in the log.
@@ -71,12 +100,23 @@ export function dropWindow(
     }
   }
 
-  const today = todayIn(String(settings.timezone ?? ''), now);
-  const dropping = missions.filter((m) => m.enabled && m.releaseDate === today);
-  if (dropping.length) {
-    const names = dropping.slice(0, 2).map((m) => m.productName).join(', ');
-    const more = dropping.length > 2 ? ` +${dropping.length - 2} more` : '';
-    return { open: true, reason: `released today: ${names}${more}` };
+  const naming = (ms: readonly Mission[]): string => {
+    const names = ms.slice(0, 2).map((m) => m.productName).join(', ');
+    return names + (ms.length > 2 ? ` +${ms.length - 2} more` : '');
+  };
+
+  const loaded = missions.filter((m) => m.enabled && staged(m));
+  if (loaded.length) {
+    return { open: true, reason: `stock staged: ${naming(loaded)}` };
+  }
+
+  // A drop that has actually opened, on a mission that means to buy. Narrow on
+  // purpose: without it the window would shut at the exact moment the staged
+  // stock became sellable, which is the moment speed is worth most. It is
+  // self-limiting — a completed buy disarms its mission.
+  const live = missions.filter((m) => m.enabled && m.armed && m.state === 'in');
+  if (live.length) {
+    return { open: true, reason: `live and armed: ${naming(live)}` };
   }
   return shut;
 }

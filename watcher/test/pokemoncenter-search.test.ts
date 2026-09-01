@@ -155,7 +155,7 @@ test('a product code with awkward characters still makes a usable URL', () => {
 });
 
 test('a page that is not a category does not throw, it returns nothing', () => {
-  // The Watcher must survive a redirect to a marketing page or a challenge.
+  // Phantom must survive a redirect to a marketing page or a challenge.
   assert.deepEqual(readPokemonCenterCategory(null), []);
   assert.deepEqual(readPokemonCenterCategory({}), []);
   assert.deepEqual(readPokemonCenterCategory({ props: { initialState: {} } }), []);

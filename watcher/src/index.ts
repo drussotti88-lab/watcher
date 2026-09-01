@@ -1,5 +1,5 @@
 /**
- * Watcher CLI.
+ * Phantom CLI.
  *
  * `watch` is the real one. The others exist to answer questions that would
  * otherwise be guesses: can this machine see these sites at all, and what does
@@ -64,7 +64,7 @@ const DEFAULT_QUERIES = [
 ];
 
 /**
- * How to stop the Watcher without killing it.
+ * How to stop Phantom without killing it.
  *
  * Ctrl+C works when you are sitting at the window. Nothing did when you were
  * not — and on Windows there is no polite way to send an interrupt to another
@@ -170,7 +170,7 @@ type Command = (typeof COMMANDS)[number];
 
 function help(): void {
   console.log(`
-  Watcher — watches retailers from your own machine, on your own connection.
+  Phantom — watches retailers from your own machine, on your own connection.
 
   npm run setup      Start here on a new machine. Asks for the Hub address and
                      your token, proves they work, and writes the config file.
@@ -180,7 +180,7 @@ function help(): void {
 
   npm run once       One pass, then exit. Use this first.
 
-  npm run stop       Ask a running Watcher to stop cleanly, from anywhere.
+  npm run stop       Ask a running Phantom to stop cleanly, from anywhere.
                      It closes Chrome and flushes its log first; killing it
                      does neither.
 
@@ -223,7 +223,7 @@ async function runPasses(once: boolean): Promise<void> {
     console.error(`
   No Hub configured.
 
-  The Watcher gets its missions from the Hub and reports back to it; without
+  Phantom gets its missions from the Hub and reports back to it; without
   one there is nothing to watch and nowhere to put what it sees.
 
   Set hub.url and hub.token in ${CONFIG_PATH}.
@@ -275,7 +275,7 @@ async function runPasses(once: boolean): Promise<void> {
   // Chrome upgrade or a Node version is answerable without asking.
   activity.record({
     kind: 'startup',
-    message: `watcher started, checking every ${config.intervalSec}s`,
+    message: `Phantom started, checking every ${config.intervalSec}s`,
     detail:
       `node ${process.version} · ${process.platform}/${process.arch} · ` +
       `chrome channel ${config.browser.channel}${config.browser.headed ? ' (headed)' : ''} · ` +
@@ -678,7 +678,7 @@ async function runPasses(once: boolean): Promise<void> {
       // ── Should we be looking at all? ──────────────────────────────────
       //
       // The Hub call above is cheap and stays: it is how a settings change or a
-      // "check now" reaches a sleeping Watcher. What quiet hours switch off is
+      // "check now" reaches a sleeping Phantom. What quiet hours switch off is
       // the expensive half — opening real pages at a retailer that is not going
       // to change them.
       const sleep_ = isAwake(hub.settings);
@@ -840,7 +840,7 @@ async function main(): Promise<void> {
       mkdirSync('logs', { recursive: true });
       writeFileSync(STOP_FILE, new Date().toISOString());
       console.log(`
-  Asked the Watcher to stop. It finishes the pass it is on, closes Chrome and
+  Asked Phantom to stop. It finishes the pass it is on, closes Chrome and
   sends anything still queued — usually within a pass. Kill it instead and you
   lose the queued lines and Chrome comes back saying it did not shut down
   correctly.

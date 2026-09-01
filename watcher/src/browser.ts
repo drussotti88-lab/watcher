@@ -1,5 +1,5 @@
 /**
- * The browser. One place, so nothing else in the Watcher knows about Playwright.
+ * The browser. One place, so nothing else in Phantom knows about Playwright.
  *
  * The point of this whole component is that it is a *real* browser on a *real*
  * residential connection. It isn't imitating a legitimate visitor — it is one.
@@ -130,7 +130,7 @@ export class Browser {
       if (/profile.*in use|cannot create.*singleton|failed to create/i.test(msg)) {
         throw new Error(
           `That Chrome profile is already open in another process.\n` +
-            `  The Watcher keeps its own profile at ${dir} — if you have a window\n` +
+            `  Phantom keeps its own profile at ${dir} — if you have a window\n` +
             `  open from "npm run browser", close it and try again.`,
         );
       }
@@ -144,7 +144,7 @@ export class Browser {
     // Chrome goes away for reasons that have nothing to do with us: the
     // machine sleeps, someone closes the window, the profile gets cleaned up.
     // Without this the cached context stays cached, every later check dies on
-    // "Target page, context or browser has been closed", and the Watcher goes
+    // "Target page, context or browser has been closed", and Phantom goes
     // on reporting "1 checked" every ninety seconds for hours — busy, honest
     // about each failure, and producing nothing. Observed doing exactly that.
     this.context.on('close', () => {

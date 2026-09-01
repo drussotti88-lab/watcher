@@ -82,7 +82,7 @@ test('the columns it does have are the shopping list, and they are all still her
 });
 
 test('THE WIRE HAS NOWHERE TO PUT ONE EITHER', async () => {
-  // Everything a Watcher can send is declared in these two interfaces. Nothing
+  // Everything a Phantom can send is declared in these two interfaces. Nothing
   // reaches the Hub that is not on that list, so the list is the audit.
   const store = await read('src/store.ts');
   const start = store.indexOf('export interface ObservationIn');

@@ -1,7 +1,7 @@
 /**
  * Surviving a browser that goes away.
  *
- * Written after the Watcher spent five hours reporting "1 checked" every
+ * Written after Phantom spent five hours reporting "1 checked" every
  * ninety seconds while every single check failed with
  *
  *   browserContext.newPage: Target page, context or browser has been closed

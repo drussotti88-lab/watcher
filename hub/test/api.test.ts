@@ -32,7 +32,7 @@ async function setup(): Promise<TestDb> {
   const db = await TestDb.create();
   await db.query(
     `INSERT INTO sources (id, label, retailer, kind, url, via, config, enabled, seeded)
-     VALUES ('pc', 'PC via watcher', 'Pokemon Center', 'watcher', '', 'watcher',
+     VALUES ('pc', 'PC via Phantom', 'Pokemon Center', 'watcher', '', 'watcher',
              '{"filters":["pokemon"]}'::jsonb, true, true)`,
   );
   return db;
@@ -171,7 +171,7 @@ test('an item with no external id is dropped, not stored with an empty key', asy
   assert.equal(body.received, 0, 'an id-less row would collide with the next id-less row');
 });
 
-test('the watchlist gives the Watcher listings, not just places to look', async () => {
+test('the watchlist gives Phantom listings, not just places to look', async () => {
   const db = await setup();
   await call(db, 'POST', '/ingest', {
     token: TOKEN,
@@ -207,7 +207,7 @@ test('the watchlist gives the Watcher listings, not just places to look', async 
   assert.equal(body.products.length, 1);
   assert.equal(body.products[0].retailer, 'Pokemon Center');
   assert.equal(body.products[0].externalId, '100-10326');
-  assert.ok(body.products[0].listingId > 0, 'the Watcher reports against a listing id');
+  assert.ok(body.products[0].listingId > 0, 'Phantom reports against a listing id');
   assert.match(body.products[0].url, /pokemoncenter\.com/, 'a watch with no URL cannot be polled');
 });
 
@@ -248,7 +248,7 @@ test('a zero price is read as absent, never as free', async () => {
 
 test('INGEST SAYS WHAT WAS NEW, BY NAME', async () => {
   // The caller cannot work this out for itself: "new" is a question about
-  // everything ever seen, and the Watcher is a process that restarts. Without
+  // everything ever seen, and Phantom is a process that restarts. Without
   // the names, a discovery run can report a count and nothing you can act on.
   const db = await setup();
   // A source that has never been swept. `pc` in setup() is already seeded, so
@@ -293,7 +293,7 @@ test('a run where nothing appeared names nothing, and says so with an empty list
 });
 
 test('INGEST CAN SAY IT IS NOT THE END OF THE SWEEP', async () => {
-  // The Watcher reports one query at a time. Only the last one may finish the
+  // Phantom reports one query at a time. Only the last one may finish the
   // sweep, or a restart part-way through loses the remaining queries and
   // nothing is due again until tomorrow.
   const db = await setup();

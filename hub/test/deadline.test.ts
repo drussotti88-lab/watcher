@@ -3,7 +3,7 @@
  *
  * These tests exist because of a real 504: a wedged pooled connection meant
  * the function ran past its limit, Vercel wrote the error instead of the Hub,
- * and the Watcher received plain text where it expected JSON.
+ * and Phantom received plain text where it expected JSON.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

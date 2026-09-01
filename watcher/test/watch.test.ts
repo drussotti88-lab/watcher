@@ -1,5 +1,5 @@
 /**
- * What the Watcher decides, and what it writes down.
+ * What Phantom decides, and what it writes down.
  *
  * judge() is where money gets spent or refused, so most of these tests are
  * named after the mistake they prevent rather than the function they call.
@@ -433,7 +433,7 @@ test('a read that throws does not take the pass down with it', async () => {
 });
 
 test('a pass that checks nothing says when the next one is due', async () => {
-  // "0 checked" and no reason is the same quiet a broken Watcher produces.
+  // "0 checked" and no reason is the same quiet a broken Phantom produces.
   const { hub } = recorder();
   const pacer = new Pacer(STEADY, () => 0);
   const recent = mission({ checkEverySeconds: 60, lastCheckedAt: new Date(T0 - 42_000).toISOString() });
@@ -590,7 +590,7 @@ test('THE PASS INVOKES THE BUYER ON A BUY VERDICT, AND RECORDS ITS RUN', async (
   assert.equal(runs[0]?.outcome, 'dry_run');
 });
 
-test('a Watcher with no buyer still records the honest decline', async () => {
+test('a Phantom with no buyer still records the honest decline', async () => {
   const { hub, runs } = recorder();
   await pass(
     [mission({ armed: true, ceiling: 60 })],
@@ -598,7 +598,7 @@ test('a Watcher with no buyer still records the honest decline', async () => {
     { browser, hub, read: reads(() => reading({ state: 'in', price: 49.99 })) },
   );
   assert.equal(runs[0]?.outcome, 'declined');
-  assert.match(runs[0]!.reason, /buying is not enabled on this Watcher/);
+  assert.match(runs[0]!.reason, /buying is not enabled on this Phantom/);
 });
 
 test('a buyer that throws becomes a failed run, not a dead pass', async () => {

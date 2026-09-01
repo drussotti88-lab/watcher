@@ -19,10 +19,10 @@
  * Usage:
  *   node --experimental-strip-types scripts/sitting.ts out          — signed-out
  *       phase in a throwaway profile (never the watch profile, which the
- *       running Watcher owns). Picks a cheap in-stock sold-by-Target item
+ *       running Phantom owns). Picks a cheap in-stock sold-by-Target item
  *       itself, or takes a product URL as the next argument.
  *   node --experimental-strip-types scripts/sitting.ts buy <url>    — signed-in
- *       phase in the buy profile. Only run when the Watcher is paused, and
+ *       phase in the buy profile. Only run when Phantom is paused, and
  *       only after the signed-out screenshots were approved.
  *
  * Output: screenshots in logs/sitting/, one JSON report on stdout.
@@ -120,7 +120,7 @@ async function pickItem(browser: Browser): Promise<{ url: string; name: string; 
 }
 
 async function outPhase(productUrl: string | undefined): Promise<void> {
-  // A throwaway profile: the watch profile belongs to the running Watcher and
+  // A throwaway profile: the watch profile belongs to the running Phantom and
   // this must not fight it for the lock, and the buy profile has no business
   // in a signed-out rehearsal.
   const config = loadConfig();

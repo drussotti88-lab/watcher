@@ -34,7 +34,7 @@ import { unknownRead } from './readers/types.ts';
  *
  * Target loads a scheduled drop's inventory into the shipping ATP field hours
  * before the page turns buyable (proven 1 Sep 2026: "30k+" was readable the
- * evening before a 3am drop — in the window this Watcher happened to be off).
+ * evening before a 3am drop — in the window this Phantom happened to be off).
  * The field is already read on every check, so the alarm costs no traffic at
  * all — it is a comparison, not a probe.
  *
@@ -282,13 +282,13 @@ export interface WatchDeps {
   read?: ReadFn;
   /**
    * Where the per-check log goes. Optional so every existing test still
-   * constructs a pass without one, and so a Watcher with no Hub still runs.
+   * constructs a pass without one, and so a Phantom with no Hub still runs.
    */
   activity?: Activity;
   /**
    * What to do when judge() says everything a purchase needs is true.
    *
-   * Absent means this Watcher cannot buy — the honest run is recorded instead.
+   * Absent means this Phantom cannot buy — the honest run is recorded instead.
    * Injectable so the pass can be tested without a Hub, a cart or a card.
    */
   buyer?: (mission: Mission, reading: Reading) => Promise<RunOut>;
@@ -304,7 +304,7 @@ export interface PassResult {
    * Milliseconds until the soonest mission is due, when nothing was checked.
    *
    * A pass that prints "0 checked" and no reason is the same quiet that a
-   * broken Watcher produces. Null when something was checked, or when the
+   * broken Phantom produces. Null when something was checked, or when the
    * wait is a retailer holding us back rather than the schedule.
    */
   nextDueInMs: number | null;
@@ -385,7 +385,7 @@ export async function pass(missions: Mission[], pacer: Pacer, deps: WatchDeps): 
           outcome: 'declined',
           reason:
             `would buy ${verdict.buy.quantity} at ${money(reading.price)} — ` +
-            'buying is not enabled on this Watcher',
+            'buying is not enabled on this Phantom',
         };
       }
     }

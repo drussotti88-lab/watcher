@@ -1,5 +1,5 @@
 /**
- * When the Watcher is allowed to look.
+ * When Phantom is allowed to look.
  *
  * The two things worth getting right: a window that crosses midnight — which
  * is the shape of every window anyone would actually set here — and the fact
@@ -101,7 +101,7 @@ test('midnight reads as 00:00, not 24:00', () => {
 // ── The overrides ────────────────────────────────────────────────────────────
 
 test('A CHECK ASKED FOR BY HAND IS NEVER SWALLOWED BY QUIET HOURS', () => {
-  // The button would otherwise be a liar: it says the Watcher will look, and
+  // The button would otherwise be a liar: it says Phantom will look, and
   // at two in the afternoon it silently would not.
   assert.equal(overrides([{ checkNow: true }], '2026-09-16'), 'a check was asked for by hand');
 });
@@ -110,7 +110,7 @@ test('a release day wakes it up', () => {
   // The one moment we know the page will change is the date Target published.
   assert.equal(
     overrides([{ releaseDate: '2026-09-16' }], '2026-09-16'),
-    'something drops today',
+    'something releases today',
   );
 });
 
@@ -123,6 +123,6 @@ test('a release date that is not today is not a reason to wake', () => {
 test('a full timestamp in the release date still matches the day', () => {
   assert.equal(
     overrides([{ releaseDate: '2026-09-16T00:00:00.000Z' }], '2026-09-16'),
-    'something drops today',
+    'something releases today',
   );
 });

@@ -47,7 +47,7 @@ test('NO BURST CONFIGURED MEANS NO WINDOW — a claim of hurry with no hurry is 
   // log that never happened.
   const w = dropWindow(
     settings({ dropModeUntil: new Date(T0 + 3600_000).toISOString() }),
-    [mission({ releaseDate: '2026-09-16' })],
+    [mission({ availableQuantity: 31000 })],
     T0,
   );
   assert.equal(w.open, false);
@@ -68,45 +68,77 @@ test('a manual window is open until it expires, and not one minute after', () =>
   assert.equal(burstMsFor(s, [], T0 + 20 * 60_000 + 1000), null);
 });
 
-test('RELEASE DAY OPENS ITS OWN WINDOW — the one day the shop is certainly interesting', () => {
-  const s = settings({ burstSpacingSeconds: 10, timezone: 'UTC' });
-  const w = dropWindow(s, [mission({ releaseDate: '2026-09-16' })], T0);
+test('STAGED STOCK OPENS THE WINDOW — the retailer\'s own units, in the building', () => {
+  // The measured precursor: ~30,000 counted against a listing that still
+  // refuses to sell. This is a drop being loaded, and it is specific to this
+  // shop in a way a publisher\'s street date can never be.
+  const s = settings({ burstSpacingSeconds: 10 });
+  const w = dropWindow(s, [mission({ availableQuantity: 31000, state: 'out' })], T0);
   assert.equal(w.open, true);
-  assert.match(w.reason, /released today: Chaos Rising ETB/);
+  assert.match(w.reason, /stock staged: Chaos Rising ETB/);
+  assert.equal(burstMsFor(s, [mission({ availableQuantity: 31000 })], T0), 10_000);
 });
 
-test('a release date that is not today, or a disabled mission, opens nothing', () => {
+test('A RELEASE DATE NO LONGER OPENS ANYTHING — it promises existence, not stock', () => {
+  // The old trigger, now deliberately inert. A street date says a product
+  // starts existing somewhere; it does not say this shop has any, and a day
+  // of tightened pacing on that promise is traffic spent on a guess.
   const s = settings({ burstSpacingSeconds: 10, timezone: 'UTC' });
-  assert.equal(dropWindow(s, [mission({ releaseDate: '2026-09-17' })], T0).open, false);
-  assert.equal(dropWindow(s, [mission({ releaseDate: null })], T0).open, false);
+  assert.equal(dropWindow(s, [mission({ releaseDate: '2026-09-16' })], T0).open, false);
+});
+
+test('shelf quantities cannot open a window — only a load-in can', () => {
+  const s = settings({ burstSpacingSeconds: 10 });
+  // 8-20 is ordinary shelf stock and 20 is display-capped. Bursting on those
+  // would mean bursting most weeks, which is just a faster default.
+  assert.equal(dropWindow(s, [mission({ availableQuantity: 20, state: 'out' })], T0).open, false);
+  assert.equal(dropWindow(s, [mission({ availableQuantity: 0, state: 'out' })], T0).open, false);
+  assert.equal(dropWindow(s, [mission({ availableQuantity: null })], T0).open, false);
+});
+
+test('staged stock on a paused mission does not speed the whole shop up', () => {
+  const s = settings({ burstSpacingSeconds: 10 });
   assert.equal(
-    dropWindow(s, [mission({ releaseDate: '2026-09-16', enabled: false })], T0).open,
+    dropWindow(s, [mission({ availableQuantity: 31000, enabled: false })], T0).open,
     false,
-    'a paused mission does not get to speed the whole shop up',
   );
 });
 
-test('several releases name a couple and count the rest', () => {
-  const s = settings({ burstSpacingSeconds: 10, timezone: 'UTC' });
+test('THE WINDOW SURVIVES THE MOMENT THE DROP GOES LIVE', () => {
+  // Staged stock becoming sellable would otherwise shut the window at exactly
+  // the moment speed is worth most. An armed mission looking at live stock
+  // holds it open — and that is self-limiting, because a completed buy
+  // disarms its mission.
+  const s = settings({ burstSpacingSeconds: 10 });
+  const live = mission({ availableQuantity: 12000, state: 'in', armed: true });
+  const w = dropWindow(s, [live], T0);
+  assert.equal(w.open, true);
+  assert.match(w.reason, /live and armed: Chaos Rising ETB/);
+
+  // Watching-only, in stock, is not a drop worth hurrying for — otherwise a
+  // permanently stocked item would hold a permanent burst.
+  const watching = mission({ availableQuantity: 12000, state: 'in', armed: false });
+  assert.equal(dropWindow(s, [watching], T0).open, false);
+});
+
+test('several staged products name a couple and count the rest', () => {
+  const s = settings({ burstSpacingSeconds: 10 });
   const w = dropWindow(
     s,
     [
-      mission({ id: 1, productName: 'A', releaseDate: '2026-09-16' }),
-      mission({ id: 2, productName: 'B', releaseDate: '2026-09-16' }),
-      mission({ id: 3, productName: 'C', releaseDate: '2026-09-16' }),
+      mission({ id: 1, productName: 'A', availableQuantity: 900 }),
+      mission({ id: 2, productName: 'B', availableQuantity: 900 }),
+      mission({ id: 3, productName: 'C', availableQuantity: 900 }),
     ],
     T0,
   );
   assert.match(w.reason, /A, B \+1 more/);
 });
 
-test('the day is read in the settings timezone, not the server’s', () => {
-  // 01:30 UTC on the 17th is still the evening of the 16th in Chicago, and a
-  // release-day window that opens a day early (or late) is worse than none.
+test('the day is still read in the settings timezone', () => {
   const night = Date.parse('2026-09-17T01:30:00Z');
   assert.equal(todayIn('America/Chicago', night), '2026-09-16');
   assert.equal(todayIn('UTC', night), '2026-09-17');
-  // An unknown zone falls back rather than throwing mid-pass.
   assert.match(todayIn('Not/AZone', night), /^\d{4}-\d{2}-\d{2}$/);
 });
 
