@@ -163,7 +163,7 @@ export async function recordDiscoveries(
               signal, other_offers)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
                    $18)
-           ON CONFLICT (user_id, source_id, external_id) DO UPDATE SET
+           ON CONFLICT (source_id, external_id) DO UPDATE SET
              found_by = CASE
                WHEN EXCLUDED.found_by = '' THEN discoveries.found_by
                WHEN discoveries.found_by = '' THEN EXCLUDED.found_by
@@ -281,13 +281,13 @@ export async function attachIdentity(
   await db.batch([
     {
       text: `INSERT INTO products (user_id, key, name) VALUES ($1, $2, $3)
-             ON CONFLICT (user_id, key) DO NOTHING`,
+             ON CONFLICT (key) DO NOTHING`,
       params: [userId, key, item.name],
     },
     {
       text: `INSERT INTO aliases (user_id, product_key, kind, retailer, value)
              VALUES ($1, $2, $3, $4, $5)
-             ON CONFLICT (user_id, kind, retailer, value) DO NOTHING`,
+             ON CONFLICT (kind, retailer, value) DO NOTHING`,
       params: [userId, key, 'retailer_sku', retailer, item.externalId],
     },
     {
@@ -374,10 +374,8 @@ export async function watchlist(db: Sql, userId: number): Promise<WatchRow[]> {
   const rows = await db.query(
     `SELECT l.id, l.product_key, p.name, p.release_date, l.retailer, l.external_id, l.url
        FROM listings l
-       JOIN products p ON p.user_id = l.user_id AND p.key = l.product_key
-      WHERE l.user_id = $1
+       JOIN products p ON p.key = l.product_key
       ORDER BY p.name, l.retailer`,
-    [userId],
   );
   return rows.map((r) => ({
     listingId: Number(r.id),
@@ -429,8 +427,13 @@ export function keyForName(name: string): string {
   return `prd_${slug || 'unnamed'}`;
 }
 
-export async function listProducts(db: Sql, userId: number): Promise<ProductRow[]> {
-  const rows = await db.query('SELECT * FROM products WHERE user_id = $1 ORDER BY name', [userId]);
+/**
+ * The catalogue. Shared, so `userId` is not a filter here any more — it is
+ * kept in the signature because every caller has it and a reader that quietly
+ * stops taking it is a reader nobody notices has changed meaning.
+ */
+export async function listProducts(db: Sql, _userId: number): Promise<ProductRow[]> {
+  const rows = await db.query('SELECT * FROM products ORDER BY name');
   return rows.map(toProduct);
 }
 
@@ -484,7 +487,7 @@ export async function upsertProduct(
      -- (user_id, key), not (key): two people minting the same key from the same
      -- product name would otherwise have the second silently overwrite the
      -- first's product. Cross-user corruption, on an ordinary add.
-     ON CONFLICT (user_id, key) DO UPDATE SET
+     ON CONFLICT (key) DO UPDATE SET
        name = EXCLUDED.name,
        name_is_guess = EXCLUDED.name_is_guess,
        -- COALESCE, not EXCLUDED: an edit that omits a field must not blank a
@@ -527,12 +530,14 @@ export async function deleteProduct(db: Sql, userId: number, key: string): Promi
   // Listings, missions, runs and observations all cascade from here.
   //
   // Returns whether a row was actually removed, which is not pedantry: the
-  // user_id in the WHERE clause means another account's delete matches nothing
-  // and removes nothing — correctly — and without this the route would answer
-  // 200 "deleted" to a request that did not delete anything.
+  // Deleting from a shared catalogue is a catalogue write, so the caller must
+  // hold the role. The old user_id filter cannot do this job any more: it would
+  // let anyone delete anything they happened to have catalogued first, and stop
+  // the owner tidying up a row a member created.
+  if (!(await canWriteCatalogue(db, userId))) return false;
   const rows = await db.query<{ key: string }>(
-    'DELETE FROM products WHERE user_id = $1 AND key = $2 RETURNING key',
-    [userId, key],
+    'DELETE FROM products WHERE key = $1 RETURNING key',
+    [key],
   );
   return rows.length > 0;
 }
@@ -574,9 +579,9 @@ export async function findListing(
 ): Promise<ListingRow | null> {
   const rows = await db.query(
     `SELECT l.*, p.name AS product_name FROM listings l
-       JOIN products p ON p.user_id = l.user_id AND p.key = l.product_key
-      WHERE l.user_id = $1 AND l.retailer = $2 AND l.external_id = $3`,
-    [userId, retailer.trim(), externalId.trim()],
+       JOIN products p ON p.key = l.product_key
+      WHERE l.retailer = $1 AND l.external_id = $2`,
+    [retailer.trim(), externalId.trim()],
   );
   return rows[0] ? toListing(rows[0]) : null;
 }
@@ -587,12 +592,10 @@ export async function listListings(
   productKey?: string,
 ): Promise<ListingRow[]> {
   const sql = `SELECT l.*, p.name AS product_name FROM listings l
-                 JOIN products p ON p.user_id = l.user_id AND p.key = l.product_key
-                WHERE l.user_id = $1${productKey ? ' AND l.product_key = $2' : ''}
+                 JOIN products p ON p.key = l.product_key
+                ${productKey ? 'WHERE l.product_key = $1' : ''}
                 ORDER BY p.name, l.retailer`;
-  const rows = productKey
-    ? await db.query(sql, [userId, productKey])
-    : await db.query(sql, [userId]);
+  const rows = productKey ? await db.query(sql, [productKey]) : await db.query(sql);
   return rows.map(toListing);
 }
 
@@ -604,8 +607,10 @@ export async function addListing(
   const rows = await db.query(
     `INSERT INTO listings (user_id, product_key, retailer, external_id, url)
      VALUES ($1, $2, $3, $4, $5)
-     -- Per owner: two people must both be able to watch the same tcin.
-     ON CONFLICT (user_id, retailer, external_id) DO UPDATE SET
+     -- One listing per tcin for everybody. Two people both watching it is two
+     -- MISSIONS against this one row — which is the whole point of the shared
+     -- catalogue, and why missions are unique per (user, listing) instead.
+     ON CONFLICT (retailer, external_id) DO UPDATE SET
        url = EXCLUDED.url,
        product_key = EXCLUDED.product_key
      RETURNING *`,
@@ -613,17 +618,19 @@ export async function addListing(
   );
   const [full] = await db.query(
     `SELECT l.*, p.name AS product_name FROM listings l
-       JOIN products p ON p.user_id = l.user_id AND p.key = l.product_key
-      WHERE l.user_id = $1 AND l.id = $2`,
-    [userId, rows[0]!.id],
+       JOIN products p ON p.key = l.product_key
+      WHERE l.id = $1`,
+    [rows[0]!.id],
   );
   return toListing(full!);
 }
 
 export async function deleteListing(db: Sql, userId: number, id: number): Promise<boolean> {
+  // A catalogue write. See deleteProduct.
+  if (!(await canWriteCatalogue(db, userId))) return false;
   const rows = await db.query<{ id: number }>(
-    'DELETE FROM listings WHERE user_id = $1 AND id = $2 RETURNING id',
-    [userId, id],
+    'DELETE FROM listings WHERE id = $1 RETURNING id',
+    [id],
   );
   return rows.length > 0;
 }
@@ -656,6 +663,52 @@ export interface MissionInput {
 }
 
 // ── Who is asking ────────────────────────────────────────────────────────────
+
+/**
+ * May this account write to the shared catalogue?
+ *
+ * ── What this replaces, and why it is stronger ──────────────────────────────
+ *
+ * The rule used to be "a Phantom may write a reading only to a listing its own
+ * user owns". That was load-bearing: it is what stopped one person's agent
+ * telling another person's ARMED mission that a $500 box is in stock at $5.
+ * Shared listings dissolve it — everybody's listing is everybody's listing —
+ * so the check has to become about the WRITER instead of the row.
+ *
+ * This is stronger than what it replaces, for two reasons. A member's Phantom
+ * can now write no reading at all, rather than writing freely within its own
+ * rows; and it is one flag read in one place rather than an ownership
+ * comparison repeated in every write path, which is the kind of check that
+ * eventually gets forgotten in one of them.
+ *
+ * Fails CLOSED on a missing or disabled user: no row, no permission.
+ */
+export async function canWriteCatalogue(db: Sql, userId: number): Promise<boolean> {
+  const rows = await db.query<{ can: boolean }>(
+    'SELECT can_write_catalogue AS can FROM users WHERE id = $1 AND enabled = true',
+    [userId],
+  );
+  return rows[0]?.can === true;
+}
+
+/**
+ * May this account arm a mission — that is, instruct a machine to spend?
+ *
+ * Deliberately SEPARATE from `can_write_catalogue`, though today one account
+ * holds both. They are different questions and will come apart: a trusted
+ * member could one day run their own agent and buy on their own card without
+ * ever earning the right to edit the catalogue everyone else depends on.
+ * Collapsing them now would mean untangling them exactly when the stakes rise.
+ *
+ * Fails CLOSED, like every permission here.
+ */
+export async function canArm(db: Sql, userId: number): Promise<boolean> {
+  const rows = await db.query<{ can: boolean }>(
+    'SELECT can_arm AS can FROM users WHERE id = $1 AND enabled = true',
+    [userId],
+  );
+  return rows[0]?.can === true;
+}
 
 /** How many users exist. Used by /health to prove the database answers. */
 export async function countUsers(db: Sql): Promise<number> {
@@ -1180,9 +1233,9 @@ const MISSION_SELECT = `
          COALESCE(w.note, '') AS note,
          w.last_checked_at, w.last_changed_at
     FROM missions m
-    JOIN listings l ON l.user_id = m.user_id AND l.id = m.listing_id
-    JOIN products p ON p.user_id = l.user_id AND p.key = l.product_key
-    LEFT JOIN watch_state w ON w.user_id = l.user_id AND w.listing_id = l.id
+    JOIN listings l ON l.id = m.listing_id
+    JOIN products p ON p.key = l.product_key
+    LEFT JOIN watch_state w ON w.listing_id = l.id
    WHERE m.user_id = $1`;
 
 /**
@@ -1284,20 +1337,39 @@ export async function upsertMission(
   const problem = validateMission(m);
   if (problem) throw new Error(problem);
 
-  // The listing has to be this user's. Without this check a crafted listingId
-  // would attach a mission to somebody else's listing — and a mission is the
-  // thing that spends money.
-  const owns = await db.query<{ id: number }>(
-    'SELECT id FROM listings WHERE user_id = $1 AND id = $2',
-    [userId, m.listingId],
+  // The listing must EXIST. It no longer has to be "this user's": a listing is
+  // a shelf at a shop, and a shelf belongs to nobody. The mission created here
+  // is always the caller's own — user_id comes from the session, never from the
+  // body — so a crafted listingId can now only ever attach a mission to the
+  // person who sent it, which is the thing the old ownership check was for.
+  const exists = await db.query<{ id: number }>(
+    'SELECT id FROM listings WHERE id = $1',
+    [m.listingId],
   );
-  if (!owns.length) throw new Error('that listing does not belong to you');
+  if (!exists.length) throw new Error('no such listing');
+
+  // ── Watch-only for members (owner decision, 1 Sep 2026) ──────────────────
+  //
+  // Arming is a standing instruction to spend, and it is carried out by a
+  // browser signed into a retail account with a card behind it. That machine
+  // is the owner's. Until a member can run their own agent, a member's mission
+  // may watch and may not buy — and saying so here, rather than hoping no UI
+  // offers the button, is what makes it true.
+  if (m.armed && !(await canArm(db, userId))) {
+    throw new Error(
+      'this account can watch but not buy — arming needs a Phantom of your own, ' +
+      'signed into your own retailer account',
+    );
+  }
 
   const rows = await db.query(
     `INSERT INTO missions (user_id, listing_id, label, enabled, armed, ceiling, quantity,
                            seller_policy, preorder_policy, check_every_s, notes)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-     ON CONFLICT (listing_id) DO UPDATE SET
+     -- Per person per listing. One shared listing now carries a mission for
+     -- every member watching it; the rule that matters is that no ONE person
+     -- ends up with two, because two armed missions is two purchases.
+     ON CONFLICT (user_id, listing_id) DO UPDATE SET
        label = EXCLUDED.label,
        enabled = EXCLUDED.enabled,
        armed = EXCLUDED.armed,
@@ -1889,8 +1961,8 @@ const RUN_SELECT = `
   SELECT r.*, p.name AS product_name, l.retailer
     FROM mission_runs r
     JOIN missions m ON m.user_id = r.user_id AND m.id = r.mission_id
-    JOIN listings l ON l.user_id = m.user_id AND l.id = m.listing_id
-    JOIN products p ON p.user_id = l.user_id AND p.key = l.product_key
+    JOIN listings l ON l.id = m.listing_id
+    JOIN products p ON p.key = l.product_key
    WHERE r.user_id = $1`;
 
 export async function missionRuns(
@@ -1961,14 +2033,18 @@ export async function recordObservation(
   obs: ObservationIn,
 ): Promise<RecordedObservation> {
   // A reading names a listing by id, and that id arrives over the wire from a
-  // Phantom. If it is not this user's listing, nothing here may touch it —
-  // otherwise one person's Phantom could rewrite another person's stock and
-  // price, which is the reading an armed mission acts on.
-  const owns = await db.query<{ id: number }>(
-    'SELECT id FROM listings WHERE user_id = $1 AND id = $2',
-    [userId, obs.listingId],
+  // Phantom. One shared reading now drives EVERY member's mission on that
+  // listing, which raises the stakes rather than lowering them: a bad reading
+  // no longer misleads one person, it misleads all of them. So the gate is the
+  // catalogue-writer role, and a member's agent is refused outright.
+  if (!(await canWriteCatalogue(db, userId))) {
+    throw new Error('this account may not write readings to the catalogue');
+  }
+  const exists = await db.query<{ id: number }>(
+    'SELECT id FROM listings WHERE id = $1',
+    [obs.listingId],
   );
-  if (!owns.length) throw new Error('that listing does not belong to you');
+  if (!exists.length) throw new Error('no such listing');
 
   const prior = await db.query<{
     state: string;
@@ -1977,8 +2053,8 @@ export async function recordObservation(
     available_quantity: unknown;
   }>(
     `SELECT state, price, seller_kind, available_quantity
-       FROM watch_state WHERE user_id = $1 AND listing_id = $2`,
-    [userId, obs.listingId],
+       FROM watch_state WHERE listing_id = $1`,
+    [obs.listingId],
   );
 
   const before = prior[0] ?? null;
@@ -2058,18 +2134,20 @@ export async function recordObservation(
   // else. Clearing it when the request is *sent* would tick the box for a check
   // that never happened; clearing it here means the button stays lit until the
   // Phantom actually looked.
+  // Every mission on this listing, not just the writer's: one reading answers
+  // everyone's "check now", because everyone was waiting on the same page.
   await db.query(
     `UPDATE missions SET check_now_at = NULL
-      WHERE user_id = $1 AND listing_id = $2 AND check_now_at IS NOT NULL`,
-    [userId, obs.listingId],
+      WHERE listing_id = $1 AND check_now_at IS NOT NULL`,
+    [obs.listingId],
   );
 
   // The listing remembers who was selling it, so a mission's seller policy has
   // something to read even before the next check.
   if (sellerKind !== 'unknown') {
     await db.query(
-      'UPDATE listings SET seller_kind = $1, seller_name = $2 WHERE user_id = $3 AND id = $4',
-      [sellerKind, obs.sellerName ?? '', userId, obs.listingId],
+      'UPDATE listings SET seller_kind = $1, seller_name = $2 WHERE id = $3',
+      [sellerKind, obs.sellerName ?? '', obs.listingId],
     );
   }
 
@@ -2079,10 +2157,9 @@ export async function recordObservation(
   if (realName && realName.length <= 200) {
     await db.query(
       `UPDATE products SET name = $1, name_is_guess = false
-        WHERE user_id = $2
-          AND key = (SELECT product_key FROM listings WHERE user_id = $2 AND id = $3)
+        WHERE key = (SELECT product_key FROM listings WHERE id = $2)
           AND name_is_guess = true`,
-      [realName, userId, obs.listingId],
+      [realName, obs.listingId],
     );
   }
 
@@ -2091,9 +2168,9 @@ export async function recordObservation(
   if (obs.imageUrl) {
     await db.query(
       `UPDATE products SET image_url = $1
-        WHERE user_id = $2 AND image_url = ''
-          AND key = (SELECT product_key FROM listings WHERE user_id = $2 AND id = $3)`,
-      [obs.imageUrl, userId, obs.listingId],
+        WHERE image_url = ''
+          AND key = (SELECT product_key FROM listings WHERE id = $2)`,
+      [obs.imageUrl, obs.listingId],
     );
   }
 
@@ -2138,9 +2215,13 @@ export async function recentObservations(db: Sql, userId: number, limit = 50): P
     `SELECT o.listing_id, p.name AS product_name, l.retailer, o.state, o.price,
             o.seller_kind, o.seller_name, o.note, o.at
        FROM observations o
-       JOIN listings l ON l.user_id = o.user_id AND l.id = o.listing_id
-       JOIN products p ON p.user_id = l.user_id AND p.key = l.product_key
-      WHERE o.user_id = $1
+       JOIN listings l ON l.id = o.listing_id
+       JOIN products p ON p.key = l.product_key
+       -- Scoped by WHAT YOU WATCH, not by who wrote it. The reading is a
+       -- shared fact — one row, written once by the catalogue's agent — but an
+       -- activity feed carrying every member's products would be unreadable.
+       -- A mission on the listing is what makes its history yours to see.
+       JOIN missions m ON m.listing_id = o.listing_id AND m.user_id = $1
       ORDER BY o.at DESC, o.id DESC
       LIMIT $2`,
     [userId, Math.min(Math.max(limit, 1), 200)],
@@ -2430,14 +2511,13 @@ export async function discoveriesToReview(
   const rows = await db.query(
     `SELECT d.*,
             EXISTS (
-              SELECT 1 FROM listings l
-               WHERE l.user_id = d.user_id AND l.external_id = d.external_id
+              SELECT 1 FROM listings l WHERE l.external_id = d.external_id
             ) AS already_have
        FROM discoveries d
-      WHERE d.user_id = $1 AND d.status = 'new'
+      WHERE d.status = 'new'
       ORDER BY d.first_seen_at DESC, d.id DESC
-      LIMIT $2`,
-    [userId, Math.min(Math.max(limit, 1), 500)],
+      LIMIT $1`,
+    [Math.min(Math.max(limit, 1), 500)],
   );
   return rows.map(toDiscovery);
 }
@@ -2448,8 +2528,8 @@ export async function getDiscovery(
   id: number,
 ): Promise<DiscoveryRow | null> {
   const rows = await db.query(
-    `SELECT *, false AS already_have FROM discoveries WHERE user_id = $1 AND id = $2`,
-    [userId, id],
+    `SELECT *, false AS already_have FROM discoveries WHERE id = $1`,
+    [id],
   );
   return rows.length ? toDiscovery(rows[0]!) : null;
 }
@@ -2462,11 +2542,14 @@ export async function getDiscovery(
  * of what has been seen.
  */
 export async function forgetDiscovery(db: Sql, userId: number, id: number): Promise<boolean> {
+  // Deciding a find is curation: "never offer this again" is a judgement that
+  // now sticks for everybody, so only a catalogue writer may make it.
+  if (!(await canWriteCatalogue(db, userId))) return false;
   const rows = await db.query<{ id: number }>(
     `UPDATE discoveries SET status = 'forgotten', decided_at = now()
-      WHERE user_id = $1 AND id = $2 AND status = 'new'
+      WHERE id = $1 AND status = 'new'
       RETURNING id`,
-    [userId, id],
+    [id],
   );
   return rows.length > 0;
 }
@@ -2483,6 +2566,10 @@ export async function keepDiscovery(
   userId: number,
   id: number,
 ): Promise<{ productKey: string; listingId: number; missionId: number }> {
+  // Keeping a find creates catalogue rows everybody will watch against.
+  if (!(await canWriteCatalogue(db, userId))) {
+    throw new Error('this account may not add to the catalogue');
+  }
   const found = await getDiscovery(db, userId, id);
   if (!found) throw new Error('no such discovery');
   if (found.status !== 'new') throw new Error(`this one was already ${found.status}`);

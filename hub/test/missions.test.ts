@@ -725,13 +725,21 @@ test('a find you already watch says so rather than hiding', async () => {
   assert.equal((await store.discoveriesToReview(db, USER)).length, 0);
 });
 
-test('MY FINDS ARE NOT YOUR FINDS', async () => {
+test('FINDS ARE SHARED, BUT DECIDING THEM IS CURATION', async () => {
+  // INVERTED 1 Sep 2026. A find used to belong to whoever swept it up. The
+  // sweep is now one sweep, so the finds are one list — but "keep this" mints
+  // catalogue rows everybody watches against, and "forget this" is a judgement
+  // that sticks for everybody. Reading is open; deciding is a role.
   const { db, id } = await withDiscovery();
   await db.query("INSERT INTO users (id, handle) VALUES (2, 'other') ON CONFLICT DO NOTHING");
 
-  assert.equal((await store.discoveriesToReview(db, 2)).length, 0);
-  assert.equal(await store.forgetDiscovery(db, 2, id), false);
-  await assert.rejects(() => store.keepDiscovery(db, 2, id), /no such discovery/);
+  assert.ok((await store.discoveriesToReview(db, 2)).length > 0, 'a member sees the finds');
+
+  assert.equal(await store.forgetDiscovery(db, 2, id), false, 'but cannot bury one');
+  await assert.rejects(() => store.keepDiscovery(db, 2, id), /may not add to the catalogue/);
+
+  // Still there, still undecided, for the person whose job it is.
+  assert.ok((await store.discoveriesToReview(db, USER)).some((d) => d.id === id));
 });
 
 // ── When a sweep is due ──────────────────────────────────────────────────────

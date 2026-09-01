@@ -386,7 +386,7 @@ async function recordDiscoveries(db2, userId, sourceId, items, announce2) {
               signal, other_offers)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
                    $18)
-           ON CONFLICT (user_id, source_id, external_id) DO UPDATE SET
+           ON CONFLICT (source_id, external_id) DO UPDATE SET
              found_by = CASE
                WHEN EXCLUDED.found_by = '' THEN discoveries.found_by
                WHEN discoveries.found_by = '' THEN EXCLUDED.found_by
@@ -465,13 +465,13 @@ async function attachIdentity(db2, userId, sourceId, retailer, item) {
   await db2.batch([
     {
       text: `INSERT INTO products (user_id, key, name) VALUES ($1, $2, $3)
-             ON CONFLICT (user_id, key) DO NOTHING`,
+             ON CONFLICT (key) DO NOTHING`,
       params: [userId, key, item.name]
     },
     {
       text: `INSERT INTO aliases (user_id, product_key, kind, retailer, value)
              VALUES ($1, $2, $3, $4, $5)
-             ON CONFLICT (user_id, kind, retailer, value) DO NOTHING`,
+             ON CONFLICT (kind, retailer, value) DO NOTHING`,
       params: [userId, key, "retailer_sku", retailer, item.externalId]
     },
     {
@@ -514,10 +514,8 @@ async function watchlist(db2, userId) {
   const rows = await db2.query(
     `SELECT l.id, l.product_key, p.name, p.release_date, l.retailer, l.external_id, l.url
        FROM listings l
-       JOIN products p ON p.user_id = l.user_id AND p.key = l.product_key
-      WHERE l.user_id = $1
-      ORDER BY p.name, l.retailer`,
-    [userId]
+       JOIN products p ON p.key = l.product_key
+      ORDER BY p.name, l.retailer`
   );
   return rows.map((r) => ({
     listingId: Number(r.id),
@@ -543,8 +541,8 @@ function keyForName(name) {
   const slug = name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 60);
   return `prd_${slug || "unnamed"}`;
 }
-async function listProducts(db2, userId) {
-  const rows = await db2.query("SELECT * FROM products WHERE user_id = $1 ORDER BY name", [userId]);
+async function listProducts(db2, _userId) {
+  const rows = await db2.query("SELECT * FROM products ORDER BY name");
   return rows.map(toProduct);
 }
 function validateProduct(p) {
@@ -571,7 +569,7 @@ async function upsertProduct(db2, userId, p) {
      -- (user_id, key), not (key): two people minting the same key from the same
      -- product name would otherwise have the second silently overwrite the
      -- first's product. Cross-user corruption, on an ordinary add.
-     ON CONFLICT (user_id, key) DO UPDATE SET
+     ON CONFLICT (key) DO UPDATE SET
        name = EXCLUDED.name,
        name_is_guess = EXCLUDED.name_is_guess,
        -- COALESCE, not EXCLUDED: an edit that omits a field must not blank a
@@ -595,9 +593,10 @@ async function upsertProduct(db2, userId, p) {
   return toProduct(rows[0]);
 }
 async function deleteProduct(db2, userId, key) {
+  if (!await canWriteCatalogue(db2, userId)) return false;
   const rows = await db2.query(
-    "DELETE FROM products WHERE user_id = $1 AND key = $2 RETURNING key",
-    [userId, key]
+    "DELETE FROM products WHERE key = $1 RETURNING key",
+    [key]
   );
   return rows.length > 0;
 }
@@ -617,26 +616,28 @@ function toListing(r) {
 async function findListing(db2, userId, retailer, externalId) {
   const rows = await db2.query(
     `SELECT l.*, p.name AS product_name FROM listings l
-       JOIN products p ON p.user_id = l.user_id AND p.key = l.product_key
-      WHERE l.user_id = $1 AND l.retailer = $2 AND l.external_id = $3`,
-    [userId, retailer.trim(), externalId.trim()]
+       JOIN products p ON p.key = l.product_key
+      WHERE l.retailer = $1 AND l.external_id = $2`,
+    [retailer.trim(), externalId.trim()]
   );
   return rows[0] ? toListing(rows[0]) : null;
 }
 async function listListings(db2, userId, productKey2) {
   const sql = `SELECT l.*, p.name AS product_name FROM listings l
-                 JOIN products p ON p.user_id = l.user_id AND p.key = l.product_key
-                WHERE l.user_id = $1${productKey2 ? " AND l.product_key = $2" : ""}
+                 JOIN products p ON p.key = l.product_key
+                ${productKey2 ? "WHERE l.product_key = $1" : ""}
                 ORDER BY p.name, l.retailer`;
-  const rows = productKey2 ? await db2.query(sql, [userId, productKey2]) : await db2.query(sql, [userId]);
+  const rows = productKey2 ? await db2.query(sql, [productKey2]) : await db2.query(sql);
   return rows.map(toListing);
 }
 async function addListing(db2, userId, l) {
   const rows = await db2.query(
     `INSERT INTO listings (user_id, product_key, retailer, external_id, url)
      VALUES ($1, $2, $3, $4, $5)
-     -- Per owner: two people must both be able to watch the same tcin.
-     ON CONFLICT (user_id, retailer, external_id) DO UPDATE SET
+     -- One listing per tcin for everybody. Two people both watching it is two
+     -- MISSIONS against this one row \u2014 which is the whole point of the shared
+     -- catalogue, and why missions are unique per (user, listing) instead.
+     ON CONFLICT (retailer, external_id) DO UPDATE SET
        url = EXCLUDED.url,
        product_key = EXCLUDED.product_key
      RETURNING *`,
@@ -644,18 +645,33 @@ async function addListing(db2, userId, l) {
   );
   const [full] = await db2.query(
     `SELECT l.*, p.name AS product_name FROM listings l
-       JOIN products p ON p.user_id = l.user_id AND p.key = l.product_key
-      WHERE l.user_id = $1 AND l.id = $2`,
-    [userId, rows[0].id]
+       JOIN products p ON p.key = l.product_key
+      WHERE l.id = $1`,
+    [rows[0].id]
   );
   return toListing(full);
 }
 async function deleteListing(db2, userId, id) {
+  if (!await canWriteCatalogue(db2, userId)) return false;
   const rows = await db2.query(
-    "DELETE FROM listings WHERE user_id = $1 AND id = $2 RETURNING id",
-    [userId, id]
+    "DELETE FROM listings WHERE id = $1 RETURNING id",
+    [id]
   );
   return rows.length > 0;
+}
+async function canWriteCatalogue(db2, userId) {
+  const rows = await db2.query(
+    "SELECT can_write_catalogue AS can FROM users WHERE id = $1 AND enabled = true",
+    [userId]
+  );
+  return rows[0]?.can === true;
+}
+async function canArm(db2, userId) {
+  const rows = await db2.query(
+    "SELECT can_arm AS can FROM users WHERE id = $1 AND enabled = true",
+    [userId]
+  );
+  return rows[0]?.can === true;
 }
 async function countUsers(db2) {
   const rows = await db2.query("SELECT count(*)::int AS n FROM users");
@@ -892,9 +908,9 @@ var MISSION_SELECT = `
          COALESCE(w.note, '') AS note,
          w.last_checked_at, w.last_changed_at
     FROM missions m
-    JOIN listings l ON l.user_id = m.user_id AND l.id = m.listing_id
-    JOIN products p ON p.user_id = l.user_id AND p.key = l.product_key
-    LEFT JOIN watch_state w ON w.user_id = l.user_id AND w.listing_id = l.id
+    JOIN listings l ON l.id = m.listing_id
+    JOIN products p ON p.key = l.product_key
+    LEFT JOIN watch_state w ON w.listing_id = l.id
    WHERE m.user_id = $1`;
 async function listMissions(db2, userId) {
   const rows = await db2.query(`${MISSION_SELECT}
@@ -951,16 +967,24 @@ function validateMission(m) {
 async function upsertMission(db2, userId, m) {
   const problem = validateMission(m);
   if (problem) throw new Error(problem);
-  const owns = await db2.query(
-    "SELECT id FROM listings WHERE user_id = $1 AND id = $2",
-    [userId, m.listingId]
+  const exists = await db2.query(
+    "SELECT id FROM listings WHERE id = $1",
+    [m.listingId]
   );
-  if (!owns.length) throw new Error("that listing does not belong to you");
+  if (!exists.length) throw new Error("no such listing");
+  if (m.armed && !await canArm(db2, userId)) {
+    throw new Error(
+      "this account can watch but not buy \u2014 arming needs a Phantom of your own, signed into your own retailer account"
+    );
+  }
   const rows = await db2.query(
     `INSERT INTO missions (user_id, listing_id, label, enabled, armed, ceiling, quantity,
                            seller_policy, preorder_policy, check_every_s, notes)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-     ON CONFLICT (listing_id) DO UPDATE SET
+     -- Per person per listing. One shared listing now carries a mission for
+     -- every member watching it; the rule that matters is that no ONE person
+     -- ends up with two, because two armed missions is two purchases.
+     ON CONFLICT (user_id, listing_id) DO UPDATE SET
        label = EXCLUDED.label,
        enabled = EXCLUDED.enabled,
        armed = EXCLUDED.armed,
@@ -1302,8 +1326,8 @@ var RUN_SELECT = `
   SELECT r.*, p.name AS product_name, l.retailer
     FROM mission_runs r
     JOIN missions m ON m.user_id = r.user_id AND m.id = r.mission_id
-    JOIN listings l ON l.user_id = m.user_id AND l.id = m.listing_id
-    JOIN products p ON p.user_id = l.user_id AND p.key = l.product_key
+    JOIN listings l ON l.id = m.listing_id
+    JOIN products p ON p.key = l.product_key
    WHERE r.user_id = $1`;
 async function missionRuns(db2, userId, missionId, limit = 100) {
   const rows = await db2.query(
@@ -1320,15 +1344,18 @@ async function recentRuns(db2, userId, limit = 50) {
   return rows.map(toRun);
 }
 async function recordObservation(db2, userId, obs) {
-  const owns = await db2.query(
-    "SELECT id FROM listings WHERE user_id = $1 AND id = $2",
-    [userId, obs.listingId]
+  if (!await canWriteCatalogue(db2, userId)) {
+    throw new Error("this account may not write readings to the catalogue");
+  }
+  const exists = await db2.query(
+    "SELECT id FROM listings WHERE id = $1",
+    [obs.listingId]
   );
-  if (!owns.length) throw new Error("that listing does not belong to you");
+  if (!exists.length) throw new Error("no such listing");
   const prior = await db2.query(
     `SELECT state, price, seller_kind, available_quantity
-       FROM watch_state WHERE user_id = $1 AND listing_id = $2`,
-    [userId, obs.listingId]
+       FROM watch_state WHERE listing_id = $1`,
+    [obs.listingId]
   );
   const before = prior[0] ?? null;
   const isFirst = before === null;
@@ -1378,31 +1405,30 @@ async function recordObservation(db2, userId, obs) {
   );
   await db2.query(
     `UPDATE missions SET check_now_at = NULL
-      WHERE user_id = $1 AND listing_id = $2 AND check_now_at IS NOT NULL`,
-    [userId, obs.listingId]
+      WHERE listing_id = $1 AND check_now_at IS NOT NULL`,
+    [obs.listingId]
   );
   if (sellerKind !== "unknown") {
     await db2.query(
-      "UPDATE listings SET seller_kind = $1, seller_name = $2 WHERE user_id = $3 AND id = $4",
-      [sellerKind, obs.sellerName ?? "", userId, obs.listingId]
+      "UPDATE listings SET seller_kind = $1, seller_name = $2 WHERE id = $3",
+      [sellerKind, obs.sellerName ?? "", obs.listingId]
     );
   }
   const realName = (obs.productName ?? "").trim();
   if (realName && realName.length <= 200) {
     await db2.query(
       `UPDATE products SET name = $1, name_is_guess = false
-        WHERE user_id = $2
-          AND key = (SELECT product_key FROM listings WHERE user_id = $2 AND id = $3)
+        WHERE key = (SELECT product_key FROM listings WHERE id = $2)
           AND name_is_guess = true`,
-      [realName, userId, obs.listingId]
+      [realName, obs.listingId]
     );
   }
   if (obs.imageUrl) {
     await db2.query(
       `UPDATE products SET image_url = $1
-        WHERE user_id = $2 AND image_url = ''
-          AND key = (SELECT product_key FROM listings WHERE user_id = $2 AND id = $3)`,
-      [obs.imageUrl, userId, obs.listingId]
+        WHERE image_url = ''
+          AND key = (SELECT product_key FROM listings WHERE id = $2)`,
+      [obs.imageUrl, obs.listingId]
     );
   }
   if (changed || isFirst) {
@@ -1431,9 +1457,13 @@ async function recentObservations(db2, userId, limit = 50) {
     `SELECT o.listing_id, p.name AS product_name, l.retailer, o.state, o.price,
             o.seller_kind, o.seller_name, o.note, o.at
        FROM observations o
-       JOIN listings l ON l.user_id = o.user_id AND l.id = o.listing_id
-       JOIN products p ON p.user_id = l.user_id AND p.key = l.product_key
-      WHERE o.user_id = $1
+       JOIN listings l ON l.id = o.listing_id
+       JOIN products p ON p.key = l.product_key
+       -- Scoped by WHAT YOU WATCH, not by who wrote it. The reading is a
+       -- shared fact \u2014 one row, written once by the catalogue's agent \u2014 but an
+       -- activity feed carrying every member's products would be unreadable.
+       -- A mission on the listing is what makes its history yours to see.
+       JOIN missions m ON m.listing_id = o.listing_id AND m.user_id = $1
       ORDER BY o.at DESC, o.id DESC
       LIMIT $2`,
     [userId, Math.min(Math.max(limit, 1), 200)]
@@ -1586,34 +1616,37 @@ async function discoveriesToReview(db2, userId, limit = 200) {
   const rows = await db2.query(
     `SELECT d.*,
             EXISTS (
-              SELECT 1 FROM listings l
-               WHERE l.user_id = d.user_id AND l.external_id = d.external_id
+              SELECT 1 FROM listings l WHERE l.external_id = d.external_id
             ) AS already_have
        FROM discoveries d
-      WHERE d.user_id = $1 AND d.status = 'new'
+      WHERE d.status = 'new'
       ORDER BY d.first_seen_at DESC, d.id DESC
-      LIMIT $2`,
-    [userId, Math.min(Math.max(limit, 1), 500)]
+      LIMIT $1`,
+    [Math.min(Math.max(limit, 1), 500)]
   );
   return rows.map(toDiscovery);
 }
 async function getDiscovery(db2, userId, id) {
   const rows = await db2.query(
-    `SELECT *, false AS already_have FROM discoveries WHERE user_id = $1 AND id = $2`,
-    [userId, id]
+    `SELECT *, false AS already_have FROM discoveries WHERE id = $1`,
+    [id]
   );
   return rows.length ? toDiscovery(rows[0]) : null;
 }
 async function forgetDiscovery(db2, userId, id) {
+  if (!await canWriteCatalogue(db2, userId)) return false;
   const rows = await db2.query(
     `UPDATE discoveries SET status = 'forgotten', decided_at = now()
-      WHERE user_id = $1 AND id = $2 AND status = 'new'
+      WHERE id = $1 AND status = 'new'
       RETURNING id`,
-    [userId, id]
+    [id]
   );
   return rows.length > 0;
 }
 async function keepDiscovery(db2, userId, id) {
+  if (!await canWriteCatalogue(db2, userId)) {
+    throw new Error("this account may not add to the catalogue");
+  }
   const found = await getDiscovery(db2, userId, id);
   if (!found) throw new Error("no such discovery");
   if (found.status !== "new") throw new Error(`this one was already ${found.status}`);

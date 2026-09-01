@@ -117,6 +117,18 @@ test('EVERY QUERY THAT TOUCHES AN OWNED TABLE FILTERS ON THE OWNER', async () =>
   // easy to understand is a guard people keep.
   const src = await read('src/store.ts');
 
+  // ── Shared since the catalogue (1 Sep 2026) ─────────────────────────────
+  //
+  // These tables describe a retailer's shelf, not a person. They keep their
+  // user_id column as PROVENANCE — who first catalogued this — and deliberately
+  // stop filtering on it, so one reading serves every member watching.
+  //
+  // The list is explicit and short ON PURPOSE. Deriving the exemption would
+  // mean any table that stops filtering exempts itself, which is precisely the
+  // failure this whole test exists to prevent. Adding a name here has to be an
+  // act somebody performs and a reviewer can see.
+  const SHARED = ['products', 'listings', 'aliases', 'discoveries', 'watch_state', 'observations'];
+
   // Derived from the schema, not typed out here. A hand-kept list is a guard
   // that silently stops guarding the day somebody adds a table and forgets to
   // add it to the list — which is exactly when you need it. Every table with a
@@ -135,8 +147,18 @@ test('EVERY QUERY THAT TOUCHES AN OWNED TABLE FILTERS ON THE OWNER', async () =>
 
   assert.ok(owned.length >= 12, `expected to have found the owned tables, got ${owned.join(', ')}`);
   for (const expected of ['products', 'missions', 'observations', 'activity']) {
-    assert.ok(owned.includes(expected), `${expected} should be an owned table`);
+    assert.ok(owned.includes(expected), `${expected} should carry a user_id column`);
   }
+
+  // The tables that can SPEND. These are the guard's real subject, and none of
+  // them may ever appear in SHARED — a money table that stops filtering on its
+  // owner is the bug this file was written for.
+  for (const money of ['missions', 'settings', 'mission_runs', 'authorisations', 'acquisitions']) {
+    assert.ok(!SHARED.includes(money), `${money} must never be shared — it can spend money`);
+  }
+
+  const privateTables = owned.filter((t) => !SHARED.includes(t));
+  assert.ok(privateTables.includes('missions'), 'missions stays private');
 
   // Comments first, and not for tidiness. This scanner pairs backticks, so a
   // stray one in prose — `upsertUser`, say — pairs with the opening backtick of
@@ -160,11 +182,27 @@ test('EVERY QUERY THAT TOUCHES AN OWNED TABLE FILTERS ON THE OWNER', async () =>
 
   assert.ok(statements.length > 30, `expected to have found the SQL, got ${statements.length}`);
 
+  // ── The one deliberate cross-user write ─────────────────────────────────
+  //
+  // Exempted by its exact text, not by exempting the table. `check_now_at` is
+  // a REQUEST flag — "somebody pressed Check now" — and one shared reading
+  // genuinely answers it for everybody waiting on that page. Scoping it to the
+  // writer would leave every other member's button stuck on "check queued"
+  // forever, describing a check that did happen.
+  //
+  // It carries no money: the flag only ever moves a mission UP the queue, and
+  // arming, ceilings and spend caps are untouched by it. Naming the statement
+  // means a second cross-user write cannot hide behind this one.
+  const ALLOWED = [
+    'UPDATE missions SET check_now_at = NULL WHERE listing_id = $1 AND check_now_at IS NOT NULL',
+  ];
+
   const unfiltered: string[] = [];
   for (const statement of statements) {
     const sql = statement.toLowerCase();
-    const touched = owned.filter((t) => new RegExp('\\b' + t + '\\b').test(sql));
-    if (touched.length && !sql.includes('user_id')) {
+    const touched = privateTables.filter((t) => new RegExp('\\b' + t + '\\b').test(sql));
+    const normalised = statement.split(/\s+/).join(' ').trim();
+    if (touched.length && !sql.includes('user_id') && !ALLOWED.includes(normalised)) {
       unfiltered.push(`${touched.join(', ')} — ${statement.split(/\s+/).join(' ').slice(0, 90)}`);
     }
   }
@@ -172,7 +210,7 @@ test('EVERY QUERY THAT TOUCHES AN OWNED TABLE FILTERS ON THE OWNER', async () =>
   assert.deepEqual(
     unfiltered,
     [],
-    'these statements touch an owned table without filtering on user_id:\n  ' +
+    'these statements touch a PRIVATE table without filtering on user_id:\n  ' +
       unfiltered.join('\n  '),
   );
 });

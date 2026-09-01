@@ -1,13 +1,25 @@
 /**
- * One person cannot see or touch another person's anything.
+ * Where one person ends and another begins.
+ *
+ * ── The line, since the shared catalogue (1 Sep 2026) ───────────────────────
+ *
+ * Facts about the world are SHARED. Decisions about money are PRIVATE.
+ *
+ * Products, listings, watch_state, observations and discoveries describe a
+ * retailer's shelf, and a shelf does not belong to anybody — so everyone reads
+ * one copy, and only a CATALOGUE WRITER may change it. Missions, settings,
+ * runs, authorisations and acquisitions can spend money, so every one of them
+ * still carries a user_id that the SQL must actually use.
  *
  * The compiler forces every store function to be handed a userId. Nothing
  * forces the SQL to *use* it, and a query that accepts an owner and ignores it
  * is the failure that spends the wrong person's money. residency.test.ts reads
  * the SQL statically; this file proves it against a real database.
  *
- * One test per owned table, named for the leak it prevents. They are dull on
- * purpose — the value is in there being one for every table, with no gaps.
+ * The catalogue tests changed shape here, and two of them inverted outright.
+ * That is the point of writing them down: a shared row that used to be private
+ * is exactly the kind of change that quietly turns a safety property into a
+ * comment.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -18,90 +30,137 @@ import * as store from '../src/store.ts';
 const A = 1;
 const B = 2;
 
-/** Two users, each with a product, a listing and a mission on the same tcin. */
+/**
+ * A catalogue owner (A) and a member (B), both watching one shared listing.
+ *
+ * A holds `can_write_catalogue`; B does not, which is the default for every
+ * account the vault's SSO provisions. The listing is ONE row now — the two
+ * missions against it are what make it two people's business.
+ */
 async function twoUsers() {
   const db = await TestDb.create();
   await db.query("INSERT INTO users (id, handle) VALUES (2, 'other') ON CONFLICT DO NOTHING");
 
-  const mine = await store.upsertProduct(db, A, { name: 'Pitch Black ETB', msrp: 49.99 });
-  const theirs = await store.upsertProduct(db, B, { name: 'Pitch Black ETB', msrp: 999 });
-
-  const myListing = await store.addListing(db, A, {
-    productKey: mine.key, retailer: 'Target', externalId: '1012644666',
-    url: 'https://www.target.com/p/-/A-1012644666',
-  });
-  const theirListing = await store.addListing(db, B, {
-    productKey: theirs.key, retailer: 'Target', externalId: '1012644666',
+  const product = await store.upsertProduct(db, A, { name: 'Pitch Black ETB', msrp: 49.99 });
+  const listing = await store.addListing(db, A, {
+    productKey: product.key, retailer: 'Target', externalId: '1012644666',
     url: 'https://www.target.com/p/-/A-1012644666',
   });
 
-  const myMission = await store.upsertMission(db, A, { listingId: myListing.id, label: 'mine' });
+  const myMission = await store.upsertMission(db, A, { listingId: listing.id, label: 'mine' });
   const theirMission = await store.upsertMission(db, B, {
-    listingId: theirListing.id, label: 'theirs',
+    listingId: listing.id, label: 'theirs',
   });
 
-  return { db, mine, theirs, myListing, theirListing, myMission, theirMission };
+  return { db, product, listing, myMission, theirMission };
 }
 
-test('TWO PEOPLE CAN WATCH THE SAME PRODUCT AT THE SAME RETAILER', async () => {
-  // The precondition for everything else. Every uniqueness rule in the schema
-  // was written for one user and would otherwise stop the second person dead —
-  // or worse, have their add silently overwrite the first person's product.
-  const { db, mine, theirs, myListing, theirListing } = await twoUsers();
+test('TWO PEOPLE WATCH ONE SHARED LISTING — one read, two missions', async () => {
+  // INVERTED 1 Sep 2026. This used to assert two listings and two products,
+  // because each person catalogued their own. That is exactly the shape that
+  // made traffic scale with membership: one page, read once per member, at the
+  // retailers whose tolerance is the constraint on this whole system.
+  //
+  // Now there is one row for the shelf and one mission each. The intent of the
+  // test is unchanged — two people can both watch the thing — but the
+  // mechanism is the opposite of what it was.
+  const { db, listing, myMission, theirMission } = await twoUsers();
 
-  assert.notEqual(myListing.id, theirListing.id, 'two listings, not one shared');
-  assert.equal(mine.key, theirs.key, 'the same key, minted from the same name');
+  assert.equal((await store.listListings(db, A)).length, 1, 'one listing exists');
+  assert.equal((await store.listListings(db, B)).length, 1, 'and both people see it');
+  assert.notEqual(myMission.id, theirMission.id, 'two missions against it');
 
-  const myProducts = await store.listProducts(db, A);
-  const theirProducts = await store.listProducts(db, B);
-  assert.equal(myProducts.length, 1);
-  assert.equal(theirProducts.length, 1);
-  assert.equal(myProducts[0]!.msrp, 49.99, "and their MSRP did not overwrite mine");
-  assert.equal(theirProducts[0]!.msrp, 999);
+  assert.equal((await store.listMissions(db, A)).length, 1);
+  assert.equal((await store.listMissions(db, B)).length, 1);
+  assert.equal((await store.listMissions(db, A))[0]!.label, 'mine');
+  assert.equal((await store.listMissions(db, B))[0]!.label, 'theirs');
 });
 
-test('products: I cannot see theirs', async () => {
-  const { db } = await twoUsers();
+test('the catalogue is one catalogue — everybody reads the same rows', async () => {
+  const { db, product } = await twoUsers();
   const mine = await store.listProducts(db, A);
+  const theirs = await store.listProducts(db, B);
   assert.equal(mine.length, 1);
-  assert.equal(mine[0]!.msrp, 49.99);
+  assert.deepEqual(mine.map((x) => x.key), theirs.map((x) => x.key));
+  assert.equal(theirs[0]!.msrp, 49.99, 'one MSRP, curated once, for everyone');
+  assert.equal(product.key, mine[0]!.key);
 });
 
-test('products: I cannot delete theirs', async () => {
-  const { db, theirs } = await twoUsers();
-  await store.deleteProduct(db, A, theirs.key);
-  assert.equal((await store.listProducts(db, B)).length, 1, 'still theirs');
+test('A MEMBER CANNOT CHANGE THE CATALOGUE — curation is a role, not a race', async () => {
+  // B has no can_write_catalogue, which is the default for every account the
+  // vault provisions. Without this, any member could delete the product every
+  // other member's mission depends on.
+  const { db, product, listing } = await twoUsers();
+
+  assert.equal(await store.canWriteCatalogue(db, A), true, 'the owner curates');
+  assert.equal(await store.canWriteCatalogue(db, B), false, 'a member does not');
+
+  assert.equal(await store.deleteProduct(db, B, product.key), false, 'refused');
+  assert.equal((await store.listProducts(db, A)).length, 1, 'still there');
+
+  assert.equal(await store.deleteListing(db, B, listing.id), false, 'refused');
+  assert.equal((await store.listListings(db, A)).length, 1, 'still there');
 });
 
-test('listings: I cannot see or delete theirs', async () => {
-  const { db, theirListing } = await twoUsers();
-  assert.equal((await store.listListings(db, A)).length, 1);
-
-  await store.deleteListing(db, A, theirListing.id);
-  assert.equal((await store.listListings(db, B)).length, 1, 'still theirs');
-});
-
-test('listings: findListing does not reach across owners', async () => {
-  // The lookup quick-add uses. Reaching across here would attach one person's
-  // new mission to another person's listing.
-  const { db, myListing } = await twoUsers();
-  const found = await store.findListing(db, A, 'Target', '1012644666');
-  assert.equal(found?.id, myListing.id);
-});
-
-test('MISSIONS: I CANNOT ARM THEIRS', async () => {
-  // The one that matters most. A mission is the only thing authorised to spend,
-  // and upsertMission takes a listingId straight off the wire.
-  const { db, theirListing } = await twoUsers();
+test('A MEMBER CANNOT WRITE A READING — one bad reading would mislead everyone', async () => {
+  // The rule this replaces was "you may only write to a listing you own", and
+  // it was load-bearing: it stopped one person's agent telling another
+  // person's ARMED mission that a $500 box is in stock at $5. Shared listings
+  // dissolve it, so the gate became the writer instead of the row — and the
+  // stakes went UP, because a bad reading now reaches every member at once.
+  const { db, listing } = await twoUsers();
 
   await assert.rejects(
-    () => store.upsertMission(db, A, { listingId: theirListing.id, armed: true, ceiling: 500 }),
-    /does not belong to you/,
+    () => store.recordObservation(db, B, {
+      listingId: listing.id, state: 'in', confidence: 'exact', price: 5,
+    }),
+    /may not write readings/,
   );
 
   const theirs = await store.listMissions(db, B);
-  assert.equal(theirs[0]!.armed, false, 'still unarmed');
-  assert.equal(theirs[0]!.ceiling, null, 'and still with no ceiling');
+  assert.equal(theirs[0]!.state, 'unchecked', 'nothing was written');
+  assert.equal(theirs[0]!.price, null);
+});
+
+test('ONE READING SERVES EVERY MISSION ON THAT LISTING', async () => {
+  // The whole point of the shared catalogue: the owner's Phantom reads a page
+  // once and everybody watching it is told.
+  const { db, listing } = await twoUsers();
+
+  await store.recordObservation(db, A, {
+    listingId: listing.id, state: 'in', confidence: 'exact', price: 49.99,
+  });
+
+  for (const who of [A, B]) {
+    const m = (await store.listMissions(db, who))[0]!;
+    assert.equal(m.state, 'in', `user ${who} sees the reading`);
+    assert.equal(m.price, 49.99);
+  }
+});
+
+test('findListing finds the one shared listing, whoever asks', async () => {
+  const { db, listing } = await twoUsers();
+  assert.equal((await store.findListing(db, A, 'Target', '1012644666'))?.id, listing.id);
+  assert.equal((await store.findListing(db, B, 'Target', '1012644666'))?.id, listing.id);
+});
+
+test('MISSIONS: I CANNOT ARM THEIRS', async () => {
+  // The one that matters most, and the one the shared catalogue had to leave
+  // untouched. A mission is the only thing authorised to spend.
+  //
+  // The shape changed: arming against the SHARED listing is now legitimate —
+  // it arms MY mission, because a listing is a shelf and not a possession.
+  // What must remain impossible is that touching it reaches THEIR mission.
+  const { db, listing } = await twoUsers();
+
+  await store.upsertMission(db, A, { listingId: listing.id, armed: true, ceiling: 500 });
+
+  const mine = (await store.listMissions(db, A))[0]!;
+  assert.equal(mine.armed, true, 'my own mission armed, on the shared listing');
+
+  const theirs = (await store.listMissions(db, B))[0]!;
+  assert.equal(theirs.armed, false, 'still unarmed');
+  assert.equal(theirs.ceiling, null, 'and still with no ceiling');
 });
 
 test('missions: I cannot see, delete or trigger theirs', async () => {
@@ -115,32 +174,34 @@ test('missions: I cannot see, delete or trigger theirs', async () => {
   assert.equal((await store.listMissions(db, B)).length, 1, 'still theirs');
 });
 
-test('OBSERVATIONS: MY PHANTOM CANNOT REWRITE THEIR STOCK AND PRICE', async () => {
-  // A reading names a listing by id and arrives over the wire. If it could land
-  // on someone else's listing, one person's Phantom could tell another
-  // person's armed mission that a $500 item is in stock at $5.
-  const { db, theirListing } = await twoUsers();
+test('A MEMBER CANNOT ARM — watch-only until they have an agent of their own', async () => {
+  // Arming is a standing instruction to spend, carried out by a browser signed
+  // into a retail account with a card behind it. That machine is the owner's.
+  const { db, listing } = await twoUsers();
+
+  assert.equal(await store.canArm(db, A), true);
+  assert.equal(await store.canArm(db, B), false);
 
   await assert.rejects(
-    () => store.recordObservation(db, A, {
-      listingId: theirListing.id, state: 'in', confidence: 'exact', price: 5,
-    }),
-    /does not belong to you/,
+    () => store.upsertMission(db, B, { listingId: listing.id, armed: true, ceiling: 50 }),
+    /can watch but not buy/,
   );
 
-  const theirs = await store.listMissions(db, B);
-  assert.equal(theirs[0]!.state, 'unchecked', 'nothing was written');
-  assert.equal(theirs[0]!.price, null);
+  // …and watching is still theirs to do.
+  const watching = await store.upsertMission(db, B, { listingId: listing.id, label: 'watch me' });
+  assert.equal(watching.armed, false);
 });
 
-test('observations: the change log is per owner', async () => {
-  const { db, myListing } = await twoUsers();
+test('the change log belongs to the listing, so everyone watching sees it', async () => {
+  // It used to be per owner, because a listing was. One shelf, one history.
+  const { db, listing } = await twoUsers();
   await store.recordObservation(db, A, {
-    listingId: myListing.id, state: 'in', confidence: 'exact', price: 49.99,
+    listingId: listing.id, state: 'in', confidence: 'exact', price: 49.99,
   });
 
   assert.equal((await store.recentObservations(db, A)).length, 1);
-  assert.equal((await store.recentObservations(db, B)).length, 0);
+  assert.equal((await store.recentObservations(db, B)).length, 1,
+    'the member watching it sees the same change');
 });
 
 test('mission_runs: history does not leak, and cannot be written to theirs', async () => {
@@ -184,12 +245,19 @@ test('sources and discoveries: the hunt is per owner', async () => {
   assert.equal((await store.knownIds(db, B, 'mine')).size, 0);
 });
 
-test('the watchlist Phantom pulls is only its own', async () => {
-  const { db } = await twoUsers();
-  assert.equal((await store.watchlist(db, A)).length, 1);
-  assert.equal((await store.watchlist(db, B)).length, 1);
-  assert.notEqual((await store.watchlist(db, A))[0]!.listingId,
-                  (await store.watchlist(db, B))[0]!.listingId);
+test('THE WATCHLIST IS THE CATALOGUE — read once, for everybody', async () => {
+  // INVERTED. This used to prove each Phantom pulled only its own listings,
+  // which is precisely what made traffic scale with membership. The catalogue
+  // is now one list, read once, and the readings serve every mission on it.
+  const { db, listing } = await twoUsers();
+  const list = await store.watchlist(db, A);
+  assert.equal(list.length, 1, 'one shelf, one entry — not one per member');
+  assert.equal(list[0]!.listingId, listing.id);
+  assert.deepEqual(
+    (await store.watchlist(db, B)).map((w) => w.listingId),
+    list.map((w) => w.listingId),
+    'and it is the same list whoever asks',
+  );
 });
 
 test('A PHANTOM TOKEN IDENTIFIES EXACTLY ONE USER, BY HASH', async () => {

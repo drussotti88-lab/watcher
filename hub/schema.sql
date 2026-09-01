@@ -748,3 +748,132 @@ CREATE TABLE IF NOT EXISTS acquisitions (
   created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS acquisitions_user_idx ON acquisitions (user_id, status, created_at DESC);
+
+-- ---------------------------------------------------------------------------
+-- THE SHARED CATALOGUE
+--
+-- Decided 1 Sep 2026. The owner discovers and curates products and retailers;
+-- members pick from the active catalogue to build their own missions. Readings
+-- are taken ONCE, by the owner's Phantom, and serve everyone watching.
+--
+-- ── Why ────────────────────────────────────────────────────────────────────
+--
+-- "Is this in stock right now" has exactly one answer in the world. Storing it
+-- per user meant READING it per user, so traffic scaled linearly with
+-- membership at the three retailers whose tolerance is the binding constraint
+-- on this whole system. That does not degrade gracefully; it gets everyone
+-- blocked. Shared, the traffic is flat however many people watch.
+--
+-- ── The line ───────────────────────────────────────────────────────────────
+--
+-- Facts about the world are shared. Decisions about money stay private. Every
+-- table that can spend keeps its user_id and every ownership test it had:
+-- missions, settings, mission_runs, authorisations, acquisitions.
+--
+-- user_id is deliberately LEFT ON the shared tables and simply stops being
+-- filtered on. It becomes provenance — who first catalogued this. A column
+-- that is ignored can be re-honoured; a dropped column takes its data with it.
+-- ---------------------------------------------------------------------------
+
+-- Who may write to the catalogue. Defaults FALSE, so an account created by any
+-- route — including the vault's SSO — is a reader until somebody deliberately
+-- says otherwise. This replaces "you may write to listings you own", which
+-- stops meaning anything once listings are shared.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS can_write_catalogue BOOLEAN NOT NULL DEFAULT false;
+
+-- May this account instruct a machine to spend? Its own permission, not a
+-- synonym for the one above: a trusted member could one day run their own
+-- agent and buy on their own card without ever earning the right to edit the
+-- catalogue everyone depends on. Members are watch-only until then.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS can_arm BOOLEAN NOT NULL DEFAULT false;
+
+-- The first user is the catalogue owner and the only one with a buying agent;
+-- that is what user 1 has always been.
+UPDATE users SET can_write_catalogue = true, can_arm = true WHERE id = 1;
+
+-- Identity becomes canonical rather than per-person.
+--
+-- Same dance as the per-owner migration above, in reverse: a unique index
+-- cannot be dropped while a foreign key depends on it, so release first, swap
+-- the identities, then re-point. Getting this order wrong fails loudly rather
+-- than silently, which is the one mercy of foreign keys.
+
+-- 1. Release the composite foreign keys that name (user_id, key).
+ALTER TABLE aliases     DROP CONSTRAINT IF EXISTS aliases_owner_product_fkey;
+ALTER TABLE listings    DROP CONSTRAINT IF EXISTS listings_owner_product_fkey;
+ALTER TABLE discoveries DROP CONSTRAINT IF EXISTS discoveries_owner_source_fkey;
+
+-- 2. Swap per-owner identities for canonical ones.
+DROP INDEX IF EXISTS products_owner_key_idx;
+CREATE UNIQUE INDEX IF NOT EXISTS products_key_idx ON products (key);
+
+DROP INDEX IF EXISTS listings_owner_retailer_external_idx;
+CREATE UNIQUE INDEX IF NOT EXISTS listings_retailer_external_idx
+  ON listings (retailer, external_id);
+
+DROP INDEX IF EXISTS aliases_owner_kind_retailer_value_idx;
+CREATE UNIQUE INDEX IF NOT EXISTS aliases_kind_retailer_value_idx
+  ON aliases (kind, retailer, value);
+
+DROP INDEX IF EXISTS discoveries_owner_source_external_idx;
+CREATE UNIQUE INDEX IF NOT EXISTS discoveries_source_external_idx
+  ON discoveries (source_id, external_id);
+
+-- 3. Re-point the foreign keys at the canonical identities.
+--
+-- sources stay per-owner — they are the owner's hunt, not a shared fact — so
+-- discoveries keeps its composite key to them.
+DO $do$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'aliases_product_fkey') THEN
+    ALTER TABLE aliases ADD CONSTRAINT aliases_product_fkey
+      FOREIGN KEY (product_key) REFERENCES products (key) ON DELETE CASCADE;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'listings_product_fkey') THEN
+    ALTER TABLE listings ADD CONSTRAINT listings_product_fkey
+      FOREIGN KEY (product_key) REFERENCES products (key) ON DELETE CASCADE;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'discoveries_owner_source_fkey') THEN
+    ALTER TABLE discoveries ADD CONSTRAINT discoveries_owner_source_fkey
+      FOREIGN KEY (user_id, source_id) REFERENCES sources (user_id, id) ON DELETE CASCADE;
+  END IF;
+END $do$;
+
+-- THE BLOCKER. `UNIQUE (listing_id)` was written when a listing belonged to one
+-- person, so it read as "one mission per listing" and meant "one mission per
+-- listing per person". Shared, it means the second member to watch a product is
+-- rejected outright. The rule that was always intended is one mission per
+-- person per listing.
+ALTER TABLE missions DROP CONSTRAINT IF EXISTS missions_listing_id_key;
+CREATE UNIQUE INDEX IF NOT EXISTS missions_owner_listing_idx
+  ON missions (user_id, listing_id);
+
+-- ---------------------------------------------------------------------------
+-- Product requests — a member asking for something the catalogue lacks
+--
+-- The cost of a curated catalogue is that a member cannot watch what nobody has
+-- catalogued. This is the path back: they paste a link, the owner approves it
+-- into the catalogue, and everyone gets it. A request is a suggestion, never a
+-- write — approving is what creates catalogue rows, and only a catalogue writer
+-- may approve.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS product_requests (
+  id           BIGSERIAL PRIMARY KEY,
+  -- Who asked. Kept even after approval, so the person can be told.
+  user_id      BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  url          TEXT NOT NULL,
+  note         TEXT NOT NULL DEFAULT '',
+  -- pending → approved | declined. Decided rows are kept, not deleted: the
+  -- record of "we said no to this, once" is what stops it being re-asked and
+  -- re-considered forever.
+  status       TEXT NOT NULL DEFAULT 'pending',
+  -- What it became, when approved.
+  listing_id   BIGINT REFERENCES listings(id) ON DELETE SET NULL,
+  decided_at   TIMESTAMPTZ,
+  decided_note TEXT NOT NULL DEFAULT '',
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  -- One live ask per person per URL. A member pressing the button twice is one
+  -- request, not a queue of identical ones for somebody to wade through.
+  UNIQUE (user_id, url)
+);
+CREATE INDEX IF NOT EXISTS product_requests_pending_idx
+  ON product_requests (status, created_at DESC);
