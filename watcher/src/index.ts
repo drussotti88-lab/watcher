@@ -658,11 +658,41 @@ async function runPasses(once: boolean): Promise<void> {
     return true;
   };
 
+  /*
+   * The self-watchdog.
+   *
+   * The supervisor in the launcher restarts anything that EXITS. It cannot see
+   * a hang, and on 1 Sep 2026 that was the whole problem: the process sat
+   * alive and wedged for an hour with a drop running, looking from the outside
+   * exactly like a busy one.
+   *
+   * So the process watches itself. Every cycle stamps a heartbeat; if one goes
+   * unstamped for long enough this exits — loudly, with a code — and the
+   * supervisor does what it is for. Turning a hang into a crash is the whole
+   * trick, because a crash is a thing that gets fixed automatically.
+   *
+   * Ten minutes. A pass is bounded at 90% of the interval plus one 45-second
+   * check ceiling, and a sweep is longer but still minutes; past ten it is not
+   * slow, it is stuck.
+   */
+  let heartbeat = Date.now();
+  const STALL_MS = 10 * 60_000;
+  const watchdog = setInterval(() => {
+    const quiet = Date.now() - heartbeat;
+    if (quiet < STALL_MS) return;
+    console.error(
+      `\n  STUCK: no pass has completed for ${Math.round(quiet / 60000)} minutes. ` +
+        `Exiting so the launcher restarts a working one.\n`,
+    );
+    process.exit(3);
+  }, 30_000);
+
   try {
     do {
       // When this cycle began. The sleep at the bottom is measured from HERE,
       // not from when the work finished — see the note there.
       const cycleStart = Date.now();
+      heartbeat = cycleStart;
 
       // Fail open on watching. A Hub that is briefly cold must not stop us
       // looking at pages — we keep watching the last list it gave us, and the
@@ -889,6 +919,7 @@ async function runPasses(once: boolean): Promise<void> {
       if (rest > 0) await sleep(rest);
     } while (!stopped);
   } finally {
+    clearInterval(watchdog);
     await activity.flush(true);
     await browser.close();
     // Only if it is still ours: an instance that lost the race must not
