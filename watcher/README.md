@@ -1,4 +1,4 @@
-# Watcher
+# Phantom
 
 Watches three retailers from **your machine, on your connection**, because that
 is the only way these three can be watched at all. Pokémon Center, Target and
@@ -28,7 +28,7 @@ not disabled, not gated, unwritten.
 ```
 npm run setup     first run: checks the machine, asks for the Hub and a token
 npm run watch     the real thing. Leave it running
-npm run stop      ask a running Watcher to stop cleanly, from anywhere
+npm run stop      ask a running Phantom to stop cleanly, from anywhere
 npm run once      one pass, then exit. The first thing to try when something looks wrong
 npm run scan      read a Target search URL and sort it into what is worth watching
 npm run discover  the same scan, remembered, reported to the Hub

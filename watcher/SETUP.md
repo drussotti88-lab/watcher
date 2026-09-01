@@ -1,4 +1,4 @@
-# Setting up the Watcher
+# Setting up Phantom
 
 You have been given three things: a **web address** for the app, a **name and
 password** to sign in with, and a **token** for this program. Keep the password
@@ -11,13 +11,13 @@ Two halves.
 The **app** is a website — that's the address you were given, and it works on
 your phone. It holds your watchlist and remembers what happened.
 
-The **Watcher** is this folder, and it runs on your computer. It opens a Chrome
+The **Phantom** is this folder, and it runs on your computer. It opens a Chrome
 window and looks at product pages. It has to run on your machine rather than on
 a server because Target, Walmart and Pokémon Center all refuse a datacentre
 outright — a real browser on a home connection is the only thing they answer.
 
-**So: nothing in your app updates unless the Watcher is running.** An empty
-dashboard almost always means the Watcher isn't on.
+**So: nothing in your app updates unless Phantom is running.** An empty
+dashboard almost always means Phantom isn't on.
 
 ## Before you start
 
@@ -54,7 +54,7 @@ return.
 
 ## Optional — starting it automatically
 
-**4 — Start automatically.** Your app only updates while the Watcher is
+**4 — Start automatically.** Your app only updates while Phantom is
 running, so after a restart it's off until somebody notices, and restocks often
 land at three in the morning. This makes it start when you log in.
 
@@ -70,7 +70,7 @@ log in, as you. It still cannot spend money; there's no checkout in this
 program at all.
 
 **5 — Stop starting automatically** undoes it, and so does deleting that file
-yourself. Neither one stops a Watcher that's already running — use **3** for
+yourself. Neither one stops a Phantom that's already running — use **3** for
 that.
 
 If you'd rather decide day by day, skip both and keep using **2**.
@@ -116,7 +116,7 @@ announces itself there.
 
 If none of that fits, run `npm run once` in the folder — one pass, then it exits,
 and it prints what it saw. That's usually enough to tell whether the problem is
-the Watcher, the app, or the shop having a bad morning.
+Phantom, the app, or the shop having a bad morning.
 
 ## What it will not do
 

@@ -1,10 +1,10 @@
 @echo off
-REM Optional. Adds a startup entry so the Watcher runs when you log in.
+REM Optional. Adds a startup entry so Phantom runs when you log in.
 cd /d "%~dp0"
 set "HERE=%CD%"
 set "STARTUP=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup"
-set "ENTRY=%STARTUP%\Pokemon Watcher.bat"
-title Start the Watcher automatically
+set "ENTRY=%STARTUP%\Phantom.bat"
+title Start Phantom automatically
 
 echo.
 echo   ================================================================
@@ -13,11 +13,11 @@ echo   ================================================================
 echo.
 echo   WHAT THIS DOES
 echo     Puts one small file in your own Startup folder. Windows runs
-echo     whatever is in there when you log in, so the Watcher starts on
+echo     whatever is in there when you log in, so Phantom starts on
 echo     its own instead of you double-clicking file 2 every time.
 echo.
 echo   WHY YOU MIGHT WANT IT
-echo     Your app only updates while the Watcher is running. After a
+echo     Your app only updates while Phantom is running. After a
 echo     restart it is off until somebody notices. Restocks often land
 echo     at three in the morning.
 echo.
@@ -32,7 +32,7 @@ echo.
 echo   TO UNDO
 echo     Run "5 - Stop starting automatically", or just delete the file.
 echo.
-echo   The Watcher opens a Chrome window while it runs. That window is
+echo   Phantom opens a Chrome window while it runs. That window is
 echo   signed out on purpose and stays open. If you would rather decide
 echo   for yourself each day, say no here and keep using file 2.
 echo.
@@ -43,7 +43,7 @@ if /i not "%ANSWER%"=="yes" goto cancelled
 
 (
   echo @echo off
-  echo REM Starts the Pokemon Watcher at login.
+  echo REM Starts the Pokemon Phantom at login.
   echo REM Created by "4 - Start automatically". Delete this file to undo,
   echo REM or run "5 - Stop starting automatically" in the folder below.
   echo cd /d "%HERE%"

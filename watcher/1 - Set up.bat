@@ -1,13 +1,13 @@
 @echo off
 REM Double-click this once, the first time.
 REM
-REM It installs what the Watcher needs and then asks for the two things your
+REM It installs what Phantom needs and then asks for the two things your
 REM Hub owner gave you. Nothing here touches anything outside this folder.
 cd /d "%~dp0"
-title Watcher setup
+title Phantom setup
 
 echo.
-echo   Installing what the Watcher needs. This takes a minute or two.
+echo   Installing what Phantom needs. This takes a minute or two.
 echo.
 call npm install
 if errorlevel 1 goto failed

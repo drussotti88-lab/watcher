@@ -369,14 +369,14 @@ test('one setting can be changed without clearing the other', async () => {
  * handler, and asserts the line survives the whole round trip. If either side
  * changes the shape, this stops compiling or stops passing.
  */
-const watcherSrc = resolve(import.meta.dirname, '..', '..', 'watcher', 'src');
-const haveWatcher = existsSync(join(watcherSrc, 'activity.ts'));
+const phantomSrc = resolve(import.meta.dirname, '..', '..', 'watcher', 'src');
+const havePhantom = existsSync(join(phantomSrc, 'activity.ts'));
 
-test('THE WATCHER OWN CODE CAN POST A LOG LINE THIS HUB ACCEPTS', async (t) => {
-  if (!haveWatcher) return t.skip('Phantom is not checked out beside the Hub');
+test('THE PHANTOM OWN CODE CAN POST A LOG LINE THIS HUB ACCEPTS', async (t) => {
+  if (!havePhantom) return t.skip('Phantom is not checked out beside the Hub');
 
-  const { Activity } = await import(join(watcherSrc, 'activity.ts'));
-  const { Hub } = await import(join(watcherSrc, 'hub.ts'));
+  const { Activity } = await import(join(phantomSrc, 'activity.ts'));
+  const { Hub } = await import(join(phantomSrc, 'hub.ts'));
 
   const db = await TestDb.create();
   const handler = createHandler(db, env);
@@ -416,7 +416,7 @@ test('THE WATCHER OWN CODE CAN POST A LOG LINE THIS HUB ACCEPTS', async (t) => {
   assert.deepEqual(exported.body.warnings, []);
 });
 
-test('THE PRE-ORDER POLICY REACHES THE WATCHER, OR IT CANNOT ENFORCE IT', async () => {
+test('THE PRE-ORDER POLICY REACHES THE PHANTOM, OR IT CANNOT ENFORCE IT', async () => {
   // judge() declines a pre-order on this field. If the Hub stopped sending it
   // Phantom would read undefined, which is not 'allow' — so it would fail
   // safe — but it would also silently ignore a mission set to allow them.

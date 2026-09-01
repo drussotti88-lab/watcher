@@ -1,7 +1,7 @@
 @echo off
 REM Double-click to start watching. Leave the window open.
 cd /d "%~dp0"
-title Watcher - leave this open
+title Phantom - leave this open
 
 echo.
 echo   Starting. A Chrome window will open and stay open - that is the point.
@@ -12,6 +12,6 @@ echo.
 call npm run watch
 
 echo.
-echo   The Watcher has stopped.
+echo   Phantom has stopped.
 echo.
 pause

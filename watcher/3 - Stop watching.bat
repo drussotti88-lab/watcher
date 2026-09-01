@@ -1,11 +1,11 @@
 @echo off
-REM Double-click to stop the Watcher cleanly.
+REM Double-click to stop Phantom cleanly.
 REM
 REM Closing the other window instead kills it mid-pass: the last of its log is
 REM lost and Chrome comes back next time complaining it did not shut down
 REM correctly.
 cd /d "%~dp0"
-title Stopping the Watcher
+title Stopping Phantom
 
 call npm run stop
 
