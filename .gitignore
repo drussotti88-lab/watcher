@@ -42,3 +42,12 @@ __pycache__/
 # Delete these files once you have passed the credential on.
 *-watcher-token.txt
 *-password.txt
+
+# Working files that a stray `git add -A` must never sweep into a public repo.
+# vault-owner.json in particular holds the vault side of the bridge.
+vault-owner.json
+probe-stores.json
+dna-card-vault-ro/
+ship.ps1
+commitmsg.txt
+*.tgz
