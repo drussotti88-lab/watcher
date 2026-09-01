@@ -257,10 +257,13 @@ export function readTargetBodies(
   if (shippingStatus) notes.push(`shipping ${shippingStatus}`);
   if (quantity !== null) notes.push(`atp ${quantity}`);
   if (orderLimit !== null) notes.push(`limit ${orderLimit}`);
-  if (streetDate) {
-    notes.push(
-      unreleased ? `on sale ${streetDate} (${daysOut}d away)` : `street date ${streetDate}`,
-    );
+  // Only dates that are still ahead (or today) are information. Target keeps
+  // publishing a street date long after it has passed — Chaos Rising carried
+  // "2026-05-22" months later — and echoing it pinned a dead date to the card
+  // on every check. What a past date MEANS ("released, and still not in
+  // stock") is already said by the state.
+  if (streetDate && daysOut !== null && daysOut >= 0) {
+    notes.push(daysOut > 0 ? `on sale ${streetDate} (${daysOut}d away)` : 'on sale today');
   }
   // Only worth a note when it is not zero. Zero is the entire history of this
   // field so far, and a note on every line saying so is noise.
@@ -282,7 +285,10 @@ export function readTargetBodies(
     seller,
     preOrder: {
       isPreOrder: state === 'in' && daysOut !== null && daysOut > 0,
-      releaseDate: streetDate,
+      // Same rule as the note: a past street date is history, not a schedule.
+      // Reporting it would overwrite the Hub's stored date with last spring's
+      // on every single check, forever.
+      releaseDate: daysOut !== null && daysOut >= 0 ? streetDate : null,
     },
     imageUrl,
     note: notes.join('; '),

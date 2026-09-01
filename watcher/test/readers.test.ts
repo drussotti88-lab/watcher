@@ -395,13 +395,24 @@ test('AN UNRELEASED ITEM IS NOT CALLED A PRE-ORDER', async () => {
   assert.equal(read.state, 'out');
 });
 
-test('once the street date has passed it is no longer a countdown', async () => {
-  // Same item, read a month later. The date is history, not a promise, and
-  // "on sale in -14 days" would be nonsense on the card.
+test('A PAST STREET DATE IS HISTORY — dropped from the note AND the report', async () => {
+  // Same item, read a month later. Target keeps publishing the date long after
+  // it has passed (Chaos Rising carried 22 May into September), and because
+  // every check overwrites the Hub's stored date, echoing it pinned a dead
+  // date to the card forever. What a past date means — released, still not in
+  // stock — the state already says.
   const read = readTargetBodies([streetFixture], '1010892076', Date.parse('2026-09-30T12:00:00Z'));
-  assert.equal(read.preOrder.releaseDate, '2026-09-16', 'the date is still worth keeping');
-  assert.match(read.note, /street date 2026-09-16/);
-  assert.ok(!read.note.includes('away'), 'but not counted down to');
+  assert.equal(read.preOrder.releaseDate, null, 'not reported, so it cannot overwrite the Hub');
+  assert.ok(!read.note.includes('street date'), 'and not repeated on the card');
+  assert.ok(!read.note.includes('away'));
+});
+
+test('release DAY still counts — today is a schedule, not history', async () => {
+  // The hours logic wakes the Watcher on release day; a reader that nulled
+  // today's date would sleep through the one morning that matters.
+  const read = readTargetBodies([streetFixture], '1010892076', Date.parse('2026-09-16T08:00:00Z'));
+  assert.equal(read.preOrder.releaseDate, '2026-09-16');
+  assert.match(read.note, /on sale today/);
 });
 
 test('the purchase limit is read, and it is what the quantity is clamped to', async () => {
