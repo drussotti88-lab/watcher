@@ -329,6 +329,9 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       // stops a submission feeling like a hole in the ground.
       const requests = await store.listProductRequests(db, userId);
       const canCurate = await store.canWriteCatalogue(db, userId);
+      // Is the machine still there? Silence is the failure this cannot afford,
+      // and it is the one that looks like nothing at all.
+      const agentSeenAt = await store.agentLastSeen(db, userId);
       // What each shop can actually do, from the same table the vault's perks
       // page reads. The front door tells a new member which retailers are
       // watched — and a hard-coded list of three would go on promising a shop
@@ -341,7 +344,7 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       return json({
         missions, runs, changes, products, listings, settings, discoveries, sweep, now, you,
         authorisations, committed, queues, stockLoads, acquisitions, requests, canCurate,
-        capabilities: shopStatus,
+        capabilities: shopStatus, agentSeenAt,
       });
     }
 

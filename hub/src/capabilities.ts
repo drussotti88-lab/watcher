@@ -153,32 +153,60 @@ export const RETAILERS: readonly RetailerCaps[] = [
     key: 'pokemon-center',
     name: 'Pokémon Center',
     abilities: {
-      // Downgraded from 'live' on 1 Sep 2026. The reader is unchanged and
-      // correct; the shop stopped answering. See `blocked` below — this table
-      // is what the vault's perks page reads, and a page that promises
-      // watching we cannot currently do is the one failure mode it exists to
-      // prevent.
-      watch: 'partial',
-      discover: 'partial',
+      // Downgraded to 'partial' at 16:50 UTC on 1 Sep 2026 when the shop went
+      // behind Imperva, and restored at 19:50 the same day when it came back —
+      // by itself, with nothing changed. The stand-down did its job and the
+      // first clean read forgave the penalty.
+      //
+      // Left at 'live' rather than hedged forever: three hours of a wall is
+      // not a permanent capability change, and a table that never recovers
+      // from an outage is a table nobody trusts in either direction.
+      watch: 'live',
+      discover: 'live',
       releaseDates: 'partial',
       // JSON-LD carries in-stock/out-of-stock and nothing else. There is no
       // quantity to watch even in principle.
       stagedStock: 'none',
-      // A waiting room cannot be spotted on a page that never renders.
-      queueAlarm: 'partial',
+      queueAlarm: 'live',
       sellerCheck: 'none',
       autoCheckout: 'planned',
     },
-    note: 'First-party only, so there is no reseller to detect. Availability is a yes/no — no quantity exists to warn on. Currently behind a bot wall (see below).',
-    blocked: {
-      since: '2026-09-01',
-      what:
-        'Pokémon Center moved behind Imperva at 16:50 UTC on 1 Sep 2026. Product pages return an empty ' +
-        'document, so nothing can be read. Phantom names the wall and stands down rather than knocking; ' +
-        'it does not attempt to get past one, and it will not. Watching resumes by itself if the wall lifts.',
-    },
+    note:
+      'First-party only, so there is no reseller to detect. Availability is a yes/no — no quantity ' +
+      'exists to warn on. Went behind a bot wall for three hours on 1 Sep 2026 and recovered on its ' +
+      'own; Phantom names a wall and stands down rather than knocking, and never tries to get past one.',
   },
 ];
+
+/**
+ * Ways a retailer's entry could be lying.
+ *
+ * Extracted so the rule is testable against a shop that IS blocked, not only
+ * against whatever the table happens to say today. The first version of this
+ * check looped over the real retailers looking for `blocked` — and the day
+ * Pokémon Center recovered, it started passing by having nothing to look at.
+ * A guard that is satisfied by an empty list is a comment.
+ */
+export function contradictions(r: RetailerCaps): string[] {
+  const problems: string[] = [];
+  if (!r.blocked) return problems;
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(r.blocked.since)) {
+    problems.push(`${r.name}: blocked.since must be a date`);
+  }
+  if (r.blocked.what.trim().length < 40) {
+    problems.push(`${r.name}: say what happened`);
+  }
+  // Everything here needs the page to render. Claiming any of them works while
+  // the shop is refusing to answer is the exact lie this table exists to stop
+  // the vault's perks page telling.
+  for (const ability of ['watch', 'discover', 'queueAlarm']) {
+    if ((r.abilities[ability] ?? 'none') === 'live') {
+      problems.push(`${r.name} is blocked but still claims ${ability} works`);
+    }
+  }
+  return problems;
+}
 
 /** Everything that is not about one shop. */
 export interface Feature {

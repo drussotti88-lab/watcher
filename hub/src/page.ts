@@ -725,6 +725,17 @@ ${FONTS}<style>${STYLE}</style></head>
     <div id="money-banner-list"></div>
   </div>
 
+  <!-- Phantom stopped talking.
+       On 1 Sep 2026 it died at 19:14 and nobody noticed for thirty-five
+       minutes, because a watcher that is OFF looks exactly like a watcher
+       whose products have not changed: the readings all stay put and only
+       their age moves. This is the one failure the system cannot afford to
+       report by omission. -->
+  <div class="card banner alert" id="silence-banner" hidden>
+    <div class="name">Phantom has stopped reporting</div>
+    <div class="meta" id="silence-detail"></div>
+  </div>
+
   <div class="card banner alert" id="paused-banner" hidden>
     <div class="name">Everything is paused</div>
     <div class="meta">
@@ -2410,6 +2421,7 @@ function render() {
   renderMoney();
   const banner = document.getElementById('paused-banner');
   banner.hidden = !st.paused;
+  renderSilence();
 
   // The queue alarm. A waiting room at a shop means a drop is likely live
   // RIGHT NOW, and the one useful thing this app can do with that is put it
@@ -3168,6 +3180,41 @@ function maybeOpenWizard() {
   try { seen = localStorage.getItem(WIZ_SEEN) === '1'; } catch (e) { seen = false; }
   if (seen) return;
   openWizard(0);
+}
+
+/**
+ * Has the machine gone quiet?
+ *
+ * The signal is the activity log, not the readings. Phantom writes a line
+ * every pass INCLUDING when it is resting outside watching hours — so silence
+ * means the process is not running, rather than that it has nothing to do, and
+ * this cannot cry wolf every night when the schedule closes.
+ *
+ * Ten minutes, against a pass every ninety seconds. Generous on purpose: the
+ * log is buffered and flushed per pass, a slow pass can run minutes long, and
+ * a banner that flickers is a banner people stop reading. It states the actual
+ * time it last heard anything, so the judgement is not only ours.
+ */
+const SILENCE_MS = 10 * 60 * 1000;
+
+function renderSilence() {
+  const banner = document.getElementById('silence-banner');
+  if (!banner) return;
+  const seen = DATA.agentSeenAt;
+  // No activity at all is a new account, not an outage. Saying "stopped
+  // reporting" to somebody who has never started it is a lie with an
+  // exclamation mark on it.
+  if (!seen) { banner.hidden = true; return; }
+
+  const quietFor = Date.now() - new Date(seen).getTime();
+  if (!(quietFor > SILENCE_MS)) { banner.hidden = true; return; }
+
+  banner.hidden = false;
+  document.getElementById('silence-detail').textContent =
+    'Nothing has been heard from the machine since ' +
+    new Date(seen).toLocaleTimeString() + ' (' + ago(seen) + '). ' +
+    'Nothing is being watched until it is running again — check that the ' +
+    'Phantom window is still open on the machine that watches.';
 }
 
 function renderRequests() {

@@ -2976,3 +2976,32 @@ export async function pendingRequestCount(db: Sql, userId: number): Promise<numb
   );
   return Number(rows[0]?.n ?? 0);
 }
+
+/**
+ * When this account's Phantom was last heard from.
+ *
+ * ── Why this exists ─────────────────────────────────────────────────────────
+ *
+ * On 1 Sep 2026 Phantom died at 19:14 and nobody noticed for thirty-five
+ * minutes. Nothing was broken enough to say so: the missions all still showed
+ * their last reading, the numbers just got older, and "checked 3m ago" turning
+ * into "checked 35m ago" is only alarming if you already know what normal is.
+ * A watcher that is off looks exactly like a watcher whose products have not
+ * changed — which is the one failure this whole system cannot afford.
+ *
+ * ── Why the activity log, and not a heartbeat column ────────────────────────
+ *
+ * Because it needs no migration and it is already true. Phantom writes an
+ * activity line every pass, and — this is the part that matters — it writes
+ * one when it is RESTING too ("outside watching hours"). So silence here means
+ * the process is not running, not that it has nothing to do, and the banner
+ * cannot cry wolf every night at the hour the schedule closes.
+ */
+export async function agentLastSeen(db: Sql, userId: number): Promise<string | null> {
+  const rows = await db.query<{ at: string | null }>(
+    'SELECT max(at) AS at FROM activity WHERE user_id = $1',
+    [userId],
+  );
+  const at = rows[0]?.at;
+  return at ? String(at) : null;
+}

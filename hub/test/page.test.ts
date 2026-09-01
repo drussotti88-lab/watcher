@@ -2958,3 +2958,56 @@ test('ANYBODY CAN WATCH A LISTING SOMEBODY ELSE CATALOGUED', async () => {
   const call = h.calls.find((c) => c.method === 'POST' && c.path === '/api/missions');
   assert.equal((call!.body as any).listingId, 10);
 });
+
+// ── Silence ──────────────────────────────────────────────────────────────────
+//
+// Phantom died at 19:14 on 1 Sep 2026 and nobody noticed for thirty-five
+// minutes. Nothing looked wrong: every mission still showed its last reading
+// and only the age moved, and "checked 3m ago" becoming "checked 35m ago" is
+// alarming only to somebody who already knows what normal is.
+//
+// A watcher that is OFF looks exactly like a watcher whose products have not
+// changed. That is the one failure this system cannot report by omission.
+
+const minsAgo = (n: number): string => new Date(Date.now() - n * 60_000).toISOString();
+
+test('A MACHINE THAT HAS STOPPED REPORTING SAYS SO, LOUDLY', async () => {
+  const h = await boot({ ...DASHBOARD, agentSeenAt: minsAgo(35) });
+  const banner = $(h, '#silence-banner');
+  assert.equal(banner.hidden, false);
+  assert.match($(h, '#silence-detail').textContent, /Nothing is being watched/);
+  assert.match($(h, '#silence-detail').textContent, /35m ago|3[0-9]m ago/);
+});
+
+test('a machine that reported a moment ago is not accused of anything', async () => {
+  const h = await boot({ ...DASHBOARD, agentSeenAt: minsAgo(1) });
+  assert.equal($(h, '#silence-banner').hidden, true);
+});
+
+test('the window is generous, because a banner that flickers stops being read', async () => {
+  // A pass runs every 90s, the log is buffered and flushed per pass, and a
+  // slow pass can run minutes long. Five minutes of quiet is not an outage.
+  const h = await boot({ ...DASHBOARD, agentSeenAt: minsAgo(5) });
+  assert.equal($(h, '#silence-banner').hidden, true);
+});
+
+test('AN ACCOUNT THAT HAS NEVER STARTED IT IS NOT AN OUTAGE', async () => {
+  // Saying "Phantom has stopped reporting" to somebody who has never run it is
+  // a lie with an exclamation mark on it — and it is the first thing a new
+  // member would see.
+  const h = await boot({ ...DASHBOARD, agentSeenAt: null });
+  assert.equal($(h, '#silence-banner').hidden, true);
+});
+
+test('resting is not silence — the heartbeat is the log, not the readings', async () => {
+  // Phantom writes an activity line when it is asleep outside watching hours,
+  // which is exactly why the signal is the activity log and not the newest
+  // reading. Otherwise this would cry wolf every night at the hour the
+  // schedule closes, and by morning nobody would look at it.
+  const h = await boot({
+    ...DASHBOARD,
+    settings: { ...(DASHBOARD as any).settings, activeFrom: '01:00', activeUntil: '05:00' },
+    agentSeenAt: minsAgo(2),
+  });
+  assert.equal($(h, '#silence-banner').hidden, true);
+});

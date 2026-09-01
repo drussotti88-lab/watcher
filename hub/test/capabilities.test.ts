@@ -14,7 +14,7 @@ import { join } from 'node:path';
 import { TestDb } from './pg.ts';
 import { createHandler } from '../src/app.ts';
 import {
-  ABILITIES, RETAILERS, FEATURES, capabilityTable, statusOf,
+  ABILITIES, RETAILERS, FEATURES, capabilityTable, statusOf, contradictions,
   type Status,
 } from '../src/capabilities.ts';
 import type { Env } from '../src/types.ts';
@@ -181,16 +181,34 @@ test('A BLOCKED SHOP CANNOT ALSO CLAIM IT IS WORKING', () => {
   // The table exists so the vault's perks page stays honest. Saying a shop is
   // blocked in prose while its abilities still read 'live' would sell exactly
   // the thing that is not happening — and prose is the half nobody renders.
-  for (const r of RETAILERS) {
-    if (!r.blocked) continue;
-    assert.match(r.blocked.since, /^\d{4}-\d{2}-\d{2}$/, `${r.name}: blocked.since needs a date`);
-    assert.ok(r.blocked.what.length > 40, `${r.name}: say what happened`);
-    for (const ability of ['watch', 'discover', 'queueAlarm']) {
-      assert.notEqual(
-        statusOf(r.key, ability),
-        'live',
-        `${r.name} is blocked but still claims ${ability} works`,
-      );
-    }
-  }
+  const problems = RETAILERS.flatMap(contradictions);
+  assert.deepEqual(problems, [], problems.join('\n'));
+});
+
+test('and the check is not satisfied by there being nothing to check', () => {
+  // Pokémon Center was blocked for three hours on 1 Sep 2026 and then
+  // recovered. The moment it did, the test above started passing by having no
+  // blocked shop to look at — which is how a guard becomes a comment.
+  //
+  // So the rule is exercised against a shop that IS blocked, whatever the real
+  // table says today.
+  const liar = {
+    key: 'nowhere',
+    name: 'Nowhere',
+    abilities: { watch: 'live', discover: 'live', queueAlarm: 'live' },
+    blocked: { since: '2026-09-01', what: 'behind a wall since this afternoon and unreadable' },
+  } as const;
+  const found = contradictions(liar as never);
+  assert.equal(found.length, 3, found.join('\n'));
+  assert.ok(found.every((p) => /still claims/.test(p)));
+
+  // A blocked entry with no date, and no explanation, is caught too.
+  const vague = { ...liar, abilities: { watch: 'partial' }, blocked: { since: 'soon', what: 'bad' } };
+  const sloppy = contradictions(vague as never);
+  assert.ok(sloppy.some((p) => /must be a date/.test(p)));
+  assert.ok(sloppy.some((p) => /say what happened/.test(p)));
+
+  // And an honest one is clean.
+  const honest = { ...liar, abilities: { watch: 'partial', discover: 'partial', queueAlarm: 'partial' } };
+  assert.deepEqual(contradictions(honest as never), []);
 });

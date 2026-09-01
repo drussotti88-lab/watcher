@@ -1849,6 +1849,14 @@ async function decideProductRequest(db2, userId, id, status, opts = {}) {
   const full = await db2.query(`${REQUEST_SELECT} WHERE r.id = $1`, [id]);
   return toRequest(full[0]);
 }
+async function agentLastSeen(db2, userId) {
+  const rows = await db2.query(
+    "SELECT max(at) AS at FROM activity WHERE user_id = $1",
+    [userId]
+  );
+  const at = rows[0]?.at;
+  return at ? String(at) : null;
+}
 
 // src/discover.ts
 var DEFAULT_CHILD_LIMIT = 3;
@@ -3006,6 +3014,17 @@ ${FONTS}<style>${STYLE}</style></head>
     <div class="name">Money is committed</div>
     <div class="meta" id="money-banner-detail"></div>
     <div id="money-banner-list"></div>
+  </div>
+
+  <!-- Phantom stopped talking.
+       On 1 Sep 2026 it died at 19:14 and nobody noticed for thirty-five
+       minutes, because a watcher that is OFF looks exactly like a watcher
+       whose products have not changed: the readings all stay put and only
+       their age moves. This is the one failure the system cannot afford to
+       report by omission. -->
+  <div class="card banner alert" id="silence-banner" hidden>
+    <div class="name">Phantom has stopped reporting</div>
+    <div class="meta" id="silence-detail"></div>
   </div>
 
   <div class="card banner alert" id="paused-banner" hidden>
@@ -4693,6 +4712,7 @@ function render() {
   renderMoney();
   const banner = document.getElementById('paused-banner');
   banner.hidden = !st.paused;
+  renderSilence();
 
   // The queue alarm. A waiting room at a shop means a drop is likely live
   // RIGHT NOW, and the one useful thing this app can do with that is put it
@@ -5451,6 +5471,41 @@ function maybeOpenWizard() {
   try { seen = localStorage.getItem(WIZ_SEEN) === '1'; } catch (e) { seen = false; }
   if (seen) return;
   openWizard(0);
+}
+
+/**
+ * Has the machine gone quiet?
+ *
+ * The signal is the activity log, not the readings. Phantom writes a line
+ * every pass INCLUDING when it is resting outside watching hours \u2014 so silence
+ * means the process is not running, rather than that it has nothing to do, and
+ * this cannot cry wolf every night when the schedule closes.
+ *
+ * Ten minutes, against a pass every ninety seconds. Generous on purpose: the
+ * log is buffered and flushed per pass, a slow pass can run minutes long, and
+ * a banner that flickers is a banner people stop reading. It states the actual
+ * time it last heard anything, so the judgement is not only ours.
+ */
+const SILENCE_MS = 10 * 60 * 1000;
+
+function renderSilence() {
+  const banner = document.getElementById('silence-banner');
+  if (!banner) return;
+  const seen = DATA.agentSeenAt;
+  // No activity at all is a new account, not an outage. Saying "stopped
+  // reporting" to somebody who has never started it is a lie with an
+  // exclamation mark on it.
+  if (!seen) { banner.hidden = true; return; }
+
+  const quietFor = Date.now() - new Date(seen).getTime();
+  if (!(quietFor > SILENCE_MS)) { banner.hidden = true; return; }
+
+  banner.hidden = false;
+  document.getElementById('silence-detail').textContent =
+    'Nothing has been heard from the machine since ' +
+    new Date(seen).toLocaleTimeString() + ' (' + ago(seen) + '). ' +
+    'Nothing is being watched until it is running again \u2014 check that the ' +
+    'Phantom window is still open on the machine that watches.';
 }
 
 function renderRequests() {
@@ -6340,27 +6395,25 @@ var RETAILERS = [
     key: "pokemon-center",
     name: "Pok\xE9mon Center",
     abilities: {
-      // Downgraded from 'live' on 1 Sep 2026. The reader is unchanged and
-      // correct; the shop stopped answering. See `blocked` below — this table
-      // is what the vault's perks page reads, and a page that promises
-      // watching we cannot currently do is the one failure mode it exists to
-      // prevent.
-      watch: "partial",
-      discover: "partial",
+      // Downgraded to 'partial' at 16:50 UTC on 1 Sep 2026 when the shop went
+      // behind Imperva, and restored at 19:50 the same day when it came back —
+      // by itself, with nothing changed. The stand-down did its job and the
+      // first clean read forgave the penalty.
+      //
+      // Left at 'live' rather than hedged forever: three hours of a wall is
+      // not a permanent capability change, and a table that never recovers
+      // from an outage is a table nobody trusts in either direction.
+      watch: "live",
+      discover: "live",
       releaseDates: "partial",
       // JSON-LD carries in-stock/out-of-stock and nothing else. There is no
       // quantity to watch even in principle.
       stagedStock: "none",
-      // A waiting room cannot be spotted on a page that never renders.
-      queueAlarm: "partial",
+      queueAlarm: "live",
       sellerCheck: "none",
       autoCheckout: "planned"
     },
-    note: "First-party only, so there is no reseller to detect. Availability is a yes/no \u2014 no quantity exists to warn on. Currently behind a bot wall (see below).",
-    blocked: {
-      since: "2026-09-01",
-      what: "Pok\xE9mon Center moved behind Imperva at 16:50 UTC on 1 Sep 2026. Product pages return an empty document, so nothing can be read. Phantom names the wall and stands down rather than knocking; it does not attempt to get past one, and it will not. Watching resumes by itself if the wall lifts."
-    }
+    note: "First-party only, so there is no reseller to detect. Availability is a yes/no \u2014 no quantity exists to warn on. Went behind a bot wall for three hours on 1 Sep 2026 and recovered on its own; Phantom names a wall and stands down rather than knocking, and never tries to get past one."
   }
 ];
 var FEATURES = [
@@ -6584,6 +6637,7 @@ function createHandler(db2, env2) {
       const acquisitions = await listAcquisitions(db2, userId);
       const requests = await listProductRequests(db2, userId);
       const canCurate = await canWriteCatalogue(db2, userId);
+      const agentSeenAt = await agentLastSeen(db2, userId);
       const shopStatus = capabilityTable().retailers.map((r) => ({
         name: r.name,
         watch: r.abilities.watch ?? "none",
@@ -6607,7 +6661,8 @@ function createHandler(db2, env2) {
         acquisitions,
         requests,
         canCurate,
-        capabilities: shopStatus
+        capabilities: shopStatus,
+        agentSeenAt
       });
     }
     if (request.method === "GET" && path.startsWith("/api/missions/") && path.endsWith("/runs")) {
