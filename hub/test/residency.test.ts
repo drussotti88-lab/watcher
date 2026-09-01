@@ -208,8 +208,19 @@ test('EVERY QUERY THAT TOUCHES AN OWNED TABLE FILTERS ON THE OWNER', async () =>
   // below this one holds them to that, so the exemption cannot become a way in.
   //
   // Nothing in this table spends: a request is a URL and a sentence.
+  //
+  // ── The fast lane ────────────────────────────────────────────────────────
+  //
+  // "Check now" is only ever as fast as Phantom's next poll of the Hub, and
+  // the catalogue writer does everybody's reading — so it honours everybody's
+  // button. This is the query it asks every few seconds.
+  //
+  // It carries no money and, more to the point, no mission: listing ids and
+  // nothing else. The test below this one holds it to exactly that shape, so
+  // the exemption cannot be widened into "the missions table is fair game".
   const ALLOWED = [
     'UPDATE missions SET check_now_at = NULL WHERE listing_id = $1 AND check_now_at IS NOT NULL',
+    'SELECT DISTINCT listing_id FROM missions WHERE enabled = true AND check_now_at IS NOT NULL',
     'UPDATE product_requests SET status = $2, listing_id = $3, decided_note = $4, decided_at = now() WHERE id = $1 RETURNING id',
     "SELECT count(*)::text AS n FROM product_requests WHERE status = 'pending'",
   ];
@@ -232,27 +243,47 @@ test('EVERY QUERY THAT TOUCHES AN OWNED TABLE FILTERS ON THE OWNER', async () =>
   );
 });
 
-test('THE ONE DELIBERATE CROSS-USER READ IS MARKED AS ONE', async () => {
-  // The fan-out is a hole in the wall this file guards, dug on purpose: the
-  // owner's Phantom reads the union of everybody's missions so one fetch of a
-  // page serves every member watching it.
+test('EVERY DELIBERATE CROSS-USER READ IS MARKED AS ONE', async () => {
+  // Two queries read other people's missions on purpose, and both are holes in
+  // the wall this file guards:
+  //
+  //   1. THE FAN-OUT. The owner's Phantom pulls the union of everybody's
+  //      missions so one fetch of a page serves every member watching it.
+  //   2. THE FAST LANE. "Check now" is only as fast as Phantom's next poll,
+  //      so it polls a tiny query every few seconds — and the catalogue
+  //      writer honours everybody's button, because it does everybody's
+  //      reading.
   //
   // The statement-level guard above is satisfied by any mention of user_id,
-  // and this query mentions it in an ORDER BY — which is exactly the sort of
-  // accident that turns a safety property into a comment. So the hole gets
-  // named here: any SELECT over missions that is NOT scoped by
-  // `m.user_id = $1` in its WHERE must hand back `read_only`, and the mapper
-  // must blank `armed` on those rows. One hole, and it cannot widen quietly.
+  // and both of these mention it somewhere — which is exactly the accident
+  // that turns a safety property into a comment. So each hole is named here
+  // and held to its own rule:
+  //
+  //   · a union query must hand back `read_only`, and the mapper must blank
+  //     `armed` on those rows;
+  //   · anything else may return NOTHING but listing ids — no mission, no
+  //     mandate, no money, nothing about a person.
+  //
+  // Two holes, each with a shape. A third would fail this test rather than
+  // slip in behind them.
   const src = await readFile(new URL('../src/store.ts', import.meta.url), 'utf8');
 
-  const selects = [...src.matchAll(/`(SELECT[^`]*?\bFROM missions\b[^`]*?)`/gis)].map(
-    (m) => m[1]!,
-  );
+  const selects = [...src.matchAll(/`(SELECT[^`]*?\bFROM missions\b[^`]*?)`/gis)].map((m) => m[1]!);
   assert.ok(selects.length > 0, 'expected to find the mission SELECTs');
 
-  const unscoped = selects.filter((q) => !/\bm\.user_id\s*=\s*\$1/.test(q.split(/order\s+by/i)[0]!));
-  assert.equal(unscoped.length, 1, 'exactly one query may read other people\'s missions');
-  assert.match(unscoped[0]!, /AS read_only/, 'and it must say which rows are not ours');
+  const unscoped = selects.filter(
+    (q) => !/\bm\.user_id\s*=\s*\$1|\buser_id\s*=\s*\$1/.test(q.split(/order\s+by/i)[0]!),
+  );
+  assert.equal(unscoped.length, 2, `expected exactly two, got:\n${unscoped.join('\n---\n')}`);
+
+  const fanout = unscoped.filter((q) => /AS read_only/.test(q));
+  const idsOnly = unscoped.filter((q) => /SELECT DISTINCT listing_id\b/i.test(q));
+  assert.equal(fanout.length, 1, 'one union read, and it says which rows are not ours');
+  assert.equal(idsOnly.length, 1, 'one id-only read, and it carries nothing else');
+
+  // The id-only one really is id-only: no joins, no other columns.
+  assert.doesNotMatch(idsOnly[0]!, /\bJOIN\b/i, 'the fast lane stays cheap');
+  assert.doesNotMatch(idsOnly[0]!, /ceiling|armed|quantity/i, 'and says nothing about a mandate');
 
   assert.match(
     src,

@@ -968,3 +968,84 @@ test('one stuck check does not stop the ones behind it', async () => {
   assert.equal(r.checked, 2);
   assert.equal(r.failed, 1, 'one abandoned');
 });
+
+// ── Check now means now ──────────────────────────────────────────────────────
+//
+// The button set a flag and the pill said "check queued", and then it sat
+// there — sometimes for minutes, because the flag was only read when a pass
+// began and the pass then worked through fourteen other listings first. A
+// button labelled CHECK NOW that means "in the next minute and a half" is a
+// suggestion box with the wrong label on it.
+
+test('AN URGENT LISTING JUMPS THE QUEUE OF MISSIONS', async () => {
+  const { hub, observations } = recorder();
+  const clock = fakeClock();
+  const pacer = new Pacer(STEADY, () => 0);
+  // Twelve ahead of it, all due, all older.
+  const missions = Array.from({ length: 12 }, (_, i) =>
+    mission({ id: i + 1, listingId: 100 + i }));
+  const wanted = mission({ id: 99, listingId: 999 });
+
+  const r = await pass([...missions, wanted], pacer, {
+    browser, hub, now: clock.now, wait: clock.wait,
+    read: reads(() => reading()),
+    windowMs: 96_000,
+    urgent: () => new Set([999]),
+  });
+
+  assert.ok(r.checked > 0);
+  assert.equal(observations[0]!.listingId, 999, 'checked first, not thirteenth');
+});
+
+test('IT IS ASKED EVERY TURN, NOT ONCE WHEN THE PASS BEGAN', async () => {
+  // The case that matters: somebody presses the button while a queue is
+  // already being worked through. A pass that only knew what was urgent at
+  // the start would make them wait out the very queue the button exists to
+  // skip.
+  const { hub, observations } = recorder();
+  const clock = fakeClock();
+  const pacer = new Pacer(STEADY, () => 0);
+  const missions = Array.from({ length: 8 }, (_, i) => mission({ id: i + 1, listingId: 200 + i }));
+  const late = mission({ id: 77, listingId: 777 });
+
+  let pressed = new Set<number>();
+  const r = await pass([...missions, late], pacer, {
+    browser, hub, now: clock.now, wait: clock.wait,
+    read: reads(() => reading()),
+    windowMs: 96_000,
+    urgent: () => {
+      // Pressed after the third check has already gone out.
+      if (observations.length >= 3) pressed = new Set([777]);
+      return pressed;
+    },
+  });
+
+  assert.ok(r.checked >= 4);
+  assert.equal(observations[3]!.listingId, 777, 'the very next one after the press');
+});
+
+test('it does not jump the RETAILER — that is how you earn a bot check', () => {
+  // Deliberate, and the reason this is a test rather than a comment. A test
+  // run jumps the queue of missions; it does not jump the shop's budget.
+  // Letting a button in a web page bypass the pacing is how you get a
+  // press-and-hold while looking at the screen that caused it.
+  const pacer = new Pacer(STEADY, () => 0);
+  pacer.record('Target', T0);   // Target has just been asked something
+
+  const urgentMission = { ...mission({ id: 1, listingId: 5 }), checkNow: true };
+  assert.equal(nextUp([urgentMission], pacer, T0), null, 'still waits its 20 seconds');
+  assert.ok(nextUp([urgentMission], pacer, T0 + 30_000), 'and goes the moment it may');
+});
+
+test('an urgent listing nobody is watching changes nothing', async () => {
+  const { hub } = recorder();
+  const clock = fakeClock();
+  const pacer = new Pacer(STEADY, () => 0);
+  const r = await pass([mission({ id: 1, listingId: 11 })], pacer, {
+    browser, hub, now: clock.now, wait: clock.wait,
+    read: reads(() => reading()),
+    windowMs: 96_000,
+    urgent: () => new Set([424242]),
+  });
+  assert.equal(r.checked, 1);
+});

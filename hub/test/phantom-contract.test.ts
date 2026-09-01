@@ -249,17 +249,35 @@ test('Phantom without its token gets nothing', async () => {
 
 // ── Test run ─────────────────────────────────────────────────────────────────
 
-test('a test run is queued, not performed — and says so', async () => {
-  // The Hub has no browser. Answering 200 "checking now" would be a small lie
-  // that makes every later timing question unanswerable.
+test('a test run is ACCEPTED, not performed — and says so', async () => {
+  // The Hub has no browser and cannot ring the machine that does. Answering
+  // 200 "checking now" would be a small lie that makes every later timing
+  // question unanswerable — so it is a 202, and the note says what actually
+  // happens next.
   const { db, missionId } = await withMission();
   const { status, body } = await call(db, 'POST', `/api/missions/${missionId}/check-now`);
 
   assert.equal(status, 202, 'accepted, not done');
-  assert.match(body.note, /next pass/);
+  assert.match(body.note, /every few seconds/, 'and it is honest about how soon');
 
   const active = await call(db, 'GET', '/api/missions/active');
   assert.equal(active.body.missions[0].checkNow, true, 'and Phantom is told');
+});
+
+test('THE FAST LANE ANSWERS IN LISTING IDS AND NOTHING ELSE', async () => {
+  // Phantom asks this every three seconds, which is only affordable because
+  // there is nothing in it: no joins, no mission data, no money, nothing about
+  // a person. It is the reason "check now" can mean now.
+  const { db, missionId } = await withMission();
+
+  const before = await call(db, 'GET', '/api/check-now');
+  assert.deepEqual(before.body.listingIds, [], 'nothing pressed, nothing to say');
+
+  await call(db, 'POST', `/api/missions/${missionId}/check-now`);
+  const after = await call(db, 'GET', '/api/check-now');
+  assert.equal(after.body.listingIds.length, 1);
+  assert.equal(Object.keys(after.body).length, 1, 'the whole body is one key');
+  assert.equal(typeof after.body.listingIds[0], 'number');
 });
 
 test('a test run on a mission that does not exist is a 404, not a silent no-op', async () => {

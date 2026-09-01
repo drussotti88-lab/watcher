@@ -675,6 +675,39 @@ async function runPasses(once: boolean): Promise<void> {
    * check ceiling, and a sweep is longer but still minutes; past ten it is not
    * slow, it is stuck.
    */
+  /*
+   * The fast lane for "Check now".
+   *
+   * ── Why a poll, and why it is not a compromise ────────────────────────────
+   *
+   * The Hub cannot ring this machine. It is a web app on somebody else's
+   * servers and Phantom is behind a home router, so the traffic goes one way
+   * and the button can only ever be as fast as the next time we ask. That poll
+   * used to be the whole watchlist, once a cycle — which is how a button
+   * labelled CHECK NOW came to mean "in the next minute and a half", and a
+   * pill that said "check queued" and then sat there.
+   *
+   * So this asks a much smaller question, much more often: one indexed column
+   * and a few integers, every three seconds. Cheap enough that the honest
+   * answer to "when does it check?" becomes "about three seconds", which is
+   * the difference between a button and a suggestion box.
+   *
+   * REPLACED wholesale each poll, never accumulated: the Hub clears the flag
+   * when the reading lands, so a set that only ever grew would re-check a
+   * listing forever on the strength of one press.
+   */
+  let urgent: ReadonlySet<number> = new Set();
+  const urgentPoll = setInterval(() => {
+    void hub
+      .urgentListings()
+      .then((ids) => {
+        urgent = new Set(ids);
+      })
+      .catch(() => {
+        /* a missed poll costs one round of latency, and nothing else */
+      });
+  }, 3_000);
+
   let heartbeat = Date.now();
   const STALL_MS = 10 * 60_000;
   const watchdog = setInterval(() => {
@@ -867,6 +900,7 @@ async function runPasses(once: boolean): Promise<void> {
           // time to pick up fresh missions and settings on schedule rather
           // than drifting a little later every cycle.
           windowMs: Math.round(config.intervalSec * 1000 * 0.9),
+          urgent: () => urgent,
         });
         const parts = [`${result.checked} checked`];
         if (result.runs) parts.push(`${result.runs} runs`);
@@ -916,10 +950,18 @@ async function runPasses(once: boolean): Promise<void> {
       // is more to look at than time to look.
       const spent = Date.now() - cycleStart;
       const rest = config.intervalSec * 1000 - spent;
-      if (rest > 0) await sleep(rest);
+      // Interruptible. Sleeping through a press is the same failure as
+      // queueing behind fourteen other listings, arriving by a different
+      // route — so the rest between cycles is spent in short naps with one
+      // eye open.
+      for (let slept = 0; slept < rest; slept += 500) {
+        if (urgent.size > 0 || stopped) break;
+        await sleep(Math.min(500, rest - slept));
+      }
     } while (!stopped);
   } finally {
     clearInterval(watchdog);
+    clearInterval(urgentPoll);
     await activity.flush(true);
     await browser.close();
     // Only if it is still ours: an instance that lost the race must not

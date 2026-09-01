@@ -1704,14 +1704,37 @@ function missionCard(m) {
   const actions = el('div', 'actions');
   actions.style.marginTop = '10px';
   if (m.enabled) {
-    const now = el('button', 'small', m.checkNow ? 'check queued' : 'Check now');
-    now.disabled = !!m.checkNow;
+    // ── Check now, and what it is honestly waiting on ─────────────────────
+    //
+    // This used to become a dead pill reading "check queued" and stay that
+    // way, sometimes for minutes. Two things were wrong and only one of them
+    // was the machine: Phantom asked the Hub once a cycle (fixed — it asks
+    // every three seconds now), and the page then said nothing at all about
+    // what was happening.
+    //
+    // A button that goes quiet is indistinguishable from a broken one. So it
+    // counts, and past a point where the count is no longer normal it says
+    // what it is actually waiting for — which, nine times out of ten, is a
+    // machine that is not running.
+    const now = el('button', 'small', 'Check now');
+    if (m.checkNow) {
+      const since = m.checkNowAt ? Math.round((Date.now() - new Date(m.checkNowAt).getTime()) / 1000) : 0;
+      const heard = DATA.agentSeenAt ? Date.now() - new Date(DATA.agentSeenAt).getTime() : null;
+      const running = heard !== null && heard < 3 * 60 * 1000;
+      now.disabled = true;
+      now.textContent = !running
+        ? 'waiting — Phantom is not running'
+        : since < 15
+          ? 'checking…'
+          : 'checking… ' + since + 's';
+      if (!running) now.classList.add('stale');
+    }
     now.addEventListener('click', async (e) => {
-      const ok = await withButton(e.target, 'Queueing…', null, async () => {
+      const ok = await withButton(e.target, 'Asking…', null, async () => {
         await api('POST', '/api/missions/' + m.id + '/check-now');
-        return 'queued — Phantom will check this on its next pass';
+        return 'asked — Phantom picks this up within a few seconds';
       });
-      if (ok) { e.target.textContent = 'check queued'; e.target.disabled = true; }
+      if (ok) { e.target.textContent = 'checking…'; e.target.disabled = true; load(); }
     });
     actions.appendChild(now);
   }

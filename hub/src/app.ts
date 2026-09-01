@@ -720,7 +720,10 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       const id = Number(path.split('/')[3]);
       if (!Number.isInteger(id)) return json({ error: 'bad mission id' }, 400);
       if (!(await store.requestCheckNow(db, userId, id))) return json({ error: 'no such mission' }, 404);
-      return json({ queued: id, note: 'Phantom will check this on its next pass' }, 202);
+      return json(
+        { queued: id, note: 'Phantom asks for these every few seconds and will pick it up' },
+        202,
+      );
     }
 
     if (request.method === 'DELETE' && path.startsWith('/api/missions/')) {

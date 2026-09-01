@@ -817,17 +817,56 @@ test('EVERY WATCHED CARD HAS A CHECK NOW BUTTON', async () => {
   await h.settle();
 
   assert.ok(h.calls.find((c) => c.path === '/api/missions/1/check-now'));
-  assert.match(btn.textContent, /queued/i);
+  // "checking", not "queued". Phantom asks the Hub for these every few
+  // seconds now, so the honest word is the present tense.
+  assert.match(btn.textContent, /checking/i);
 });
 
-test('a mission already waiting shows the button as queued', async () => {
+test('A PRESSED BUTTON COUNTS RATHER THAN GOING QUIET', async () => {
+  // It used to become a dead pill reading "check queued" and stay that way,
+  // sometimes for minutes. A button that goes quiet is indistinguishable from
+  // a broken one, and this one was being pressed during drops.
   const d = JSON.parse(JSON.stringify(DASHBOARD));
   d.missions[0].checkNow = true;
+  d.missions[0].checkNowAt = new Date(Date.now() - 40_000).toISOString();
+  d.agentSeenAt = new Date(Date.now() - 5_000).toISOString();
+
   const h = await boot(d);
   const btn = [...h.doc.querySelectorAll('#missions button')].find(
-    (b: any) => /queued/i.test(b.textContent),
+    (b: any) => /checking/i.test(b.textContent),
   ) as any;
-  assert.ok(btn);
+  assert.ok(btn, 'it says what it is doing');
+  assert.equal(btn.disabled, true);
+  assert.match(btn.textContent, /4[0-9]s/, 'and how long it has been doing it');
+});
+
+test('a fresh press does not put a stopwatch on screen', async () => {
+  // Counting from zero would make three normal seconds look like a problem.
+  const d = JSON.parse(JSON.stringify(DASHBOARD));
+  d.missions[0].checkNow = true;
+  d.missions[0].checkNowAt = new Date(Date.now() - 2_000).toISOString();
+  d.agentSeenAt = new Date().toISOString();
+
+  const h = await boot(d);
+  const btn = [...h.doc.querySelectorAll('#missions button')].find(
+    (b: any) => /checking/i.test(b.textContent),
+  ) as any;
+  assert.equal(btn.textContent, 'checking…');
+});
+
+test('IT NAMES THE REAL REASON WHEN THE MACHINE IS NOT RUNNING', async () => {
+  // Nine times out of ten a button that never resolves is not a slow button.
+  // Saying "checking…" over a dead watcher is the app lying on its behalf.
+  const d = JSON.parse(JSON.stringify(DASHBOARD));
+  d.missions[0].checkNow = true;
+  d.missions[0].checkNowAt = new Date(Date.now() - 60_000).toISOString();
+  d.agentSeenAt = new Date(Date.now() - 40 * 60_000).toISOString();
+
+  const h = await boot(d);
+  const btn = [...h.doc.querySelectorAll('#missions button')].find(
+    (b: any) => /Phantom is not running/i.test(b.textContent),
+  ) as any;
+  assert.ok(btn, 'it says what is actually wrong');
   assert.equal(btn.disabled, true);
 });
 

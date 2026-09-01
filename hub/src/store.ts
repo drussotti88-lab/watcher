@@ -1164,6 +1164,8 @@ export interface MissionRow {
   checkEverySeconds: number;
   /** A "test run" is pending: check this one next pass, whatever its schedule. */
   checkNow: boolean;
+  /** When the button was pressed, so the page can count the seconds honestly. */
+  checkNowAt: string | null;
   notes: string;
   /** Latest reading for this mission's listing, when there is one. */
   state: string;
@@ -1206,6 +1208,7 @@ function toMission(r: Record<string, unknown>): MissionRow {
     preOrderPolicy: (String(r.preorder_policy ?? 'skip') as PreOrderPolicy),
     checkEverySeconds: Number(r.check_every_s ?? 60),
     checkNow: r.check_now_at !== null && r.check_now_at !== undefined,
+    checkNowAt: r.check_now_at ? String(r.check_now_at) : null,
     notes: String(r.notes ?? ''),
     state: String(r.state ?? 'unchecked'),
     confidence: String(r.confidence ?? 'unknown'),
@@ -1361,7 +1364,11 @@ export async function activeMissions(db: Sql, userId: number): Promise<MissionRo
     // A hand-pressed check belongs to the LISTING once the read is shared: a
     // member pressing "check now" on a listing the owner also watches must not
     // be swallowed just because the owner's row is the one that won.
-    const mission = { ...toMission(r), checkNow: r.any_check_now != null };
+    const mission = {
+      ...toMission(r),
+      checkNow: r.any_check_now != null,
+      checkNowAt: r.any_check_now ? String(r.any_check_now) : null,
+    };
     // Somebody else's mission may never be armed by this agent, whatever its
     // own row says. Belt as well as braces: only the owner can arm at all.
     if (r.read_only === true) return { ...mission, readOnly: true, armed: false };

@@ -369,6 +369,21 @@ export interface WatchDeps {
   wait?: (ms: number) => Promise<void>;
   /** The per-check ceiling. Injectable so a hang can be tested in milliseconds. */
   checkCeilingMs?: number;
+  /**
+   * Listings somebody has just asked to be checked, read fresh every turn.
+   *
+   * ── Why a callback and not a list ──────────────────────────────────────
+   *
+   * Because the answer changes DURING a pass. A person presses Check now
+   * while fourteen Target listings are being worked through; if the pass only
+   * knew what was urgent when it started, that button would wait out the
+   * whole queue — which is the behaviour it exists to avoid.
+   *
+   * Consulted before every single pick, so the wait between pressing and
+   * being checked is the poll interval plus the retailer's own spacing, and
+   * nothing else.
+   */
+  urgent?: () => ReadonlySet<number>;
 }
 
 export interface PassResult {
@@ -441,6 +456,15 @@ export async function pass(missions: Mission[], pacer: Pacer, deps: WatchDeps): 
   const started = now();
 
   for (;;) {
+    // Somebody may have pressed the button a second ago. Ask now, not when
+    // this pass began — a queue of fourteen is exactly when it gets pressed.
+    const urgent = deps.urgent?.();
+    if (urgent && urgent.size > 0) {
+      for (const m of remaining) {
+        if (urgent.has(m.listingId)) m.checkNow = true;
+      }
+    }
+
     let mission = nextUp(remaining, pacer, now());
 
     // Nothing allowed right now. That is not the same as nothing to do: the

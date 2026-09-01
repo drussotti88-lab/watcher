@@ -879,6 +879,7 @@ function toMission(r) {
     preOrderPolicy: String(r.preorder_policy ?? "skip"),
     checkEverySeconds: Number(r.check_every_s ?? 60),
     checkNow: r.check_now_at !== null && r.check_now_at !== void 0,
+    checkNowAt: r.check_now_at ? String(r.check_now_at) : null,
     notes: String(r.notes ?? ""),
     state: String(r.state ?? "unchecked"),
     confidence: String(r.confidence ?? "unknown"),
@@ -969,7 +970,11 @@ async function activeMissions(db2, userId) {
     [userId]
   );
   return rows.map((r) => {
-    const mission = { ...toMission(r), checkNow: r.any_check_now != null };
+    const mission = {
+      ...toMission(r),
+      checkNow: r.any_check_now != null,
+      checkNowAt: r.any_check_now ? String(r.any_check_now) : null
+    };
     if (r.read_only === true) return { ...mission, readOnly: true, armed: false };
     return mission;
   });
@@ -4007,14 +4012,37 @@ function missionCard(m) {
   const actions = el('div', 'actions');
   actions.style.marginTop = '10px';
   if (m.enabled) {
-    const now = el('button', 'small', m.checkNow ? 'check queued' : 'Check now');
-    now.disabled = !!m.checkNow;
+    // \u2500\u2500 Check now, and what it is honestly waiting on \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    //
+    // This used to become a dead pill reading "check queued" and stay that
+    // way, sometimes for minutes. Two things were wrong and only one of them
+    // was the machine: Phantom asked the Hub once a cycle (fixed \u2014 it asks
+    // every three seconds now), and the page then said nothing at all about
+    // what was happening.
+    //
+    // A button that goes quiet is indistinguishable from a broken one. So it
+    // counts, and past a point where the count is no longer normal it says
+    // what it is actually waiting for \u2014 which, nine times out of ten, is a
+    // machine that is not running.
+    const now = el('button', 'small', 'Check now');
+    if (m.checkNow) {
+      const since = m.checkNowAt ? Math.round((Date.now() - new Date(m.checkNowAt).getTime()) / 1000) : 0;
+      const heard = DATA.agentSeenAt ? Date.now() - new Date(DATA.agentSeenAt).getTime() : null;
+      const running = heard !== null && heard < 3 * 60 * 1000;
+      now.disabled = true;
+      now.textContent = !running
+        ? 'waiting \u2014 Phantom is not running'
+        : since < 15
+          ? 'checking\u2026'
+          : 'checking\u2026 ' + since + 's';
+      if (!running) now.classList.add('stale');
+    }
     now.addEventListener('click', async (e) => {
-      const ok = await withButton(e.target, 'Queueing\u2026', null, async () => {
+      const ok = await withButton(e.target, 'Asking\u2026', null, async () => {
         await api('POST', '/api/missions/' + m.id + '/check-now');
-        return 'queued \u2014 Phantom will check this on its next pass';
+        return 'asked \u2014 Phantom picks this up within a few seconds';
       });
-      if (ok) { e.target.textContent = 'check queued'; e.target.disabled = true; }
+      if (ok) { e.target.textContent = 'checking\u2026'; e.target.disabled = true; load(); }
     });
     actions.appendChild(now);
   }
@@ -7204,7 +7232,10 @@ function createHandler(db2, env2) {
       const id = Number(path.split("/")[3]);
       if (!Number.isInteger(id)) return json({ error: "bad mission id" }, 400);
       if (!await requestCheckNow(db2, userId, id)) return json({ error: "no such mission" }, 404);
-      return json({ queued: id, note: "Phantom will check this on its next pass" }, 202);
+      return json(
+        { queued: id, note: "Phantom asks for these every few seconds and will pick it up" },
+        202
+      );
     }
     if (request.method === "DELETE" && path.startsWith("/api/missions/")) {
       const id = Number(path.slice("/api/missions/".length));
