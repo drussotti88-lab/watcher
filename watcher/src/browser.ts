@@ -81,7 +81,26 @@ export class Browser {
       // for a slightly easier launch is the wrong way round.
       chromiumSandbox: true,
       args: [
-        '--disable-blink-features=AutomationControlled',
+        // ── What is NOT in this list ────────────────────────────────────────
+        //
+        // `--disable-blink-features=AutomationControlled` was here until
+        // 1 Sep 2026. Its only function is to stop Chrome setting
+        // navigator.webdriver, which is to say its only function is to make
+        // this browser harder to recognise as automated.
+        //
+        // That is the one thing this project said it would not do, and it was
+        // sitting in the launch args the whole time. Removed on sight.
+        //
+        // It was not even working. Target served a press-and-hold check on the
+        // buy profile that evening regardless — and Chrome announces the flag
+        // in a yellow bar across the top of every page, so a setting meant to
+        // hide something was the most visible thing on the screen.
+        //
+        // Expect more challenges without it, not fewer. That is the honest
+        // state of things: this system watches politely, waits when it is told
+        // to wait, and asks a person when a shop asks for one. Nothing here
+        // pretends to be something it is not.
+        //
         // "Restore pages? Chrome didn't shut down correctly."
         //
         // It appears because the profile was not closed cleanly, which for a

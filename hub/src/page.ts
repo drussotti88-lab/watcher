@@ -172,10 +172,26 @@ a { color: var(--accent); text-underline-offset: 2px; }
 .tabs { display: flex; align-items: center; z-index: 30;
         background: rgba(9, 8, 14, .82);
         backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
-.brand { display: flex; align-items: center; gap: 4px; padding: 8px 10px 8px 14px;
-         font: 800 16px/1.2 var(--display); letter-spacing: -0.01em; white-space: nowrap; }
+/*
+ * The lockup stacks rather than shrinks.
+ *
+ * "Phantom by DNA" on one line at 18px next to a 34px mark is wider than the
+ * 194px the side panel has to give, and it was being cut off mid-word. The
+ * first fix shrank the type, which bought a few pixels and made the app's own
+ * name the smallest thing on its own panel.
+ *
+ * Two lines instead: the name at full weight, the origin under it in small
+ * caps. Same information, half the width, and it reads as a mark rather than a
+ * sentence that ran out of room. The space between the two spans is a real
+ * text node, so the accessible name is still "Phantom by DNA".
+ */
+.brand { display: flex; align-items: center; gap: 9px; padding: 8px 10px 8px 14px; }
+.brand-name { display: flex; flex-direction: column; line-height: 1.05; min-width: 0; }
+.brand-name b { font: 800 18px/1 var(--display); letter-spacing: -0.015em; }
+.brand-name i { font: 600 10px/1 var(--sans); font-style: normal; letter-spacing: .13em;
+                text-transform: uppercase; color: var(--muted); margin-top: 3px; }
 /* The header's copy of the wordmark. Shown only when the side panel is not. */
-.phonebrand { display: none; padding: 0 0 2px; font-size: 17px; width: 100%; }
+.phonebrand { display: none; padding: 0 0 2px; width: 100%; }
 @media (max-width: 899px) { .phonebrand { display: flex; } }
 .tab { cursor: pointer; border: none; background: none; border-radius: 0;
        font: 500 14px/1.4 var(--sans); color: var(--muted);
@@ -220,12 +236,9 @@ a { color: var(--accent); text-underline-offset: 2px; }
           padding: 16px 12px;
           border-right: 1px solid var(--line);
           background: rgba(9, 8, 14, .55); }
-  /* 218px minus its padding is 194px of room, and "Phantom by DNA" at 18px
-     next to a 34px mark is wider than that — it used to spill out over the
-     header. The panel gets a smaller mark and a smaller wordmark rather than
-     a truncated name. */
-  .brand { padding: 4px 6px 18px; font-size: 15.5px; overflow: hidden; }
-  .brand .mark { width: 26px; height: 26px; border-radius: 8px; }
+  /* The stacked lockup fits 194px at full size, so nothing is shrunk here any
+     more — only spaced for the top of a panel. */
+  .brand { padding: 4px 6px 20px; }
   .tab { display: flex; align-items: center; gap: 10px; text-align: left; width: 100%;
          padding: 10px 12px; border-radius: 10px; }
   .tab .ico { width: 17px; height: 17px; }
@@ -245,6 +258,185 @@ a { color: var(--accent); text-underline-offset: 2px; }
   .bar button, .bar .btn { padding: 7px 11px; font-size: 13px; }
   .bar .check { font-size: 13px; }
 }
+/* ═══════════════════════════════════════════════════════════════════════════
+   LIQUID GLASS — the material, ported from DNA Card Vault
+   ═══════════════════════════════════════════════════════════════════════════
+
+   Same palette both apps already shared (#09080e ground, #7f77dd accent, DM
+   Sans / Syne / DM Mono). What Phantom was missing was the MATERIAL: an
+   ambient light field for the glass to refract, translucent surfaces over it,
+   and the specular top edge that is the thing people actually recognise.
+
+   ── The scope is deliberate, and it is not "everything" ──────────────────
+
+   backdrop-filter is the expensive part. The vault's rule is blur only the
+   few big, mostly-fixed surfaces, and give everything else a translucent fill
+   plus a catch-light — they sit on a lit ground, so they read as glass for
+   about zero GPU cost.
+
+   Phantom needs that rule applied one level HARDER than the vault does,
+   because .card here is not a panel — it is a LIST ROW. Forty missions and a
+   hundred finds are forty and a hundred cards, and blurring each of them is
+   the phone-jank the vault's comment warns about, at four times the count.
+   So:
+
+     BLURRED  the nav, the banners, the wizard and quick-add panels, the
+              dialog — few, large, mostly fixed.
+     FILLED   list cards, chips, buttons — translucent + specular, no blur.
+     SOLID    prices, pills, tables, the log. Dense figures stay crisp; a
+              number you have to squint at is worse than a flat panel.
+
+   ── Guarded so it can only enhance ──────────────────────────────────────
+
+   @supports for backdrop-filter, and the reduce-transparency check lives in
+   JS rather than a CSS media query. That is the vault's scar: a CSS guard on
+   prefers-reduced-transparency FAILS CLOSED, because a browser that has never
+   heard of the feature treats the whole query as false and silently drops
+   every rule inside it — which is how the material worked on desktop Chrome
+   and rendered as nothing at all on the owner's phone. matchMedia in JS fails
+   OPEN, and anybody who really has asked for less transparency simply never
+   gets the attribute set. */
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  :root[data-material=glass] {
+    /* A vertical gradient, not a flat film: it reads as lit thickness. */
+    --glass-bg:   linear-gradient(180deg, rgba(255,255,255,.085), rgba(255,255,255,.035));
+    --glass-bg2:  rgba(255,255,255,.10);   /* controls */
+    --glass-in:   rgba(255,255,255,.055);  /* interiors: inputs, thumbnails */
+    --glass-bd:   rgba(255,255,255,.17);   /* hairline edge */
+    --glass-bd2:  rgba(255,255,255,.10);   /* interior hairline, quieter */
+    --glass-hi:   rgba(255,255,255,.45);   /* the catch-light */
+    /* 18px, not 22. Above that it goes milky and the product art behind the
+       panels stops being readable — the vault measured this so we do not
+       have to. */
+    --glass-blur: 18px;
+    --glass-chrome-blur: 28px;
+    --glass-chrome: rgba(13, 12, 19, .55);
+  }
+
+  /* The world the glass refracts. Without a lit ground, a translucent panel is
+     just a grey one — the material is the CONTRAST between bright corner and
+     dark field, not the transparency. */
+  :root[data-material=glass] body {
+    background:
+      radial-gradient(1100px 760px at 12% -12%, rgba(127, 119, 221, .30), transparent 65%),
+      radial-gradient(920px 680px at 106% 112%, rgba(96, 160, 240, .14), transparent 58%),
+      radial-gradient(760px 560px at 88% 46%, rgba(127, 119, 221, .10), transparent 66%),
+      linear-gradient(168deg, transparent 34%, rgba(127, 119, 221, .07) 62%, transparent 94%),
+      var(--bg);
+    background-attachment: fixed;
+  }
+  /* Phones: those px radii are wider than the whole viewport, so a 390px
+     screen sits inside the flat CENTRE of an 1100px gradient and the light
+     reads as one uniform tint. No bright-corner-into-dark falloff, no glass.
+     Re-cut in viewport units, hotter and tighter. */
+  @media (max-width: 768px) {
+    :root[data-material=glass] body {
+      background:
+        radial-gradient(130vw 46vh at 14% -6%, rgba(127, 119, 221, .36), transparent 68%),
+        radial-gradient(120vw 42vh at 108% 104%, rgba(96, 160, 240, .18), transparent 62%),
+        radial-gradient(90vw 30vh at 94% 46%, rgba(255, 255, 255, .05), transparent 66%),
+        var(--bg);
+      background-attachment: fixed;
+    }
+  }
+
+  /* ── chrome: the nav, in both its shapes ─────────────────────────────── */
+  :root[data-material=glass] .tabs {
+    background: var(--glass-chrome);
+    backdrop-filter: blur(var(--glass-chrome-blur)) saturate(180%);
+    -webkit-backdrop-filter: blur(var(--glass-chrome-blur)) saturate(180%);
+  }
+  @media (max-width: 899px) {
+    /* The bottom bar is most of the frame on a phone, so it carries the
+       material hardest: a deeper blur and the specular edge along its top,
+       where content scrolls under it. */
+    :root[data-material=glass] .tabs {
+      backdrop-filter: blur(var(--glass-chrome-blur)) saturate(200%);
+      -webkit-backdrop-filter: blur(var(--glass-chrome-blur)) saturate(200%);
+      box-shadow: inset 0 1px 0 var(--glass-hi), 0 -10px 30px rgba(0,0,0,.32);
+    }
+  }
+  @media (min-width: 900px) {
+    /* The side panel's catch-light runs down its inner edge, not across a top
+       it does not have. */
+    :root[data-material=glass] .tabs {
+      box-shadow: inset -1px 0 0 rgba(255,255,255,.06);
+    }
+  }
+  :root[data-material=glass] .tab.on { box-shadow: inset 0 1px 0 var(--glass-hi); }
+
+  /* ── list cards: filled and lit, not blurred ─────────────────────────── */
+  :root[data-material=glass] .card {
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-bd);
+    box-shadow: inset 0 1px 0 var(--glass-hi),
+                inset 0 -24px 44px rgba(255,255,255,.03),
+                0 16px 36px rgba(0,0,0,.30);
+  }
+
+  /* ── the panels that DO get blur: few, big, near the top ─────────────── */
+  :root[data-material=glass] .banner,
+  :root[data-material=glass] .wizard,
+  :root[data-material=glass] .quickadd,
+  :root[data-material=glass] dialog .card {
+    backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+  }
+
+  /* ── the float layer ─────────────────────────────────────────────────── */
+  /* The pop-up stays NEAR-SOLID. A translucent sheet lets the page's own text
+     ghost up through it, which is unreadable rather than beautiful — the
+     vault settled this the hard way. The glass lives in its edge and its
+     catch-light, and in the blurred page dimmed behind it. */
+  :root[data-material=glass] dialog .card {
+    background: color-mix(in srgb, var(--panel) 94%, transparent);
+    border: 1px solid var(--glass-bd);
+    box-shadow: inset 0 1px 0 var(--glass-hi), var(--shadow);
+  }
+  :root[data-material=glass] dialog::backdrop {
+    background: rgba(4, 3, 8, .55);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+  }
+
+  /* ── controls: translucent fill + specular, no per-element blur ──────── */
+  /* Resting state only. The active chip and the primary button own their
+     accent fill, and these rules are equal specificity — without the guards
+     the later source order would quietly un-highlight a selected filter. */
+  :root[data-material=glass] button:not(.primary):not(.go),
+  :root[data-material=glass] .btn,
+  :root[data-material=glass] .chip:not([aria-pressed="true"]) {
+    background: var(--glass-bg2);
+    border-color: var(--glass-bd);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.16);
+  }
+  /* The focal actions keep their solid accent and gain the top edge; the glow
+     is the accent, so it belongs to them and to nothing else. */
+  :root[data-material=glass] .primary,
+  :root[data-material=glass] .go {
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.45),
+                0 8px 22px rgba(127, 119, 221, .40);
+  }
+
+  /* ── interiors ───────────────────────────────────────────────────────── */
+  /* Inputs and thumbnails sat on solid fills ON TOP of the glass, which broke
+     every panel into patchwork. One quieter interior language, no extra blur —
+     they are already on a lit surface, so this is free. Focus states are set
+     after this in the cascade and are untouched. */
+  :root[data-material=glass] input,
+  :root[data-material=glass] select,
+  :root[data-material=glass] textarea,
+  :root[data-material=glass] .thumb {
+    background: var(--glass-in);
+    border-color: var(--glass-bd2);
+  }
+
+  /* Everything not named above stays exactly as it was, and that is the point:
+     pills, tables, the activity log and every price on the page keep their
+     solid fills, because a figure you have to squint at is a worse outcome
+     than a flat panel. */
+}
+
 /*
  * The hidden attribute must actually hide.
  *
@@ -380,7 +572,7 @@ button.small { padding: 4px 10px; font-size: 12px; border-radius: var(--r-sm); b
            gap: 12px; align-items: start; }
 .gridded .card { margin-bottom: 0; }
 .gridded .row { display: block; }
-.gridded .thumb, .gridded .thumb.lg { width: 100%; height: 150px; margin-bottom: 10px; }
+.gridded .thumb, .gridded .thumb.lg { width: 100%; height: 190px; margin-bottom: 10px; }
 .gridded .right { text-align: left; min-width: 0; margin-top: 8px; }
 .gridded .empty, .gridded > .card.foldnote { grid-column: 1 / -1; }
 /* A pill that is wider than its grid column trims itself rather than
@@ -404,13 +596,29 @@ button.small { padding: 4px 10px; font-size: 12px; border-radius: var(--r-sm); b
    it explains rather than informs. */
 .meta.dim { color: var(--dim); margin-top: 6px; }
 
-.thumb { width: 60px; height: 60px; border-radius: var(--r-ctl); object-fit: contain;
+/*
+ * The art fills its frame.
+ *
+ * object-fit: contain letterboxed every photo inside its box, and because
+ * retailer product shots come on a white ground, what you actually saw was a
+ * small white rectangle floating in a dark one with the product small inside
+ * THAT. Two nested frames, and the thing you are trying to recognise at a
+ * glance was the smallest element of the three.
+ *
+ * cover crops instead, and crops the right thing: product photography is
+ * centred with generous margin, so what goes first is the white surround, not
+ * the box. The frames grew too — 60 to 76 in a row, 150 to 190 in a tile —
+ * because on a list of forty missions the picture is how you find the one you
+ * meant, and it was doing that job at the size of a favicon.
+ */
+.thumb { width: 76px; height: 76px; border-radius: var(--r-ctl);
+         object-fit: cover; object-position: center;
          background: var(--panel-2); border: 1px solid var(--line); flex: 0 0 auto; }
 .thumb.ph { display: flex; align-items: center; justify-content: center;
             color: var(--dim); font-size: 20px; }
 /* Refused by the retailer, as opposed to never fetched. Different problem. */
 .thumb.broken { color: var(--warn); border-color: var(--warn); }
-.thumb.lg { width: 88px; height: 88px; }
+.thumb.lg { width: 104px; height: 104px; }
 
 form.stack { display: grid; gap: 11px; }
 .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 11px; }
@@ -563,7 +771,7 @@ export function loginPage(message = '', handle = ''): string {
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Phantom by DNA</title>
-<link rel="manifest" href="/manifest.webmanifest?v=5">
+<link rel="manifest" href="/manifest.webmanifest?v=6">
 <link rel="icon" href="/icon-192-v6.png" sizes="192x192" type="image/png">
 <link rel="apple-touch-icon" href="/icon-192-v6.png">
 ${FONTS}<style>${STYLE}</style></head>
@@ -641,9 +849,35 @@ export function dashboardPage(): string {
   return `<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8">
+<!--
+  The material, decided before the first paint.
+
+  Inline and at the top on purpose: set from a script at the bottom of the
+  body and the page renders flat for a beat, then everything lights up at
+  once. A flash of the wrong material is worse than not having one.
+
+  Two ways to end up without glass, and both are respected here rather than
+  in CSS. A media query on prefers-reduced-transparency FAILS CLOSED — a
+  browser that has never heard of the feature treats it as false and drops
+  every rule guarded by it, which is how this material worked on a desktop and
+  rendered as nothing on a phone. matchMedia fails OPEN: unknown query, no
+  match, glass allowed. Somebody who really has asked their system for less
+  transparency never gets the attribute, and somebody who turned it off here
+  gets their choice back on every load.
+-->
+<script>
+(function () {
+  var off = false;
+  try { off = localStorage.getItem('phantom.material') === 'plain'; } catch (e) { off = false; }
+  try {
+    if (window.matchMedia && window.matchMedia('(prefers-reduced-transparency: reduce)').matches) off = true;
+  } catch (e) { /* an older browser simply has no opinion */ }
+  if (!off) document.documentElement.setAttribute('data-material', 'glass');
+})();
+</script>
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Phantom by DNA</title>
-<link rel="manifest" href="/manifest.webmanifest?v=5">
+<link rel="manifest" href="/manifest.webmanifest?v=6">
 <meta name="theme-color" content="#09080e">
 <link rel="icon" href="/icon-192-v6.png" sizes="192x192" type="image/png">
 <!-- iOS ignores the manifest for the home-screen icon and the status bar. -->
@@ -657,11 +891,11 @@ export function dashboardPage(): string {
 ${FONTS}<style>${STYLE}</style></head>
 <body><div class="shell">
   <nav class="tabs" aria-label="Sections">
-    <div class="brand"><span class="mark"></span><span class="brand-name">Phantom by DNA</span></div>
+    <div class="brand"><span class="mark"></span><span class="brand-name"><b>Phantom</b> <i>by DNA</i></span></div>
     <button class="tab on" data-tab="missions">${ICONS.missions}<span>Missions</span><span class="count" id="c-missions"></span></button>
     <button class="tab" data-tab="products">${ICONS.products}<span>Products</span><span class="count" id="c-products"></span></button>
     <button class="tab" data-tab="activity">${ICONS.activity}<span>Activity</span><span class="count" id="c-activity"></span></button>
-    <button class="tab" data-tab="finds">${ICONS.finds}<span>Finds</span><span class="count" id="c-finds"></span></button>
+    <button class="tab" data-tab="finds">${ICONS.finds}<span>Discovery</span><span class="count" id="c-finds"></span></button>
     <button class="tab" data-tab="vault">${ICONS.vault}<span>Vault</span><span class="count" id="c-vault"></span></button>
     <button class="tab" data-tab="settings">${ICONS.settings}<span>Settings</span></button>
   </nav>
@@ -670,7 +904,7 @@ ${FONTS}<style>${STYLE}</style></head>
     <!-- The wordmark on a phone. The side panel carries it on a browser; a
          bottom bar cannot spare the width, and a nameless app is a worse
          trade than a header line. -->
-    <div class="brand phonebrand"><span class="mark"></span><span class="brand-name">Phantom by DNA</span></div>
+    <div class="brand phonebrand"><span class="mark"></span><span class="brand-name"><b>Phantom</b> <i>by DNA</i></span></div>
     <div>
       <span class="sub" id="summary">loading…</span> <span class="who" id="who"></span>
     </div>
@@ -804,7 +1038,7 @@ ${FONTS}<style>${STYLE}</style></head>
   </section>
 
   <section id="tab-finds" hidden>
-    <h2 style="margin-top:0">What the sweep turned up</h2>
+    <h2 style="margin-top:0">Discovery — what the sweep turned up</h2>
     <p class="sub" style="margin:-6px 0 14px">
       A sweep proposes; you decide. <strong>Keep</strong> starts watching it —
       a product, a listing, and a mission with eyes on the page. It does not
@@ -818,7 +1052,7 @@ ${FONTS}<style>${STYLE}</style></head>
   <div class="listtools"><div class="vt" data-list="finds"><button type="button" data-view="list" title="List view">☰</button><button type="button" data-view="grid" title="Grid view">▦</button></div></div>
     <div class="filters" id="finds-filters">
       <div class="chips seg" id="find-shops"></div>
-      <input type="search" id="find-q" placeholder="Search these finds"
+      <input type="search" id="find-q" placeholder="Search discoveries"
              autocomplete="off" autocapitalize="off" spellcheck="false">
       <div class="chips" id="find-states"></div>
       <div class="sub" id="find-count"></div>
@@ -839,7 +1073,18 @@ ${FONTS}<style>${STYLE}</style></head>
   </section>
 
   <section id="tab-settings" hidden>
-    <h2 style="margin-top:0">What is true of every mission</h2>
+    <h2 style="margin-top:0">Appearance</h2>
+    <p class="sub" style="margin:-6px 0 14px">
+      Liquid glass is the same material DNA Card Vault uses. It is a look, not
+      a setting that changes what anything does — and it is remembered on this
+      device only, so turning it off here does not touch anybody else.
+    </p>
+    <div class="card">
+      <label class="check"><input type="checkbox" id="material-toggle"> Liquid glass</label>
+      <div class="meta" style="margin-top:8px" id="material-note"></div>
+    </div>
+
+    <h2>What is true of every mission</h2>
     <p class="sub" style="margin:-6px 0 14px">
       A price ceiling is per unit and covers the item and the tax on it.
       Shipping is charged per order, not per unit, so it has its own allowance
@@ -3071,7 +3316,7 @@ function wizAsk(body) {
       'straight into the catalogue, watched from the next pass.'
     : 'Paste a Target, Pokémon Center or Walmart product link. It goes to the ' +
       'catalogue owner, and once it is added you will see it on your watchlist. ' +
-      'You can see what happened to anything you send under Finds.';
+      'You can see what happened to anything you send under Discovery.';
   body.appendChild(p);
 
   const form = el('form', 'stack');
@@ -3352,7 +3597,7 @@ function renderFinds() {
     const none = el('div', 'card');
     none.appendChild(el('div', 'name', 'Nothing matches those filters'));
     none.appendChild(el('div', 'meta',
-      String(all.length) + ' finds are waiting — widen the search to see them.'));
+      String(all.length) + ' discoveries are waiting — widen the search to see them.'));
     const clear = el('button', 'small', 'Clear filters');
     clear.addEventListener('click', () => {
       FIND_FILTER.shop = '';
@@ -3907,6 +4152,49 @@ function sharedUrl() {
   const m = ((q.get('text') || '') + ' ' + (q.get('title') || '')).match(/https?:\\/\\/\\S+/);
   return m ? m[0] : '';
 }
+
+/*
+ * The material switch.
+ *
+ * Only ever a downgrade path. The head script has already decided whether
+ * glass is allowed at all; this can turn it off and back on again within that,
+ * and it says so when the answer was taken out of its hands — a dead checkbox
+ * with no explanation is how people conclude the app is broken.
+ */
+(function () {
+  const box = document.getElementById('material-toggle');
+  const note = document.getElementById('material-note');
+  let forced = false;
+  try {
+    forced = !!(window.matchMedia &&
+      window.matchMedia('(prefers-reduced-transparency: reduce)').matches);
+  } catch (e) { forced = false; }
+
+  const supported = window.CSS && CSS.supports &&
+    (CSS.supports('backdrop-filter', 'blur(1px)') ||
+     CSS.supports('-webkit-backdrop-filter', 'blur(1px)'));
+
+  if (forced || !supported) {
+    box.checked = false;
+    box.disabled = true;
+    note.textContent = forced
+      ? 'Off because this device asks for reduced transparency. That setting wins.'
+      : 'This browser cannot blur what is behind a panel, so the plain surfaces are what you get.';
+    return;
+  }
+
+  box.checked = document.documentElement.getAttribute('data-material') === 'glass';
+  note.textContent = 'Remembered on this device.';
+  box.addEventListener('change', () => {
+    if (box.checked) document.documentElement.setAttribute('data-material', 'glass');
+    else document.documentElement.removeAttribute('data-material');
+    try {
+      localStorage.setItem('phantom.material', box.checked ? 'glass' : 'plain');
+    } catch (e) {
+      note.textContent = 'Changed for now — this browser will not remember it.';
+    }
+  });
+})();
 
 document.getElementById('wiz-open').addEventListener('click', () => openWizard(0));
 document.getElementById('wiz-close').addEventListener('click', closeWizard);

@@ -1873,7 +1873,7 @@ test('filters that match nothing say so, and offer a way back', async () => {
   box.value = 'charizard';
   box.dispatchEvent(new h.dom.window.Event('input'));
   assert.match($(h, '#finds-list').textContent, /Nothing matches those filters/);
-  assert.match($(h, '#finds-list').textContent, /5 finds are waiting/);
+  assert.match($(h, '#finds-list').textContent, /5 discoveries are waiting/);
 
   const clear = [...h.doc.querySelectorAll('#finds-list button')]
     .find((b) => b.textContent === 'Clear filters');
@@ -2541,7 +2541,11 @@ test('THE APP IS CALLED PHANTOM BY DNA EVERYWHERE A NAME APPEARS', async () => {
   // The home-screen label is just "Phantom" — 14 characters gets ellipsised
   // under an iOS tile, and a truncated name is worse than a short one.
   assert.match(html, /apple-mobile-web-app-title" content="Phantom"/);
-  assert.match(html, /class="brand-name">Phantom by DNA</);
+  // The wordmark stacks now — the name at full weight over its origin in small
+  // caps — so the check is on what the lockup SAYS, not on how it is cut up.
+  // The space between the two spans is a real text node, which is what keeps
+  // the accessible name a sentence rather than "Phantomby DNA".
+  assert.match(html, /class="brand-name"><b>Phantom<\/b> <i>by DNA<\/i>/);
   assert.doesNotMatch(html, /<title>Hub<\/title>/);
   assert.doesNotMatch(html, /Vault Watch/);
 });
@@ -3010,4 +3014,120 @@ test('resting is not silence — the heartbeat is the log, not the readings', as
     agentSeenAt: minsAgo(2),
   });
   assert.equal($(h, '#silence-banner').hidden, true);
+});
+
+test('THE TAB IS CALLED DISCOVERY', async () => {
+  // Renamed 1 Sep 2026. The data key stays `finds` — the name people read and
+  // the name the code uses are allowed to differ, and churning ids the night
+  // of a drop is not a trade worth making.
+  const h = await boot();
+  const tab = [...h.doc.querySelectorAll('.tab')].find((t) => t.dataset.tab === 'finds');
+  assert.equal(tab.textContent.trim(), 'Discovery');
+  assert.match(h.doc.querySelector('#tab-finds h2').textContent, /^Discovery/);
+});
+
+// ── The material ─────────────────────────────────────────────────────────────
+
+test('GLASS IS DECIDED BEFORE THE FIRST PAINT', async () => {
+  // Set from a script at the bottom of the body and the page renders flat for
+  // a beat, then lights up all at once. A flash of the wrong material is worse
+  // than not having one.
+  const html = dashboardPage();
+  const head = html.slice(0, html.indexOf('</head>'));
+  assert.match(head, /data-material/, 'the decision is made in the head');
+  assert.ok(
+    head.indexOf('data-material') < head.indexOf('<style>'),
+    'and before the stylesheet it governs',
+  );
+});
+
+test('REDUCE-TRANSPARENCY IS RESPECTED IN JS, WHICH FAILS OPEN', async () => {
+  // The scar this is written from: a CSS media query on
+  // prefers-reduced-transparency FAILS CLOSED. A browser that has never heard
+  // of the feature treats the query as false and silently drops every rule
+  // inside it — the material worked on desktop Chrome and rendered as nothing
+  // at all on a phone. matchMedia fails open: unknown query, no match, glass.
+  const html = dashboardPage();
+  assert.match(html, /matchMedia\('\(prefers-reduced-transparency: reduce\)'\)/);
+  const style = /<style>([\s\S]*?)<\/style>/.exec(html)?.[1] ?? '';
+  assert.doesNotMatch(
+    style,
+    /@media[^{]*prefers-reduced-transparency/,
+    'never as a CSS guard — that is the version that failed',
+  );
+});
+
+test('the whole material sits behind an @supports for backdrop-filter', async () => {
+  const html = dashboardPage();
+  const style = /<style>([\s\S]*?)<\/style>/.exec(html)?.[1] ?? '';
+  const at = style.indexOf('@supports ((backdrop-filter');
+  assert.ok(at > 0, 'the guard exists');
+  assert.ok(
+    style.indexOf('data-material=glass') > at,
+    'and every glass rule is inside it, so this can only ever enhance',
+  );
+});
+
+test('LIST CARDS ARE NOT BLURRED — forty of them is the jank', async () => {
+  // The vault blurs .card because a card there is a panel. Here a card is a
+  // LIST ROW: forty missions and a hundred discoveries are forty and a hundred
+  // backdrop-filters on one scroll. They get the fill and the catch-light,
+  // which is the look, without the cost.
+  const html = dashboardPage();
+  const style = /<style>([\s\S]*?)<\/style>/.exec(html)?.[1] ?? '';
+  const rule = /:root\[data-material=glass\] \.card \{([^}]*)\}/.exec(style)?.[1] ?? '';
+  assert.ok(rule, 'cards do get the material');
+  assert.match(rule, /inset 0 1px 0 var\(--glass-hi\)/, 'the catch-light is the look');
+  assert.doesNotMatch(rule, /backdrop-filter/, 'but not a per-row blur');
+});
+
+test('the few big fixed surfaces DO get the blur', async () => {
+  const html = dashboardPage();
+  const style = /<style>([\s\S]*?)<\/style>/.exec(html)?.[1] ?? '';
+  for (const sel of ['.tabs', '.banner', '.wizard', 'dialog .card']) {
+    const re = new RegExp(
+      ':root\\[data-material=glass\\][^{]*' + sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') +
+        '[^{]*\\{[^}]*backdrop-filter',
+    );
+    assert.match(style, re, `${sel} should carry the blur`);
+  }
+});
+
+test('THE POP-UP STAYS NEAR-SOLID, so the page cannot ghost through it', async () => {
+  // A translucent sheet let the page's own text read up through the dialog.
+  // Unreadable rather than beautiful; the vault settled this the hard way. The
+  // glass lives in the edge and the dimmed, blurred page behind it.
+  const html = dashboardPage();
+  const style = /<style>([\s\S]*?)<\/style>/.exec(html)?.[1] ?? '';
+  assert.match(style, /dialog \.card \{[^}]*var\(--panel\) 94%/);
+  assert.match(style, /dialog::backdrop \{[^}]*backdrop-filter: blur\(4px\)/);
+});
+
+test('a phone gets its own light field, cut in viewport units', async () => {
+  // The desktop radii are wider than a whole phone viewport, so a 390px screen
+  // sits in the flat CENTRE of an 1100px gradient and the light reads as one
+  // uniform tint. No bright-corner falloff, no glass.
+  const html = dashboardPage();
+  const style = /<style>([\s\S]*?)<\/style>/.exec(html)?.[1] ?? '';
+  const phone = /@media \(max-width: 768px\) \{([\s\S]*?)\n  \}/.exec(style)?.[1] ?? '';
+  assert.match(phone, /data-material=glass\] body/);
+  assert.match(phone, /\d+vw \d+vh/, 'viewport units, not pixels');
+});
+
+test('the material can be turned off, and says why when it cannot', async () => {
+  const h = await boot();
+  const box = $(h, '#material-toggle');
+  assert.ok(box, 'there is a switch');
+  assert.match($(h, '#material-note').textContent, /\S/, 'and it always explains itself');
+});
+
+test('THE ART FILLS ITS FRAME', async () => {
+  // contain letterboxed every photo, and because retailer shots come on a
+  // white ground what you saw was a small white rectangle inside a dark one
+  // with the product smaller still inside that.
+  const html = dashboardPage();
+  const style = /<style>([\s\S]*?)<\/style>/.exec(html)?.[1] ?? '';
+  const thumb = /\n\.thumb \{([^}]*)\}/.exec(style)?.[1] ?? '';
+  assert.match(thumb, /object-fit: cover/);
+  assert.doesNotMatch(thumb, /object-fit: contain/);
 });

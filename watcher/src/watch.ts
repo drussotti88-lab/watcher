@@ -304,6 +304,31 @@ export interface WatchDeps {
    * Injectable so the pass can be tested without a Hub, a cart or a card.
    */
   buyer?: (mission: Mission, reading: Reading) => Promise<RunOut>;
+  /**
+   * How long a pass may keep working before handing control back.
+   *
+   * ── The bug this exists for ────────────────────────────────────────────
+   *
+   * A pass used to check ONE mission per retailer and return, and the caller
+   * then slept the whole interval. With 39 missions across three shops that is
+   * three checks every ninety-six seconds — so the fourteen Target listings
+   * took TWENTY-TWO MINUTES to come round again. On a drop, twenty-two minutes
+   * is not slow, it is absent.
+   *
+   * Worse, it made the drop-window burst decorative. Tightening the spacing
+   * from twenty seconds to seven does nothing when the pass stops after the
+   * first check either way: the pacer was being asked for permission it had
+   * already granted, and then we went to sleep instead of using it.
+   *
+   * So a pass now DRAINS its due list, waiting out the pacer between checks,
+   * until nothing is due or this window is spent. The window is what still
+   * brings us back to the Hub for fresh missions and settings on a regular
+   * cadence — without it, a long queue would starve the list it is working
+   * from.
+   */
+  windowMs?: number;
+  /** Injectable so draining can be tested without real time passing. */
+  wait?: (ms: number) => Promise<void>;
 }
 
 export interface PassResult {
@@ -322,6 +347,24 @@ export interface PassResult {
   nextDueInMs: number | null;
   blocked: string[];
   waitingOn: string[];
+}
+
+/**
+ * How long until SOME due mission's retailer will have us again.
+ *
+ * Only counts missions that are due on their own schedule — a listing whose
+ * next check is twenty minutes out is not worth holding a pass open for, and
+ * waiting on it would starve the ones that are ready.
+ */
+function soonestAllowed(missions: Mission[], pacer: Pacer, now: number): number | null {
+  let soonest: number | null = null;
+  for (const m of missions) {
+    if (!(m.checkNow === true || isDue(m.lastCheckedAt || null, m.checkEverySeconds, now))) continue;
+    const wait = pacer.waitMs(m.retailer, now);
+    if (wait <= 0) return 0;
+    if (soonest === null || wait < soonest) soonest = wait;
+  }
+  return soonest;
 }
 
 /**
@@ -346,8 +389,34 @@ export async function pass(missions: Mission[], pacer: Pacer, deps: WatchDeps): 
 
   const remaining = [...missions];
   const done = new Set<number>();
+
+  // ── The window ────────────────────────────────────────────────────────────
+  //
+  // A pass keeps working until its list is empty or its time is up, waiting out
+  // the retailer's own spacing in between rather than going to sleep on top of
+  // it. Zero means the old behaviour — one round and out — so every existing
+  // test still describes what it always did.
+  const windowMs = deps.windowMs ?? 0;
+  const wait = deps.wait ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const started = now();
+
   for (;;) {
-    const mission = nextUp(remaining, pacer, now());
+    let mission = nextUp(remaining, pacer, now());
+
+    // Nothing allowed right now. That is not the same as nothing to do: the
+    // usual reason is a retailer's spacing, and the whole point of the window
+    // is to spend it waiting for that rather than idling past it.
+    if (!mission && windowMs > 0) {
+      const spent = now() - started;
+      const soonest = soonestAllowed(remaining, pacer, now());
+      // Only worth waiting if the wait fits inside what is left of the window,
+      // and only for a mission that is actually due to be checked.
+      if (soonest !== null && spent + soonest < windowMs) {
+        await wait(soonest);
+        mission = nextUp(remaining, pacer, now());
+      }
+    }
+
     if (!mission) break;
     remaining.splice(remaining.indexOf(mission), 1);
     done.add(mission.id);

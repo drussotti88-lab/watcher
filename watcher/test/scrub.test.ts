@@ -89,3 +89,34 @@ test('a token is removed even when it is the whole message', () => {
   const token = 'hub_9f2c8a1b7d4e6f3a2b5c8d9e';
   assert.ok(!scrub(token, [token]).includes(token));
 });
+
+// ── Nothing pretends to be something it is not ───────────────────────────────
+
+test('NO ANTI-DETECTION FLAGS IN THE BROWSER LAUNCH', () => {
+  // --disable-blink-features=AutomationControlled sat in the launch args from
+  // the beginning. Its only function is to stop Chrome setting
+  // navigator.webdriver — which is to say its only function is to make this
+  // browser harder to recognise as automated. That is the one thing this
+  // project said it would not do.
+  //
+  // Pinned as a test rather than a deleted line, because the reason it lasted
+  // so long is that nobody was looking, and the day it stops working is the
+  // day somebody is tempted to put it back.
+  const src = readFileSync(new URL('../src/browser.ts', import.meta.url), 'utf8');
+  const args = /args: \[([\s\S]*?)\n      \]/.exec(src)?.[1] ?? '';
+  assert.ok(args, 'the launch args should be findable');
+
+  const live = args
+    .split('\n')
+    .filter((line) => !/^\s*\/\//.test(line))
+    .join('\n');
+
+  for (const banned of [
+    'AutomationControlled',
+    'disable-blink-features',
+    '--disable-web-security',
+    '--user-agent',
+  ]) {
+    assert.ok(!live.includes(banned), `${banned} is not ours to use`);
+  }
+});

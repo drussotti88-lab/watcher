@@ -56,7 +56,18 @@ export function iconResponse(name: string): Response | null {
  * share target, so there the flow is paste-into-the-box; the page handles both.
  */
 export const MANIFEST = {
-  name: 'Phantom by DNA — what is being watched',
+  /*
+   * Just the name.
+   *
+   * An installed app's window is titled "<manifest name> - <document title>",
+   * so a descriptive name here became "Phantom by DNA — what is being watched
+   * - Phantom by DNA" across the top of a desktop window. Worse, the manifest
+   * is served immutable for a week: an app installed before the rename kept
+   * showing "Vault Watch — what is being watched" for days after every other
+   * trace of that name was gone. The ?v= on the link tag is what forces the
+   * re-fetch, and it is bumped whenever anything in here changes.
+   */
+  name: 'Phantom by DNA',
   short_name: 'Phantom',
   description: 'Watch Pokémon TCG listings at Target, Pokémon Center and Walmart.',
   start_url: '/',

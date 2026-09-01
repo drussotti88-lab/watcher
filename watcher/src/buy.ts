@@ -27,6 +27,7 @@ import type { Hub, Mission, RunOut } from './hub.ts';
 import type { Reading } from './read.ts';
 import type { Activity } from './activity.ts';
 import { verifyCart, type CartTotals } from './money.ts';
+import { detectChallenge } from './challenge.ts';
 import { targetCart, type CartDriver } from './checkout/target.ts';
 
 export interface BuyDeps {
@@ -39,6 +40,10 @@ export interface BuyDeps {
   live: boolean;
   activity?: Activity;
   log?: (line: string) => void;
+  /** How long to hold the window open for a person. Injectable for tests. */
+  humanWaitMs?: number;
+  humanPollMs?: number;
+  waitMs?: (ms: number) => Promise<void>;
 }
 
 const DRIVERS: Partial<Record<string, CartDriver>> = { Target: targetCart };
@@ -84,6 +89,69 @@ export function stopwatch(now: () => number = Date.now): Stopwatch {
       return last - started;
     },
   };
+}
+
+/**
+ * Is the buy window showing a challenge rather than a shop?
+ *
+ * Reads the same detector the watch path uses, so "press and hold", a queue,
+ * an Access Denied and an empty Imperva shell are named the same way in both
+ * halves of the system.
+ *
+ * Never throws: this runs inside a catch block, and a diagnostic that can
+ * itself fail replaces a bad error message with a worse one.
+ */
+async function challengeOn(browser: { page: () => Promise<Page> }): Promise<string | null> {
+  try {
+    const page = await browser.page();
+    const [title, text, html] = await Promise.all([
+      page.title().catch(() => ''),
+      page.evaluate(() => document.body?.innerText?.slice(0, 4000) ?? '').catch(() => ''),
+      page.content().catch(() => ''),
+    ]);
+    const c = detectChallenge(title, text, html);
+    return c.challenged ? c.reason : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Hold the window open and wait for a person to answer.
+ *
+ * ── The line this sits on ───────────────────────────────────────────────────
+ *
+ * A press-and-hold is a question addressed to a human, and this code will
+ * never answer one. What it can do is not throw the opportunity away: the
+ * browser is open on somebody's desk, they can see the same page, and if they
+ * clear it the drop is still live. Waiting for a person is the opposite of
+ * defeating a check — it is the check working exactly as intended.
+ *
+ * Two minutes, because a drop rarely outlasts that and a grant held open on a
+ * machine nobody is sitting at is money committed to nothing.
+ */
+const HUMAN_WAIT_MS = 120_000;
+const HUMAN_POLL_MS = 2_000;
+
+async function waitForHuman(
+  browser: { page: () => Promise<Page> },
+  deps: BuyDeps,
+): Promise<boolean> {
+  const log = deps.log ?? (() => {});
+  const waited = deps.waitMs ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const budget = deps.humanWaitMs ?? HUMAN_WAIT_MS;
+  const poll = deps.humanPollMs ?? HUMAN_POLL_MS;
+
+  for (let spent = 0; spent < budget; spent += poll) {
+    await waited(poll);
+    if ((await challengeOn(browser)) === null) return true;
+    // Say it again as the clock runs down. Once at the top of a scrolling log
+    // is too quiet for the one line that needs a person to move.
+    if (spent > 0 && spent % 20_000 < poll) {
+      log(`  still waiting on the check — ${Math.round((budget - spent) / 1000)}s left`);
+    }
+  }
+  return false;
 }
 
 export async function attemptBuy(
@@ -222,6 +290,72 @@ export async function attemptBuy(
       reason: `BOUGHT: ${cart.quantity} × ${mission.productName} at $${(check.total ?? 0).toFixed(2)} all-in`,
     });
   } catch (err) {
+    // ── Was it a wall, or was it us? ────────────────────────────────────────
+    //
+    // On the first live drop rehearsal (1 Sep 2026) addToCart threw "none of
+    // [data-test=addToCartButton] … appeared — the selector table needs the
+    // sitting". Every word of that was wrong about the cause: the selectors
+    // were fine, and what the page was showing was Target's press-and-hold
+    // check. A message that blames our own code sends you off rewriting a
+    // selector table while the drop happens without you.
+    //
+    // So before anything else, look at what the page actually is.
+    const challenge = browser ? await challengeOn(browser) : null;
+    if (challenge) {
+      // We do not answer these, and we are not going to. A press-and-hold is a
+      // question addressed to a person, and the browser it is asked in is open
+      // on that person's desk — so the honest move is to say so loudly, hold
+      // the window open, and carry on if they answer it in time.
+      const detail = (err as Error).message;
+      log(`  ${challenge} at ${mission.retailer} — ANSWER IT IN THE OPEN WINDOW, I will wait`);
+      deps.activity?.record({
+        kind: 'buy',
+        level: 'error',
+        retailer: mission.retailer,
+        missionId: mission.id,
+        message: `HUMAN NEEDED: ${mission.retailer} is asking for ${challenge}`,
+        detail: 'the buy window is open on this machine — answer it there and the buy continues',
+      });
+
+      const cleared = await waitForHuman(browser!, deps);
+      clock.mark('human');
+      if (!cleared) {
+        await deps.hub.resolveAuthorisation(
+          auth.id,
+          'released',
+          `${challenge} went unanswered`,
+        );
+        return record({
+          ...base,
+          outcome: 'blocked',
+          reason:
+            `${mission.retailer} put up ${challenge} and nobody answered it in time. ` +
+            `Nothing was bought and the money is released. This is a question for a ` +
+            `person, and it is not one this machine will ever answer for you.`,
+        });
+      }
+      // Answered. The grant is released rather than reused, and the next pass
+      // does the buy properly from the top.
+      //
+      // Deliberately NOT an inline retry. Re-running the cart flow from inside
+      // a catch block is a second path to the button that no test walks, and
+      // the button is the one place in this system where being clever costs
+      // real money. The next check is seconds away now that a pass drains its
+      // list, and it re-reads the page, re-authorises, and lets the cart have
+      // the final word on the price — none of which should be skipped just
+      // because we were already most of the way there.
+      log('  cleared — the next check will do the buy properly');
+      await deps.hub.resolveAuthorisation(auth.id, 'released', `${challenge} cleared by a person`);
+      return record({
+        ...base,
+        outcome: 'blocked',
+        reason:
+          `${mission.retailer} asked for ${challenge} and you cleared it. Nothing was bought on ` +
+          `this attempt — the next check starts again from the page, which is the only way the ` +
+          `cart still gets the final word on the price.`,
+      });
+    }
+
     // Something threw mid-flow. If the item never reached the cart, the grant
     // is safely releasable; if it did — or we cannot tell — the grant stays
     // live and a person looks. Fail closed on not knowing.

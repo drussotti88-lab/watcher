@@ -669,6 +669,15 @@ async function runPasses(once: boolean): Promise<void> {
         if (existsSync(STOP_FILE)) {
           rmSync(STOP_FILE);
           stopped = true;
+          // The supervisor in the launcher restarts anything that exits without
+          // being asked to. This is the marker that says it WAS asked — written
+          // by the process that is stopping, not by the button, so a stop file
+          // that never got read cannot be mistaken for a clean exit.
+          try {
+            writeFileSync('logs/.stopped', new Date().toISOString());
+          } catch {
+            /* the supervisor restarting once too often is the safe failure */
+          }
           console.log(`  ${timestamp()}  stop file seen — shutting down cleanly`);
           activity.record({ kind: 'startup', message: 'asked to stop, shutting down cleanly' });
           break;
@@ -819,6 +828,11 @@ async function runPasses(once: boolean): Promise<void> {
           activity,
           buyer,
           log: (line) => console.log(line),
+          // Work the whole interval instead of taking one turn and sleeping
+          // through the rest of it. 90% of it, so the pass still returns in
+          // time to pick up fresh missions and settings on schedule rather
+          // than drifting a little later every cycle.
+          windowMs: Math.round(config.intervalSec * 1000 * 0.9),
         });
         const parts = [`${result.checked} checked`];
         if (result.runs) parts.push(`${result.runs} runs`);
@@ -1102,6 +1116,33 @@ ${
 
 process.on('SIGINT', () => {
   process.exit(0);
+});
+
+/*
+ * Say something on the way out.
+ *
+ * Phantom died twice on 1 Sep 2026 — once at 19:14 and again at 20:08 — and
+ * both times the log simply stopped mid-pass. No stack, no exit line, nothing
+ * to tell a crash from a kill from a closed window, which is the difference
+ * between a bug to fix and a machine to plug in.
+ *
+ * These print and FLUSH synchronously, because an async handler on the way to
+ * process death does not finish.
+ */
+process.on('uncaughtException', (err) => {
+  console.error(`\n  CRASHED: ${(err as Error)?.stack ?? String(err)}\n`);
+  process.exit(1);
+});
+process.on('unhandledRejection', (reason) => {
+  const err = reason as Error;
+  console.error(`\n  CRASHED on an unhandled promise: ${err?.stack ?? String(reason)}\n`);
+  process.exit(1);
+});
+process.on('exit', (code) => {
+  // The one line that tells a clean stop from a disappearance. A process that
+  // was killed from outside never reaches here at all, and that absence is
+  // itself the answer.
+  console.log(`\n  Phantom exited with code ${code} at ${new Date().toISOString()}\n`);
 });
 
 main().catch((err) => {

@@ -792,3 +792,122 @@ test('a pass reports a read-only mission but records no run for it', async () =>
   assert.equal(runs.length, 0, 'the run is not');
   assert.equal(result.runs, 0);
 });
+
+// ── Draining the list ────────────────────────────────────────────────────────
+//
+// A pass used to check ONE mission per retailer and return, and the caller then
+// slept the whole interval. With 39 missions across three shops that was three
+// checks every ninety-six seconds — so fourteen Target listings took TWENTY-TWO
+// MINUTES to come round again. On a drop, twenty-two minutes is not slow, it is
+// absent.
+
+/** A clock the test drives, so waiting costs nothing. */
+function fakeClock(start = T0) {
+  let t = start;
+  return {
+    now: () => t,
+    wait: async (ms: number) => { t += ms; },
+    advance: (ms: number) => { t += ms; },
+  };
+}
+
+test('WITHOUT A WINDOW A PASS TAKES ONE TURN PER RETAILER — the old shape', async () => {
+  // Kept as the baseline the change is measured against, and because every
+  // other test in this file still describes a pass with no window.
+  const { hub } = recorder();
+  const clock = fakeClock();
+  const pacer = new Pacer(STEADY, () => 0);
+  const missions = [1, 2, 3, 4].map((id) => mission({ id, listingId: 10 + id }));
+
+  const r = await pass(missions, pacer, {
+    browser, hub, now: clock.now, wait: clock.wait,
+    read: reads(() => reading()),
+  });
+  assert.equal(r.checked, 1);
+});
+
+test('A WINDOW LETS THE PASS DRAIN ITS LIST INSTEAD OF SLEEPING THROUGH IT', async () => {
+  // Four Target missions, 20s spacing, a 96s window. The old pass checked one
+  // and went to sleep on top of a budget the retailer had already granted.
+  const { hub } = recorder();
+  const clock = fakeClock();
+  const pacer = new Pacer(STEADY, () => 0);
+  const missions = [1, 2, 3, 4].map((id) => mission({ id, listingId: 10 + id }));
+
+  const r = await pass(missions, pacer, {
+    browser, hub, now: clock.now, wait: clock.wait,
+    read: reads(() => reading()),
+    windowMs: 96_000,
+  });
+  assert.equal(r.checked, 4, 'all four, one every 20 seconds');
+});
+
+test('THE BURST IS NOW WORTH SETTING — tighter spacing means more checks', async () => {
+  // The reason this mattered before tonight. Dropping the spacing from 20s to
+  // 7s did nothing while the pass stopped after one check either way: the
+  // pacer was being asked for permission it had already given.
+  const { hub } = recorder();
+  const clock = fakeClock();
+  const burst = new Pacer({ ...STEADY, minSpacingMs: 7000 }, () => 0);
+  const missions = Array.from({ length: 12 }, (_, i) => mission({ id: i + 1, listingId: 20 + i }));
+
+  const r = await pass(missions, burst, {
+    browser, hub, now: clock.now, wait: clock.wait,
+    read: reads(() => reading()),
+    windowMs: 96_000,
+  });
+  assert.ok(r.checked >= 12, `expected the whole list inside the window, got ${r.checked}`);
+});
+
+test('the window is a ceiling, not a target — it stops when the time is spent', async () => {
+  const { hub } = recorder();
+  const clock = fakeClock();
+  const pacer = new Pacer(STEADY, () => 0);
+  const missions = Array.from({ length: 20 }, (_, i) => mission({ id: i + 1, listingId: 30 + i }));
+
+  const r = await pass(missions, pacer, {
+    browser, hub, now: clock.now, wait: clock.wait,
+    read: reads(() => reading()),
+    windowMs: 60_000,
+  });
+  assert.ok(r.checked < 20, 'it does not run past its window');
+  assert.ok(r.checked >= 3, `and it does use the window it has, got ${r.checked}`);
+  assert.ok(clock.now() - T0 <= 60_000, 'never longer than it was given');
+});
+
+test('IT DOES NOT HOLD THE PASS OPEN FOR A MISSION THAT IS NOT DUE', async () => {
+  // Waiting on a listing whose next check is twenty minutes out would starve
+  // the ones that are ready and turn the window into a sleep.
+  const { hub } = recorder();
+  const clock = fakeClock();
+  const pacer = new Pacer(STEADY, () => 0);
+  const soon = mission({ id: 1, listingId: 11 });
+  const later = mission({
+    id: 2, listingId: 12,
+    checkEverySeconds: 3600,
+    lastCheckedAt: new Date(T0 - 60_000).toISOString(),
+  });
+
+  const r = await pass([soon, later], pacer, {
+    browser, hub, now: clock.now, wait: clock.wait,
+    read: reads(() => reading()),
+    windowMs: 96_000,
+  });
+  assert.equal(r.checked, 1, 'only the one that was due');
+  assert.ok(clock.now() - T0 < 1000, 'and it did not wait around for the other');
+});
+
+test('a retailer standing down does not keep the pass awake either', async () => {
+  const { hub } = recorder();
+  const clock = fakeClock();
+  const pacer = new Pacer(STEADY, () => 0);
+  pacer.challenged('Target', clock.now());   // 20 minutes, far outside any window
+
+  const r = await pass([mission({ id: 1 })], pacer, {
+    browser, hub, now: clock.now, wait: clock.wait,
+    read: reads(() => reading()),
+    windowMs: 96_000,
+  });
+  assert.equal(r.checked, 0);
+  assert.ok(clock.now() - T0 < 1000, 'it returned rather than sitting out a stand-down');
+});
