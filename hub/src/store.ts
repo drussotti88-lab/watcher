@@ -1456,8 +1456,208 @@ export async function resolveAuthorisation(
       userId,
       Number(row.mission_id),
     ]);
+    // A purchase happened, so a physical thing is now incoming inventory:
+    // queue it for the vault (review-then-send — a person confirms the match
+    // before anything touches the real portfolio). Best-effort by design; the
+    // resolve MUST NOT fail because a side table hiccupped.
+    await queueAcquisition(db, userId, Number(row.id), Number(row.mission_id)).catch(() => {});
   }
   return toAuthorisation(row);
+}
+
+// ─── Acquisitions: confirmed purchases on their way to the vault ─────────────
+
+export interface AcquisitionRow {
+  id: number;
+  missionId: number | null;
+  productKey: string | null;
+  name: string;
+  retailer: string;
+  quantity: number;
+  unitPriceCents: number | null;
+  orderedOn: string;
+  status: 'queued' | 'sent' | 'dismissed';
+  externalKey: string;
+  vaultTcgId: string;
+  sentAt: string | null;
+  createdAt: string;
+  imageUrl: string;
+}
+
+function toAcquisition(r: Record<string, unknown>): AcquisitionRow {
+  return {
+    id: Number(r.id),
+    missionId: r.mission_id == null ? null : Number(r.mission_id),
+    productKey: r.product_key == null ? null : String(r.product_key),
+    name: String(r.name ?? ''),
+    retailer: String(r.retailer ?? ''),
+    quantity: Number(r.quantity ?? 1),
+    unitPriceCents: r.unit_price_cents == null ? null : Number(r.unit_price_cents),
+    orderedOn: toDate(r.ordered_on) ?? '',
+    status: String(r.status ?? 'queued') as AcquisitionRow['status'],
+    externalKey: String(r.external_key ?? ''),
+    vaultTcgId: String(r.vault_tcg_id ?? ''),
+    sentAt: r.sent_at ? new Date(String(r.sent_at)).toISOString() : null,
+    createdAt: r.created_at ? new Date(String(r.created_at)).toISOString() : '',
+    imageUrl: String(r.image_url ?? ''),
+  };
+}
+
+/**
+ * Record a spent grant as a queued acquisition, from the Hub's own rows: the
+ * mission names the product and quantity, the latest bought run names the
+ * price actually paid. Idempotent on external_key ('auth-<grant id>') — a
+ * resolve retried by a nervous Watcher queues one acquisition, not two.
+ * Pre-fills the vault match from the product's remembered vault_tcg_id, so
+ * the second purchase of the same box is one click.
+ */
+export async function queueAcquisition(
+  db: Sql,
+  userId: number,
+  authorisationId: number,
+  missionId: number,
+): Promise<void> {
+  await db.query(
+    `INSERT INTO acquisitions
+       (user_id, mission_id, product_key, name, retailer, quantity,
+        unit_price_cents, ordered_on, external_key, vault_tcg_id)
+     SELECT m.user_id, m.id, l.product_key, p.name, l.retailer, m.quantity,
+            (SELECT round(r.price * 100)::int FROM mission_runs r
+              WHERE r.mission_id = m.id AND r.outcome = 'bought'
+              ORDER BY r.started_at DESC LIMIT 1),
+            CURRENT_DATE, $3, coalesce(p.vault_tcg_id, '')
+       FROM missions m
+       JOIN listings l ON l.id = m.listing_id
+       JOIN products p ON p.key = l.product_key
+      WHERE m.user_id = $1 AND m.id = $2
+     ON CONFLICT (external_key) DO NOTHING`,
+    [userId, missionId, `auth-${authorisationId}`],
+  );
+}
+
+/** The queue and its history, newest first, with the product's image along for the card. */
+export async function listAcquisitions(db: Sql, userId: number): Promise<AcquisitionRow[]> {
+  const rows = await db.query(
+    `SELECT a.*, coalesce(p.image_url, '') AS image_url
+       FROM acquisitions a LEFT JOIN products p ON p.key = a.product_key
+      WHERE a.user_id = $1
+      ORDER BY a.status = 'queued' DESC, a.created_at DESC
+      LIMIT 100`,
+    [userId],
+  );
+  return rows.map(toAcquisition);
+}
+
+/**
+ * A person confirmed the match and the vault accepted the delivery. Records
+ * both facts, and remembers the match on the product so the next purchase of
+ * the same thing pre-fills. Only a queued row can be sent, and only once.
+ */
+export async function markAcquisitionSent(
+  db: Sql,
+  userId: number,
+  id: number,
+  vaultTcgId: string,
+  vaultItemIds: unknown[],
+): Promise<AcquisitionRow | null> {
+  const rows = await db.query(
+    `UPDATE acquisitions
+        SET status = 'sent', sent_at = now(), vault_tcg_id = $3, vault_item_ids = $4
+      WHERE user_id = $1 AND id = $2 AND status = 'queued'
+      RETURNING *`,
+    [userId, id, vaultTcgId, JSON.stringify(vaultItemIds)],
+  );
+  const row = rows[0];
+  if (!row) return null;
+  if (row.product_key && vaultTcgId) {
+    await db.query(
+      `UPDATE products SET vault_tcg_id = $3 WHERE user_id = $1 AND key = $2`,
+      [userId, String(row.product_key), vaultTcgId],
+    );
+  }
+  return toAcquisition(row);
+}
+
+/** A person decided this purchase does not belong in the vault. Kept, as the record of that. */
+export async function dismissAcquisition(db: Sql, userId: number, id: number): Promise<boolean> {
+  const rows = await db.query(
+    `UPDATE acquisitions SET status = 'dismissed'
+      WHERE user_id = $1 AND id = $2 AND status = 'queued' RETURNING id`,
+    [userId, id],
+  );
+  return rows.length > 0;
+}
+
+// ─── Vault accounts: users whose door is the vault's /sso ────────────────────
+
+/**
+ * Find or create the hub user for a vault account. The vault user id is the
+ * identity; handle is best-effort (their email, falling back to a stable
+ * vault-derived name on collision) because handles are labels here, not
+ * credentials. No password is ever set — password_hash '' cannot verify, so
+ * the ONLY way into such an account is a fresh signed launch token.
+ */
+export async function ensureVaultUser(
+  db: Sql,
+  vaultUserId: string,
+  email: string,
+): Promise<number> {
+  const found = await db.query<{ id: number }>(
+    // A fresh launch token proves the vault considers them entitled RIGHT NOW,
+    // so an account lapsed-and-disabled earlier is re-enabled by walking back
+    // in through the vault's door. That is the renewal path working.
+    'UPDATE users SET enabled = true WHERE vault_user_id = $1 RETURNING id',
+    [vaultUserId],
+  );
+  if (found[0]) return Number(found[0].id);
+
+  const base = (email || '').trim() || `vault-${vaultUserId.slice(0, 8)}`;
+  for (const handle of [base, `${base}-${vaultUserId.slice(0, 8)}`]) {
+    const made = await db.query<{ id: number }>(
+      `INSERT INTO users (handle, vault_user_id, entitlement_checked_at)
+       VALUES ($1, $2, now())
+       ON CONFLICT (handle) DO NOTHING RETURNING id`,
+      [handle, vaultUserId],
+    );
+    if (made[0]) return Number(made[0].id);
+  }
+  throw new Error('could not create an account for that vault user');
+}
+
+export interface VaultLink {
+  vaultUserId: string;
+  checkedAt: string | null;
+  enabled: boolean;
+}
+
+/** The vault mapping for a user, or null for a local (owner-style) account. */
+export async function vaultLinkFor(db: Sql, userId: number): Promise<VaultLink | null> {
+  const rows = await db.query<{ vault_user_id: string | null; entitlement_checked_at: unknown; enabled: unknown }>(
+    'SELECT vault_user_id, entitlement_checked_at, enabled FROM users WHERE id = $1',
+    [userId],
+  );
+  const row = rows[0];
+  if (!row?.vault_user_id) return null;
+  return {
+    vaultUserId: String(row.vault_user_id),
+    checkedAt: row.entitlement_checked_at
+      ? new Date(String(row.entitlement_checked_at)).toISOString()
+      : null,
+    enabled: row.enabled !== false,
+  };
+}
+
+/** Entitlement was confirmed just now — reset the daily clock. */
+export async function markEntitlementChecked(db: Sql, userId: number): Promise<void> {
+  await db.query('UPDATE users SET entitlement_checked_at = now() WHERE id = $1', [userId]);
+}
+
+/** The vault said no: the tier lapsed. Sign-out is the caller's job; this records the fact. */
+export async function disableVaultUser(db: Sql, userId: number): Promise<void> {
+  await db.query(
+    "UPDATE users SET enabled = false WHERE id = $1 AND vault_user_id IS NOT NULL",
+    [userId],
+  );
 }
 
 /** Grants still live, for the dashboard — and for a person to release a stuck one. */

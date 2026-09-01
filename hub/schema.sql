@@ -696,3 +696,55 @@ CREATE TABLE IF NOT EXISTS authorisations (
 CREATE UNIQUE INDEX IF NOT EXISTS authorisations_one_live
   ON authorisations (user_id, mission_id)
   WHERE status IN ('granted', 'spent');
+
+-- ---------------------------------------------------------------------------
+-- The vault link — one account, the vault is boss
+--
+-- Phantom is sold through DNA Card Vault: the vault account IS the account,
+-- its PayPal Phantom tier is the price of admission, and /sso is the door.
+-- These columns are only the mapping: WHICH vault account a hub user is, and
+-- when Phantom last confirmed the tier was still held. No secret lives here —
+-- trust arrives per-request as an HMAC signature, never as stored material.
+-- ---------------------------------------------------------------------------
+ALTER TABLE users ADD COLUMN IF NOT EXISTS vault_user_id TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS entitlement_checked_at TIMESTAMPTZ;
+CREATE UNIQUE INDEX IF NOT EXISTS users_vault_idx
+  ON users (vault_user_id) WHERE vault_user_id IS NOT NULL;
+
+-- Which vault catalog product this canonical product IS. Confirmed by a person
+-- once (the review-then-send match step), then remembered, so the second
+-- purchase of the same box pre-fills. The vault side of the aliases idea.
+ALTER TABLE products ADD COLUMN IF NOT EXISTS vault_tcg_id TEXT NOT NULL DEFAULT '';
+
+-- ---------------------------------------------------------------------------
+-- Acquisitions — confirmed purchases on their way to the vault portfolio
+--
+-- A row appears when a grant is resolved 'spent': the page confirmed an order,
+-- so a physical thing is now incoming inventory. It queues here until a person
+-- reviews the product match and sends it (review-then-send, decided
+-- 2026-08-31) — a wrong auto-match writes wrong data into a real portfolio,
+-- which is the quiet kind of money error this system refuses everywhere else.
+--
+-- external_key is the idempotency key the vault dedupes on ('auth-<grant id>'),
+-- so a timed-out send retried later can never add the same boxes twice.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS acquisitions (
+  id               BIGSERIAL PRIMARY KEY,
+  user_id          BIGINT NOT NULL DEFAULT 1 REFERENCES users(id) ON DELETE CASCADE,
+  mission_id       BIGINT REFERENCES missions(id) ON DELETE SET NULL,
+  product_key      TEXT,
+  name             TEXT NOT NULL,
+  retailer         TEXT NOT NULL DEFAULT '',
+  quantity         INTEGER NOT NULL DEFAULT 1,
+  unit_price_cents INTEGER,
+  ordered_on       DATE NOT NULL DEFAULT CURRENT_DATE,
+  -- queued → sent | dismissed. Sent is forever; dismissed rows keep the record
+  -- that a person decided this purchase does not belong in the vault.
+  status           TEXT NOT NULL DEFAULT 'queued',
+  external_key     TEXT NOT NULL UNIQUE,
+  vault_tcg_id     TEXT NOT NULL DEFAULT '',
+  vault_item_ids   JSONB,
+  sent_at          TIMESTAMPTZ,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS acquisitions_user_idx ON acquisitions (user_id, status, created_at DESC);

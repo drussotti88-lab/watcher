@@ -476,6 +476,56 @@ ${FONTS}<style>${STYLE}</style></head>
 </main></body></html>`;
 }
 
+/**
+ * The vault's door.
+ *
+ * DNA Card Vault sends a Phantom-tier member here with a 60-second launch
+ * token in the URL FRAGMENT — deliberately, because a fragment never reaches
+ * any server or any log on either side. This page's one job is to lift it out
+ * of location.hash and post it to /api/sso, which sets the same session cookie
+ * the login form would. No token, an expired one, or a forged one all land on
+ * the same honest message with a way back to the vault.
+ */
+export function ssoPage(): string {
+  return `<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Phantom by DNA</title>
+<link rel="icon" href="/icon-192-v6.png" sizes="192x192" type="image/png">
+${FONTS}<style>${STYLE}</style></head>
+<body><main class="login">
+  <div class="card">
+    <h1><span class="mark"></span>Phantom by DNA</h1>
+    <p class="sub" id="sso-status" style="margin:6px 0 0">Signing you in from your vault…</p>
+    <div class="err" id="sso-err" style="margin:9px 0"></div>
+  </div>
+<script>
+(function () {
+  var m = /[#&]token=([^&]+)/.exec(location.hash || '');
+  var token = m ? decodeURIComponent(m[1]) : '';
+  // Drop the token from the address bar immediately — history is a log too.
+  try { history.replaceState(null, '', '/sso'); } catch (e) {}
+  var fail = function (text) {
+    document.getElementById('sso-status').textContent = 'That sign-in didn’t work.';
+    document.getElementById('sso-err').textContent = text +
+      ' Open Phantom from your DNA Card Vault membership page to try again.';
+  };
+  if (!token) { fail('The link carried no sign-in token.'); return; }
+  fetch('/api/sso', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token: token }),
+  }).then(function (res) {
+    return res.json().catch(function () { return {}; }).then(function (data) {
+      if (res.ok && data.ok) { location.replace('/'); return; }
+      fail(data.error || 'The vault’s sign-in could not be verified.');
+    });
+  }).catch(function () { fail('The server could not be reached.'); });
+})();
+</script>
+</main></body></html>`;
+}
+
 export function dashboardPage(): string {
   return `<!doctype html>
 <html lang="en"><head>
@@ -501,6 +551,7 @@ ${FONTS}<style>${STYLE}</style></head>
     <button class="tab" data-tab="products">Products<span class="count" id="c-products"></span></button>
     <button class="tab" data-tab="activity">Activity<span class="count" id="c-activity"></span></button>
     <button class="tab" data-tab="finds">Finds<span class="count" id="c-finds"></span></button>
+    <button class="tab" data-tab="vault">Vault<span class="count" id="c-vault"></span></button>
     <button class="tab" data-tab="settings">Settings</button>
   </nav>
 <main>
@@ -618,6 +669,18 @@ ${FONTS}<style>${STYLE}</style></head>
       <div class="sub" id="find-count"></div>
     </div>
     <div id="finds-list"></div>
+  </section>
+
+  <section id="tab-vault" hidden>
+    <h2 style="margin-top:0">On their way to your vault</h2>
+    <p class="sub" style="margin:-6px 0 14px">
+      A checkout the page itself confirmed becomes a queued acquisition here.
+      You confirm which vault product it is — once per product, remembered for
+      next time — and <strong>Send</strong> adds it to your DNA Card Vault
+      collection with its real cost basis. A machine's guess never writes to
+      your portfolio; that is what the review is for.
+    </p>
+    <div id="acq-list"></div>
   </section>
 
   <section id="tab-settings" hidden>
@@ -2106,6 +2169,155 @@ function render() {
   document.getElementById('c-products').textContent = DATA.products.length || '';
   document.getElementById('c-activity').textContent = DATA.runs.length || '';
   document.getElementById('c-finds').textContent = (DATA.discoveries || []).length || '';
+  document.getElementById('c-vault').textContent =
+    (DATA.acquisitions || []).filter((a) => a.status === 'queued').length || '';
+
+  renderVault();
+}
+
+/**
+ * The vault queue: each confirmed purchase, its match, and the Send.
+ *
+ * The match search talks to the vault's own sealed catalog (relayed through
+ * /api/vault/search) so the id sent is one the vault actually knows. A product
+ * matched once is remembered — vaultTcgId arrives pre-filled on the next buy
+ * of the same thing — so the second time is one click.
+ */
+function renderVault() {
+  const list = document.getElementById('acq-list');
+  if (!list) return;
+  // Don't rebuild under someone mid-search: same guard the detail pop-up uses.
+  if (list.contains(document.activeElement) && document.activeElement !== document.body) return;
+  list.textContent = '';
+  const all = DATA.acquisitions || [];
+  if (!all.length) {
+    list.appendChild(emptyBlock('Nothing has been bought yet.',
+      'When a checkout is confirmed on the page, the purchase queues here for its trip to the vault.'));
+    return;
+  }
+  for (const a of all) list.appendChild(acquisitionCard(a));
+}
+
+function acquisitionCard(a) {
+  const card = el('div', 'card acq');
+  const row = el('div', 'row');
+  if (a.imageUrl) {
+    const img = el('img', 'thumb');
+    img.src = a.imageUrl;
+    img.alt = '';
+    img.loading = 'lazy';
+    row.appendChild(img);
+  }
+  const main = el('div', 'grow');
+  main.appendChild(el('div', 'name', a.name));
+  const meta = el('div', 'meta',
+    a.retailer + ' · qty ' + a.quantity +
+    (a.unitPriceCents != null ? ' · ' + money(a.unitPriceCents / 100) + ' each' : '') +
+    (a.orderedOn ? ' · ordered ' + a.orderedOn : ''));
+  main.appendChild(meta);
+  row.appendChild(main);
+  const pill = el('span', 'pill ' + (a.status === 'sent' ? 's-in' : a.status === 'dismissed' ? 's-out' : 'flag'),
+    a.status === 'sent' ? 'in your vault' : a.status);
+  row.appendChild(pill);
+  card.appendChild(row);
+
+  if (a.status !== 'queued') {
+    if (a.status === 'sent' && a.sentAt) {
+      card.appendChild(el('div', 'meta', 'sent ' + ago(a.sentAt)));
+    }
+    return card;
+  }
+
+  // The match-and-send strip. Pre-filled when this product was matched before.
+  const strip = el('div', 'stack');
+  strip.style.marginTop = '10px';
+  const picked = { tcgId: a.vaultTcgId || '', name: '', setName: '', imageUrl: '' };
+
+  const pickedLine = el('div', 'meta');
+  const showPicked = () => {
+    pickedLine.textContent = picked.tcgId
+      ? 'matched to vault product ' + picked.tcgId + (picked.name ? ' — ' + picked.name : ' (remembered from last time)')
+      : 'not matched yet — search your vault catalog below, or send unmatched and fix it in the vault';
+  };
+  showPicked();
+  strip.appendChild(pickedLine);
+
+  const searchRow = el('div', 'actions');
+  const q = el('input');
+  q.type = 'search';
+  q.placeholder = 'Search the vault catalog';
+  q.value = a.name;
+  q.autocomplete = 'off';
+  const searchBtn = el('button', 'small', 'Search');
+  searchBtn.type = 'button';
+  const results = el('div', 'stack');
+  results.style.marginTop = '6px';
+  searchBtn.addEventListener('click', async () => {
+    searchBtn.disabled = true;
+    searchBtn.textContent = 'searching…';
+    results.textContent = '';
+    try {
+      const found = await api('GET', '/api/vault/search?q=' + encodeURIComponent(q.value));
+      const products = (found.products || []).slice(0, 6);
+      if (!products.length) results.appendChild(el('div', 'meta', 'nothing in the catalog matched that'));
+      for (const p of products) {
+        const line = el('div', 'row');
+        const pick = el('button', 'small', 'This one');
+        pick.type = 'button';
+        pick.addEventListener('click', () => {
+          picked.tcgId = String(p.id || '');
+          picked.name = String((p.set ? p.set + ' ' : '') + (p.name || ''));
+          picked.setName = String(p.set || '');
+          picked.imageUrl = String(p.image || '');
+          showPicked();
+          results.textContent = '';
+        });
+        line.appendChild(pick);
+        const label = el('span', 'meta',
+          (p.set ? p.set + ' · ' : '') + (p.name || '') + (p.price != null ? ' · ' + money(p.price) : ''));
+        label.style.marginLeft = '8px';
+        line.appendChild(label);
+        results.appendChild(line);
+      }
+    } catch (err) {
+      results.appendChild(el('div', 'meta', err.message));
+    } finally {
+      searchBtn.disabled = false;
+      searchBtn.textContent = 'Search';
+    }
+  });
+  searchRow.appendChild(q);
+  searchRow.appendChild(searchBtn);
+  strip.appendChild(searchRow);
+  strip.appendChild(results);
+
+  const actions = el('div', 'actions');
+  const send = el('button', 'primary', 'Send to vault');
+  send.type = 'button';
+  const dismiss = el('button', 'small', 'Not for the vault');
+  dismiss.type = 'button';
+  const msg = el('span', 'msg');
+  send.addEventListener('click', () => withButton(send, 'sending…', msg, async () => {
+    await api('POST', '/api/acquisitions/' + a.id + '/send', {
+      tcgId: picked.tcgId || null,
+      name: picked.name || undefined,
+      setName: picked.setName || undefined,
+      imageUrl: picked.imageUrl || undefined,
+    });
+    await load();
+    return 'in your vault';
+  }));
+  dismiss.addEventListener('click', () => withButton(dismiss, 'dismissing…', msg, async () => {
+    await api('POST', '/api/acquisitions/' + a.id + '/dismiss');
+    await load();
+    return 'dismissed';
+  }));
+  actions.appendChild(send);
+  actions.appendChild(dismiss);
+  actions.appendChild(msg);
+  strip.appendChild(actions);
+  card.appendChild(strip);
+  return card;
 }
 
 /**
@@ -2693,7 +2905,7 @@ document.getElementById('product-form').addEventListener('submit', async (e) => 
 for (const tab of document.querySelectorAll('.tab')) {
   tab.addEventListener('click', () => {
     for (const t of document.querySelectorAll('.tab')) t.classList.toggle('on', t === tab);
-    for (const name of ['missions', 'products', 'activity', 'finds', 'settings']) {
+    for (const name of ['missions', 'products', 'activity', 'finds', 'vault', 'settings']) {
       document.getElementById('tab-' + name).hidden = name !== tab.dataset.tab;
     }
   });

@@ -1071,8 +1071,126 @@ async function resolveAuthorisation(db2, userId, id, result, note) {
       userId,
       Number(row.mission_id)
     ]);
+    await queueAcquisition(db2, userId, Number(row.id), Number(row.mission_id)).catch(() => {
+    });
   }
   return toAuthorisation(row);
+}
+function toAcquisition(r) {
+  return {
+    id: Number(r.id),
+    missionId: r.mission_id == null ? null : Number(r.mission_id),
+    productKey: r.product_key == null ? null : String(r.product_key),
+    name: String(r.name ?? ""),
+    retailer: String(r.retailer ?? ""),
+    quantity: Number(r.quantity ?? 1),
+    unitPriceCents: r.unit_price_cents == null ? null : Number(r.unit_price_cents),
+    orderedOn: toDate(r.ordered_on) ?? "",
+    status: String(r.status ?? "queued"),
+    externalKey: String(r.external_key ?? ""),
+    vaultTcgId: String(r.vault_tcg_id ?? ""),
+    sentAt: r.sent_at ? new Date(String(r.sent_at)).toISOString() : null,
+    createdAt: r.created_at ? new Date(String(r.created_at)).toISOString() : "",
+    imageUrl: String(r.image_url ?? "")
+  };
+}
+async function queueAcquisition(db2, userId, authorisationId, missionId) {
+  await db2.query(
+    `INSERT INTO acquisitions
+       (user_id, mission_id, product_key, name, retailer, quantity,
+        unit_price_cents, ordered_on, external_key, vault_tcg_id)
+     SELECT m.user_id, m.id, l.product_key, p.name, l.retailer, m.quantity,
+            (SELECT round(r.price * 100)::int FROM mission_runs r
+              WHERE r.mission_id = m.id AND r.outcome = 'bought'
+              ORDER BY r.started_at DESC LIMIT 1),
+            CURRENT_DATE, $3, coalesce(p.vault_tcg_id, '')
+       FROM missions m
+       JOIN listings l ON l.id = m.listing_id
+       JOIN products p ON p.key = l.product_key
+      WHERE m.user_id = $1 AND m.id = $2
+     ON CONFLICT (external_key) DO NOTHING`,
+    [userId, missionId, `auth-${authorisationId}`]
+  );
+}
+async function listAcquisitions(db2, userId) {
+  const rows = await db2.query(
+    `SELECT a.*, coalesce(p.image_url, '') AS image_url
+       FROM acquisitions a LEFT JOIN products p ON p.key = a.product_key
+      WHERE a.user_id = $1
+      ORDER BY a.status = 'queued' DESC, a.created_at DESC
+      LIMIT 100`,
+    [userId]
+  );
+  return rows.map(toAcquisition);
+}
+async function markAcquisitionSent(db2, userId, id, vaultTcgId, vaultItemIds) {
+  const rows = await db2.query(
+    `UPDATE acquisitions
+        SET status = 'sent', sent_at = now(), vault_tcg_id = $3, vault_item_ids = $4
+      WHERE user_id = $1 AND id = $2 AND status = 'queued'
+      RETURNING *`,
+    [userId, id, vaultTcgId, JSON.stringify(vaultItemIds)]
+  );
+  const row = rows[0];
+  if (!row) return null;
+  if (row.product_key && vaultTcgId) {
+    await db2.query(
+      `UPDATE products SET vault_tcg_id = $3 WHERE user_id = $1 AND key = $2`,
+      [userId, String(row.product_key), vaultTcgId]
+    );
+  }
+  return toAcquisition(row);
+}
+async function dismissAcquisition(db2, userId, id) {
+  const rows = await db2.query(
+    `UPDATE acquisitions SET status = 'dismissed'
+      WHERE user_id = $1 AND id = $2 AND status = 'queued' RETURNING id`,
+    [userId, id]
+  );
+  return rows.length > 0;
+}
+async function ensureVaultUser(db2, vaultUserId, email) {
+  const found = await db2.query(
+    // A fresh launch token proves the vault considers them entitled RIGHT NOW,
+    // so an account lapsed-and-disabled earlier is re-enabled by walking back
+    // in through the vault's door. That is the renewal path working.
+    "UPDATE users SET enabled = true WHERE vault_user_id = $1 RETURNING id",
+    [vaultUserId]
+  );
+  if (found[0]) return Number(found[0].id);
+  const base = (email || "").trim() || `vault-${vaultUserId.slice(0, 8)}`;
+  for (const handle of [base, `${base}-${vaultUserId.slice(0, 8)}`]) {
+    const made = await db2.query(
+      `INSERT INTO users (handle, vault_user_id, entitlement_checked_at)
+       VALUES ($1, $2, now())
+       ON CONFLICT (handle) DO NOTHING RETURNING id`,
+      [handle, vaultUserId]
+    );
+    if (made[0]) return Number(made[0].id);
+  }
+  throw new Error("could not create an account for that vault user");
+}
+async function vaultLinkFor(db2, userId) {
+  const rows = await db2.query(
+    "SELECT vault_user_id, entitlement_checked_at, enabled FROM users WHERE id = $1",
+    [userId]
+  );
+  const row = rows[0];
+  if (!row?.vault_user_id) return null;
+  return {
+    vaultUserId: String(row.vault_user_id),
+    checkedAt: row.entitlement_checked_at ? new Date(String(row.entitlement_checked_at)).toISOString() : null,
+    enabled: row.enabled !== false
+  };
+}
+async function markEntitlementChecked(db2, userId) {
+  await db2.query("UPDATE users SET entitlement_checked_at = now() WHERE id = $1", [userId]);
+}
+async function disableVaultUser(db2, userId) {
+  await db2.query(
+    "UPDATE users SET enabled = false WHERE id = $1 AND vault_user_id IS NOT NULL",
+    [userId]
+  );
 }
 async function openAuthorisations(db2, userId) {
   const rows = await db2.query(
@@ -1905,6 +2023,124 @@ function looksSensitive(text) {
   return found;
 }
 
+// src/vault.ts
+var enc = new TextEncoder();
+var b64url2 = (bytes) => Buffer.from(bytes).toString("base64url");
+async function mac(secret, message) {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    enc.encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  return new Uint8Array(await crypto.subtle.sign("HMAC", key, enc.encode(message)));
+}
+async function macEquals(secret, message, given) {
+  let bytes;
+  try {
+    bytes = Buffer.from(String(given), "base64url");
+  } catch {
+    return false;
+  }
+  const want = await mac(secret, message);
+  if (bytes.length !== want.length) return false;
+  let diff = 0;
+  for (let i = 0; i < want.length; i += 1) diff |= bytes[i] ^ want[i];
+  return diff === 0;
+}
+function vaultUrl(env2) {
+  return String(env2.VAULT_URL ?? "").replace(/\/+$/, "");
+}
+function vaultConfigured(env2) {
+  return !!(env2.PHANTOM_SHARED_SECRET && vaultUrl(env2));
+}
+async function verifyLaunchToken(env2, token, now = Date.now()) {
+  const secret = env2.PHANTOM_SHARED_SECRET ?? "";
+  if (!secret || !token) return null;
+  const dot = token.indexOf(".");
+  if (dot < 1) return null;
+  const payload = token.slice(0, dot);
+  if (!await macEquals(secret, payload, token.slice(dot + 1))) return null;
+  let claims;
+  try {
+    claims = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+  } catch {
+    return null;
+  }
+  if (!claims?.u || typeof claims.x !== "number" || claims.x <= now) return null;
+  return { userId: String(claims.u), email: String(claims.e ?? "") };
+}
+async function signedHeaders(env2, method, path, body = "", now = Date.now()) {
+  const ts = String(now);
+  const sig = b64url2(await mac(
+    env2.PHANTOM_SHARED_SECRET ?? "",
+    `${ts}.${method.toUpperCase()}.${path}.${body}`
+  ));
+  return { "x-phantom-ts": ts, "x-phantom-sig": sig };
+}
+async function checkEntitlement(env2, vaultUserId, doFetch = fetch) {
+  if (!vaultConfigured(env2)) return { answer: "unknown", reason: "not configured" };
+  const path = `/api/phantom/entitlement?user=${encodeURIComponent(vaultUserId)}`;
+  try {
+    const headers = await signedHeaders(env2, "GET", path);
+    const res = await doFetch(`${vaultUrl(env2)}${path}`, {
+      headers,
+      signal: AbortSignal.timeout(8e3)
+    });
+    if (!res.ok) return { answer: "unknown", reason: `vault answered ${res.status}` };
+    const j = await res.json();
+    if (typeof j?.entitled !== "boolean") return { answer: "unknown", reason: "unreadable answer" };
+    return { answer: j.entitled ? "yes" : "no", sources: j.sources ?? [] };
+  } catch {
+    return { answer: "unknown", reason: "vault unreachable" };
+  }
+}
+async function deliverAcquisition(env2, a, doFetch = fetch) {
+  if (!vaultConfigured(env2)) return { ok: false, error: "the vault link is not configured" };
+  const path = "/api/phantom/acquisitions";
+  const body = JSON.stringify({
+    externalKey: a.externalKey,
+    userId: a.vaultUserId,
+    name: a.name,
+    quantity: a.quantity,
+    priceCents: a.priceCents,
+    acquiredOn: a.acquiredOn,
+    retailer: a.retailer,
+    tcgId: a.tcgId,
+    setName: a.setName ?? null,
+    imageUrl: a.imageUrl ?? null
+  });
+  try {
+    const headers = await signedHeaders(env2, "POST", path, body);
+    const res = await doFetch(`${vaultUrl(env2)}${path}`, {
+      method: "POST",
+      body,
+      headers: { ...headers, "content-type": "application/json" },
+      signal: AbortSignal.timeout(25e3)
+    });
+    const j = await res.json().catch(() => null);
+    if (res.ok && j?.ok) return { ok: true, itemIds: j.itemIds ?? [] };
+    return { ok: false, error: j?.error ?? `vault answered ${res.status}` };
+  } catch {
+    return { ok: false, error: "the vault could not be reached \u2014 the send stays queued" };
+  }
+}
+async function searchVaultSealed(env2, q, doFetch = fetch) {
+  if (!vaultConfigured(env2)) return { error: "the vault link is not configured" };
+  try {
+    const res = await doFetch(
+      `${vaultUrl(env2)}/api/sealed?q=${encodeURIComponent(q)}`,
+      { signal: AbortSignal.timeout(15e3) }
+    );
+    if (!res.ok) return { error: `vault answered ${res.status}` };
+    const j = await res.json();
+    return { products: Array.isArray(j?.products) ? j.products : [] };
+  } catch {
+    return { error: "the vault could not be reached" };
+  }
+}
+
 // src/msrp.ts
 var TYPICAL_PRICE = Object.freeze({
   "booster pack": 4.49,
@@ -2361,6 +2597,45 @@ ${FONTS}<style>${STYLE}</style></head>
   </div>
 </main></body></html>`;
 }
+function ssoPage() {
+  return `<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Phantom by DNA</title>
+<link rel="icon" href="/icon-192-v6.png" sizes="192x192" type="image/png">
+${FONTS}<style>${STYLE}</style></head>
+<body><main class="login">
+  <div class="card">
+    <h1><span class="mark"></span>Phantom by DNA</h1>
+    <p class="sub" id="sso-status" style="margin:6px 0 0">Signing you in from your vault\u2026</p>
+    <div class="err" id="sso-err" style="margin:9px 0"></div>
+  </div>
+<script>
+(function () {
+  var m = /[#&]token=([^&]+)/.exec(location.hash || '');
+  var token = m ? decodeURIComponent(m[1]) : '';
+  // Drop the token from the address bar immediately \u2014 history is a log too.
+  try { history.replaceState(null, '', '/sso'); } catch (e) {}
+  var fail = function (text) {
+    document.getElementById('sso-status').textContent = 'That sign-in didn\u2019t work.';
+    document.getElementById('sso-err').textContent = text +
+      ' Open Phantom from your DNA Card Vault membership page to try again.';
+  };
+  if (!token) { fail('The link carried no sign-in token.'); return; }
+  fetch('/api/sso', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token: token }),
+  }).then(function (res) {
+    return res.json().catch(function () { return {}; }).then(function (data) {
+      if (res.ok && data.ok) { location.replace('/'); return; }
+      fail(data.error || 'The vault\u2019s sign-in could not be verified.');
+    });
+  }).catch(function () { fail('The server could not be reached.'); });
+})();
+</script>
+</main></body></html>`;
+}
 function dashboardPage() {
   return `<!doctype html>
 <html lang="en"><head>
@@ -2386,6 +2661,7 @@ ${FONTS}<style>${STYLE}</style></head>
     <button class="tab" data-tab="products">Products<span class="count" id="c-products"></span></button>
     <button class="tab" data-tab="activity">Activity<span class="count" id="c-activity"></span></button>
     <button class="tab" data-tab="finds">Finds<span class="count" id="c-finds"></span></button>
+    <button class="tab" data-tab="vault">Vault<span class="count" id="c-vault"></span></button>
     <button class="tab" data-tab="settings">Settings</button>
   </nav>
 <main>
@@ -2503,6 +2779,18 @@ ${FONTS}<style>${STYLE}</style></head>
       <div class="sub" id="find-count"></div>
     </div>
     <div id="finds-list"></div>
+  </section>
+
+  <section id="tab-vault" hidden>
+    <h2 style="margin-top:0">On their way to your vault</h2>
+    <p class="sub" style="margin:-6px 0 14px">
+      A checkout the page itself confirmed becomes a queued acquisition here.
+      You confirm which vault product it is \u2014 once per product, remembered for
+      next time \u2014 and <strong>Send</strong> adds it to your DNA Card Vault
+      collection with its real cost basis. A machine's guess never writes to
+      your portfolio; that is what the review is for.
+    </p>
+    <div id="acq-list"></div>
   </section>
 
   <section id="tab-settings" hidden>
@@ -3991,6 +4279,155 @@ function render() {
   document.getElementById('c-products').textContent = DATA.products.length || '';
   document.getElementById('c-activity').textContent = DATA.runs.length || '';
   document.getElementById('c-finds').textContent = (DATA.discoveries || []).length || '';
+  document.getElementById('c-vault').textContent =
+    (DATA.acquisitions || []).filter((a) => a.status === 'queued').length || '';
+
+  renderVault();
+}
+
+/**
+ * The vault queue: each confirmed purchase, its match, and the Send.
+ *
+ * The match search talks to the vault's own sealed catalog (relayed through
+ * /api/vault/search) so the id sent is one the vault actually knows. A product
+ * matched once is remembered \u2014 vaultTcgId arrives pre-filled on the next buy
+ * of the same thing \u2014 so the second time is one click.
+ */
+function renderVault() {
+  const list = document.getElementById('acq-list');
+  if (!list) return;
+  // Don't rebuild under someone mid-search: same guard the detail pop-up uses.
+  if (list.contains(document.activeElement) && document.activeElement !== document.body) return;
+  list.textContent = '';
+  const all = DATA.acquisitions || [];
+  if (!all.length) {
+    list.appendChild(emptyBlock('Nothing has been bought yet.',
+      'When a checkout is confirmed on the page, the purchase queues here for its trip to the vault.'));
+    return;
+  }
+  for (const a of all) list.appendChild(acquisitionCard(a));
+}
+
+function acquisitionCard(a) {
+  const card = el('div', 'card acq');
+  const row = el('div', 'row');
+  if (a.imageUrl) {
+    const img = el('img', 'thumb');
+    img.src = a.imageUrl;
+    img.alt = '';
+    img.loading = 'lazy';
+    row.appendChild(img);
+  }
+  const main = el('div', 'grow');
+  main.appendChild(el('div', 'name', a.name));
+  const meta = el('div', 'meta',
+    a.retailer + ' \xB7 qty ' + a.quantity +
+    (a.unitPriceCents != null ? ' \xB7 ' + money(a.unitPriceCents / 100) + ' each' : '') +
+    (a.orderedOn ? ' \xB7 ordered ' + a.orderedOn : ''));
+  main.appendChild(meta);
+  row.appendChild(main);
+  const pill = el('span', 'pill ' + (a.status === 'sent' ? 's-in' : a.status === 'dismissed' ? 's-out' : 'flag'),
+    a.status === 'sent' ? 'in your vault' : a.status);
+  row.appendChild(pill);
+  card.appendChild(row);
+
+  if (a.status !== 'queued') {
+    if (a.status === 'sent' && a.sentAt) {
+      card.appendChild(el('div', 'meta', 'sent ' + ago(a.sentAt)));
+    }
+    return card;
+  }
+
+  // The match-and-send strip. Pre-filled when this product was matched before.
+  const strip = el('div', 'stack');
+  strip.style.marginTop = '10px';
+  const picked = { tcgId: a.vaultTcgId || '', name: '', setName: '', imageUrl: '' };
+
+  const pickedLine = el('div', 'meta');
+  const showPicked = () => {
+    pickedLine.textContent = picked.tcgId
+      ? 'matched to vault product ' + picked.tcgId + (picked.name ? ' \u2014 ' + picked.name : ' (remembered from last time)')
+      : 'not matched yet \u2014 search your vault catalog below, or send unmatched and fix it in the vault';
+  };
+  showPicked();
+  strip.appendChild(pickedLine);
+
+  const searchRow = el('div', 'actions');
+  const q = el('input');
+  q.type = 'search';
+  q.placeholder = 'Search the vault catalog';
+  q.value = a.name;
+  q.autocomplete = 'off';
+  const searchBtn = el('button', 'small', 'Search');
+  searchBtn.type = 'button';
+  const results = el('div', 'stack');
+  results.style.marginTop = '6px';
+  searchBtn.addEventListener('click', async () => {
+    searchBtn.disabled = true;
+    searchBtn.textContent = 'searching\u2026';
+    results.textContent = '';
+    try {
+      const found = await api('GET', '/api/vault/search?q=' + encodeURIComponent(q.value));
+      const products = (found.products || []).slice(0, 6);
+      if (!products.length) results.appendChild(el('div', 'meta', 'nothing in the catalog matched that'));
+      for (const p of products) {
+        const line = el('div', 'row');
+        const pick = el('button', 'small', 'This one');
+        pick.type = 'button';
+        pick.addEventListener('click', () => {
+          picked.tcgId = String(p.id || '');
+          picked.name = String((p.set ? p.set + ' ' : '') + (p.name || ''));
+          picked.setName = String(p.set || '');
+          picked.imageUrl = String(p.image || '');
+          showPicked();
+          results.textContent = '';
+        });
+        line.appendChild(pick);
+        const label = el('span', 'meta',
+          (p.set ? p.set + ' \xB7 ' : '') + (p.name || '') + (p.price != null ? ' \xB7 ' + money(p.price) : ''));
+        label.style.marginLeft = '8px';
+        line.appendChild(label);
+        results.appendChild(line);
+      }
+    } catch (err) {
+      results.appendChild(el('div', 'meta', err.message));
+    } finally {
+      searchBtn.disabled = false;
+      searchBtn.textContent = 'Search';
+    }
+  });
+  searchRow.appendChild(q);
+  searchRow.appendChild(searchBtn);
+  strip.appendChild(searchRow);
+  strip.appendChild(results);
+
+  const actions = el('div', 'actions');
+  const send = el('button', 'primary', 'Send to vault');
+  send.type = 'button';
+  const dismiss = el('button', 'small', 'Not for the vault');
+  dismiss.type = 'button';
+  const msg = el('span', 'msg');
+  send.addEventListener('click', () => withButton(send, 'sending\u2026', msg, async () => {
+    await api('POST', '/api/acquisitions/' + a.id + '/send', {
+      tcgId: picked.tcgId || null,
+      name: picked.name || undefined,
+      setName: picked.setName || undefined,
+      imageUrl: picked.imageUrl || undefined,
+    });
+    await load();
+    return 'in your vault';
+  }));
+  dismiss.addEventListener('click', () => withButton(dismiss, 'dismissing\u2026', msg, async () => {
+    await api('POST', '/api/acquisitions/' + a.id + '/dismiss');
+    await load();
+    return 'dismissed';
+  }));
+  actions.appendChild(send);
+  actions.appendChild(dismiss);
+  actions.appendChild(msg);
+  strip.appendChild(actions);
+  card.appendChild(strip);
+  return card;
 }
 
 /**
@@ -4578,7 +5015,7 @@ document.getElementById('product-form').addEventListener('submit', async (e) => 
 for (const tab of document.querySelectorAll('.tab')) {
   tab.addEventListener('click', () => {
     for (const t of document.querySelectorAll('.tab')) t.classList.toggle('on', t === tab);
-    for (const name of ['missions', 'products', 'activity', 'finds', 'settings']) {
+    for (const name of ['missions', 'products', 'activity', 'finds', 'vault', 'settings']) {
       document.getElementById('tab-' + name).hidden = name !== tab.dataset.tab;
     }
   });
@@ -4912,10 +5349,10 @@ self.addEventListener('fetch', (event) => {
 
 // src/app.ts
 var SWEEP_SOURCE = "target-tcg";
-function json(body, status = 200) {
+function json(body, status = 200, headers = {}) {
   return new Response(JSON.stringify(body, null, 2), {
     status,
-    headers: { "Content-Type": "application/json; charset=utf-8" }
+    headers: { "Content-Type": "application/json; charset=utf-8", ...headers }
   });
 }
 async function publish(db2, userId, env2, results, now) {
@@ -5005,12 +5442,52 @@ function createHandler(db2, env2) {
     if (path === "/logout") {
       return redirect("/login", { "Set-Cookie": clearCookie(secure) });
     }
+    if (request.method === "GET" && path === "/sso") {
+      return html(ssoPage());
+    }
+    if (request.method === "POST" && path === "/api/sso") {
+      const secret = sessionSecret(env2);
+      if (!secret) return json({ error: "no session secret is set on this deployment" }, 500);
+      const b = await request.json().catch(() => null);
+      const claims = await verifyLaunchToken(env2, b?.token ?? null);
+      if (!claims) {
+        return json({ error: "that sign-in link has expired \u2014 open Phantom from the vault again" }, 401);
+      }
+      const userId2 = await ensureVaultUser(db2, claims.userId, claims.email);
+      await markEntitlementChecked(db2, userId2);
+      return json({ ok: true }, 200, {
+        "Set-Cookie": sessionCookie(await mintSession(secret, userId2), secure)
+      });
+    }
     const caller = await identify(request, env2, (hash) => userByTokenHash(db2, hash));
     const userId = caller.userId;
     if (caller.kind === "none") {
       const wantsHtml = (request.headers.get("accept") ?? "").includes("text/html");
       if (wantsHtml) return redirect("/login");
       return json({ error: "unauthorised" }, 401);
+    }
+    if (request.method === "GET" && path === "/api/dashboard") {
+      const link = await vaultLinkFor(db2, userId);
+      const staleMs = 24 * 3600 * 1e3;
+      if (link && !link.enabled) {
+        return json(
+          { error: "your Phantom membership has lapsed \u2014 renew it in DNA Card Vault" },
+          401,
+          { "Set-Cookie": clearCookie(secure) }
+        );
+      }
+      if (link && (!link.checkedAt || Date.now() - Date.parse(link.checkedAt) > staleMs)) {
+        const ent = await checkEntitlement(env2, link.vaultUserId);
+        if (ent.answer === "yes") await markEntitlementChecked(db2, userId);
+        if (ent.answer === "no") {
+          await disableVaultUser(db2, userId);
+          return json(
+            { error: "your Phantom membership has lapsed \u2014 renew it in DNA Card Vault" },
+            401,
+            { "Set-Cookie": clearCookie(secure) }
+          );
+        }
+      }
     }
     if (request.method === "GET" && (path === "/" || path === "/dashboard" || path === "/add")) {
       return html(dashboardPage());
@@ -5030,6 +5507,7 @@ function createHandler(db2, env2) {
       const authorisations = await openAuthorisations(db2, userId);
       const committed = await committedLast24h(db2, userId);
       const queues = await queueSightings(db2, userId, 30);
+      const acquisitions = await listAcquisitions(db2, userId);
       return json({
         missions,
         runs,
@@ -5043,7 +5521,8 @@ function createHandler(db2, env2) {
         you,
         authorisations,
         committed,
-        queues
+        queues,
+        acquisitions
       });
     }
     if (request.method === "GET" && path.startsWith("/api/missions/") && path.endsWith("/runs")) {
@@ -5195,6 +5674,54 @@ function createHandler(db2, env2) {
       if (!Number.isInteger(id)) return json({ error: "bad mission id" }, 400);
       if (!await deleteMission(db2, userId, id)) return json({ error: "no such mission" }, 404);
       return json({ deleted: id });
+    }
+    if (request.method === "GET" && path === "/api/acquisitions") {
+      return json({
+        acquisitions: await listAcquisitions(db2, userId),
+        vaultLinked: vaultConfigured(env2)
+      });
+    }
+    if (request.method === "GET" && path === "/api/vault/search") {
+      const q = url.searchParams.get("q") ?? "";
+      if (!q.trim()) return json({ products: [] });
+      const found = await searchVaultSealed(env2, q);
+      if ("error" in found) return json({ error: found.error }, 502);
+      return json(found);
+    }
+    if (request.method === "POST" && path.startsWith("/api/acquisitions/") && path.endsWith("/send")) {
+      const id = Number(path.split("/")[3]);
+      if (!Number.isInteger(id)) return json({ error: "bad acquisition id" }, 400);
+      const b = await body();
+      const link = await vaultLinkFor(db2, userId);
+      const vaultUserId = link?.vaultUserId ?? env2.VAULT_OWNER_USER_ID ?? "";
+      if (!vaultUserId) {
+        return json({ error: "this account is not linked to a vault account \u2014 set VAULT_OWNER_USER_ID or sign in through the vault" }, 400);
+      }
+      const rows = await listAcquisitions(db2, userId);
+      const acq = rows.find((a) => a.id === id);
+      if (!acq) return json({ error: "no such acquisition" }, 404);
+      if (acq.status !== "queued") return json({ error: `already ${acq.status}` }, 409);
+      const delivered = await deliverAcquisition(env2, {
+        externalKey: acq.externalKey,
+        vaultUserId,
+        name: String(b?.name ?? "").trim() || acq.name,
+        quantity: acq.quantity,
+        priceCents: acq.unitPriceCents,
+        acquiredOn: acq.orderedOn || now.slice(0, 10),
+        retailer: acq.retailer,
+        tcgId: String(b?.tcgId ?? "").trim() || null,
+        setName: b?.setName ?? null,
+        imageUrl: b?.imageUrl ?? acq.imageUrl ?? null
+      });
+      if (!delivered.ok) return json({ error: delivered.error }, 502);
+      const row = await markAcquisitionSent(db2, userId, id, String(b?.tcgId ?? ""), delivered.itemIds);
+      return json({ acquisition: row });
+    }
+    if (request.method === "POST" && path.startsWith("/api/acquisitions/") && path.endsWith("/dismiss")) {
+      const id = Number(path.split("/")[3]);
+      if (!Number.isInteger(id)) return json({ error: "bad acquisition id" }, 400);
+      if (!await dismissAcquisition(db2, userId, id)) return json({ error: "no queued acquisition with that id" }, 404);
+      return json({ dismissed: id });
     }
     if (request.method === "GET" && path === "/api/settings") {
       return json({ settings: await getSettings(db2, userId) });

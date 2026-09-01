@@ -120,4 +120,13 @@ export interface Env {
   INGEST_TOKEN?: string;
   /** Password for the web page, and the key its session cookie is signed with. */
   APP_PASSWORD?: string;
+  /** The vault link (DNA Card Vault): shared HMAC secret, identical in both apps. */
+  PHANTOM_SHARED_SECRET?: string;
+  /** Where the vault lives, e.g. https://www.dnacardvault.com — no trailing slash. */
+  VAULT_URL?: string;
+  /**
+   * The owner's vault account id. The owner signs in by password (user 1,
+   * no vault link), so his sends need the target account named in config.
+   */
+  VAULT_OWNER_USER_ID?: string;
 }

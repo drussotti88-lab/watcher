@@ -2475,14 +2475,17 @@ test('deleting a product closes its pop-up', async () => {
   assert.equal(($(h, '#detail-dialog') as any).open, false);
 });
 
-// ── Vault Watch, the side nav, and the grid ──────────────────────────────────
+// ── Phantom by DNA, the side nav, and the grid ───────────────────────────────
 
-test('THE APP IS CALLED VAULT WATCH EVERYWHERE A NAME APPEARS', async () => {
+test('THE APP IS CALLED PHANTOM BY DNA EVERYWHERE A NAME APPEARS', async () => {
   const html = dashboardPage();
-  assert.match(html, /<title>Vault Watch<\/title>/);
-  assert.match(html, /apple-mobile-web-app-title" content="Vault Watch"/);
-  assert.match(html, /class="brand-name">Vault Watch</);
+  assert.match(html, /<title>Phantom by DNA<\/title>/);
+  // The home-screen label is just "Phantom" — 14 characters gets ellipsised
+  // under an iOS tile, and a truncated name is worse than a short one.
+  assert.match(html, /apple-mobile-web-app-title" content="Phantom"/);
+  assert.match(html, /class="brand-name">Phantom by DNA</);
   assert.doesNotMatch(html, /<title>Hub<\/title>/);
+  assert.doesNotMatch(html, /Vault Watch/);
 });
 
 test('the nav is one element with two shapes — sidebar CSS exists from 900px', async () => {
@@ -2515,4 +2518,68 @@ test('each list has its own view toggle', async () => {
   for (const list of ['missions', 'products', 'finds']) {
     assert.ok(h.doc.querySelector('.vt[data-list="' + list + '"]'), list + ' has a toggle');
   }
+});
+
+// ── the Vault tab: review-then-send ──────────────────────────────────────────
+
+const ACQ = {
+  id: 5, missionId: 1, productKey: 'prd_etb', name: 'A cheap pack of pens',
+  retailer: 'Target', quantity: 2, unitPriceCents: 1749, orderedOn: '2026-08-31',
+  status: 'queued', externalKey: 'auth-3', vaultTcgId: '', sentAt: null,
+  createdAt: new Date().toISOString(), imageUrl: '',
+};
+
+test('THE VAULT TAB EXISTS AND BADGES THE QUEUE', async () => {
+  const h = await boot({ ...DASHBOARD, acquisitions: [ACQ, { ...ACQ, id: 6, status: 'sent', sentAt: new Date().toISOString() }] });
+  assert.ok(h.doc.querySelector('[data-tab="vault"]'), 'the tab is in the nav');
+  assert.equal($(h, '#c-vault').textContent, '1', 'only QUEUED rows count — sent is done');
+  const cards = h.doc.querySelectorAll('#acq-list .card');
+  assert.equal(cards.length, 2, 'sent history stays visible under the queue');
+});
+
+test('a queued acquisition says what was bought and offers the review', async () => {
+  const h = await boot({ ...DASHBOARD, acquisitions: [ACQ] });
+  const card = $(h, '#acq-list .card');
+  assert.match(card.textContent, /A cheap pack of pens/);
+  assert.match(card.textContent, /qty 2/);
+  assert.match(card.textContent, /\$17\.49 each/);
+  const labels = [...card.querySelectorAll('button')].map((b: any) => b.textContent);
+  assert.ok(labels.includes('Send to vault'));
+  assert.ok(labels.includes('Not for the vault'));
+  assert.ok(card.querySelector('input[type=search]'), 'and the match search');
+});
+
+test('SENDING POSTS THE PICKED MATCH AND RELOADS', async () => {
+  const h = await boot({ ...DASHBOARD, acquisitions: [ACQ] });
+  h.reply('GET /api/vault/search?q=A%20cheap%20pack%20of%20pens',
+    { products: [{ id: '624634', name: 'Pens 8-Pack', set: 'Supplies', price: 17.99 }] });
+  h.reply('POST /api/acquisitions/5/send', { acquisition: { ...ACQ, status: 'sent' } });
+
+  const card = $(h, '#acq-list .card');
+  (card.querySelector('input[type=search]') as HTMLInputElement).value = 'A cheap pack of pens';
+  const search = [...card.querySelectorAll('button')].find((b: any) => b.textContent === 'Search') as HTMLButtonElement;
+  search.click();
+  await h.settle();
+
+  const pick = [...card.querySelectorAll('button')].find((b: any) => b.textContent === 'This one') as HTMLButtonElement;
+  assert.ok(pick, 'the catalog hit offers itself');
+  pick.click();
+  assert.match(card.textContent, /matched to vault product 624634/);
+
+  const send = [...card.querySelectorAll('button')].find((b: any) => b.textContent === 'Send to vault') as HTMLButtonElement;
+  send.click();
+  await h.settle();
+  const posted = h.calls.find((c) => c.method === 'POST' && c.path === '/api/acquisitions/5/send');
+  assert.ok(posted, 'the send went to the API');
+  assert.equal(posted!.body.tcgId, '624634');
+});
+
+test('a remembered match arrives pre-filled — the second buy is one click', async () => {
+  const h = await boot({ ...DASHBOARD, acquisitions: [{ ...ACQ, vaultTcgId: '624634' }] });
+  assert.match($(h, '#acq-list .card').textContent, /matched to vault product 624634/);
+});
+
+test('an empty vault queue explains itself', async () => {
+  const h = await boot({ ...DASHBOARD, acquisitions: [] });
+  assert.match($(h, '#acq-list').textContent, /Nothing has been bought yet/);
 });

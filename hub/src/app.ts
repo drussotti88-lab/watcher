@@ -36,7 +36,14 @@ import {
   signIn,
 } from './auth.ts';
 import { scrub, looksSensitive } from './scrub.ts';
-import { loginPage, dashboardPage } from './page.ts';
+import {
+  verifyLaunchToken,
+  checkEntitlement,
+  deliverAcquisition,
+  searchVaultSealed,
+  vaultConfigured,
+} from './vault.ts';
+import { loginPage, ssoPage, dashboardPage } from './page.ts';
 import { identifyListing } from './parsers/identify.ts';
 import { MANIFEST, SERVICE_WORKER, iconResponse } from './pwa.ts';
 
@@ -49,10 +56,10 @@ import { MANIFEST, SERVICE_WORKER, iconResponse } from './pwa.ts';
  */
 const SWEEP_SOURCE = 'target-tcg';
 
-function json(body: unknown, status = 200): Response {
+function json(body: unknown, status = 200, headers: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(body, null, 2), {
     status,
-    headers: { 'Content-Type': 'application/json; charset=utf-8' },
+    headers: { 'Content-Type': 'application/json; charset=utf-8', ...headers },
   });
 }
 
@@ -184,6 +191,32 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       return redirect('/login', { 'Set-Cookie': clearCookie(secure) });
     }
 
+    /**
+     * The vault's door. DNA Card Vault redirects a Phantom-tier member here
+     * with a 60-second launch token in the URL FRAGMENT — which never reaches
+     * this server — so GET serves a tiny page whose script lifts the token out
+     * of location.hash and posts it straight back. The POST verifies the HMAC,
+     * finds or creates the account mapped to that vault user, and mints the
+     * same session cookie the login form would. One account, the vault is boss.
+     */
+    if (request.method === 'GET' && path === '/sso') {
+      return html(ssoPage());
+    }
+    if (request.method === 'POST' && path === '/api/sso') {
+      const secret = sessionSecret(env);
+      if (!secret) return json({ error: 'no session secret is set on this deployment' }, 500);
+      const b = (await request.json().catch(() => null)) as { token?: string } | null;
+      const claims = await verifyLaunchToken(env, b?.token ?? null);
+      if (!claims) {
+        return json({ error: 'that sign-in link has expired — open Phantom from the vault again' }, 401);
+      }
+      const userId = await store.ensureVaultUser(db, claims.userId, claims.email);
+      await store.markEntitlementChecked(db, userId);
+      return json({ ok: true }, 200, {
+        'Set-Cookie': sessionCookie(await mintSession(secret, userId), secure),
+      });
+    }
+
     // Everything below is either the Watcher with its token or a signed-in
     // browser. Fail closed: an unset password or token shuts that door rather
     // than opening it.
@@ -195,6 +228,40 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       const wantsHtml = (request.headers.get('accept') ?? '').includes('text/html');
       if (wantsHtml) return redirect('/login');
       return json({ error: 'unauthorised' }, 401);
+    }
+
+    /**
+     * Vault-linked accounts re-prove the tier daily. Checked only on the
+     * dashboard read — the request every open page makes — so the cost is one
+     * signed call a day per member, not one per click. Three-valued on
+     * purpose: the vault EXPLICITLY saying no ends the session (the tier
+     * lapsed); the vault being unreachable changes nothing, because a member
+     * must never be locked out mid-drop by somebody else's outage.
+     */
+    if (request.method === 'GET' && path === '/api/dashboard') {
+      const link = await store.vaultLinkFor(db, userId);
+      const staleMs = 24 * 3600 * 1000;
+      if (link && !link.enabled) {
+        // Lapsed earlier and never renewed. The way back in is the vault's
+        // Open Phantom button, which only works while the tier is held.
+        return json(
+          { error: 'your Phantom membership has lapsed — renew it in DNA Card Vault' },
+          401,
+          { 'Set-Cookie': clearCookie(secure) },
+        );
+      }
+      if (link && (!link.checkedAt || Date.now() - Date.parse(link.checkedAt) > staleMs)) {
+        const ent = await checkEntitlement(env, link.vaultUserId);
+        if (ent.answer === 'yes') await store.markEntitlementChecked(db, userId);
+        if (ent.answer === 'no') {
+          await store.disableVaultUser(db, userId);
+          return json(
+            { error: 'your Phantom membership has lapsed — renew it in DNA Card Vault' },
+            401,
+            { 'Set-Cookie': clearCookie(secure) },
+          );
+        }
+      }
     }
 
     // ── The page ─────────────────────────────────────────────────────────────
@@ -230,9 +297,11 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       // early signal a retailer gives — it belongs on the front of the app,
       // not buried in the activity log.
       const queues = await store.queueSightings(db, userId, 30);
+      // Confirmed purchases waiting for their review-then-send to the vault.
+      const acquisitions = await store.listAcquisitions(db, userId);
       return json({
         missions, runs, changes, products, listings, settings, discoveries, sweep, now, you,
-        authorisations, committed, queues,
+        authorisations, committed, queues, acquisitions,
       });
     }
 
@@ -488,6 +557,66 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       if (!Number.isInteger(id)) return json({ error: 'bad mission id' }, 400);
       if (!(await store.deleteMission(db, userId, id))) return json({ error: 'no such mission' }, 404);
       return json({ deleted: id });
+    }
+
+    /**
+     * The vault leg of a purchase. Confirmed buys queue as acquisitions; a
+     * person confirms the product match against the vault's own catalog and
+     * sends — review-then-send, because a wrong auto-match writes wrong data
+     * into a real portfolio. The delivery is idempotent (the vault dedupes on
+     * external_key), so a timeout retried later can never double-add.
+     */
+    if (request.method === 'GET' && path === '/api/acquisitions') {
+      return json({
+        acquisitions: await store.listAcquisitions(db, userId),
+        vaultLinked: vaultConfigured(env),
+      });
+    }
+
+    if (request.method === 'GET' && path === '/api/vault/search') {
+      const q = url.searchParams.get('q') ?? '';
+      if (!q.trim()) return json({ products: [] });
+      const found = await searchVaultSealed(env, q);
+      if ('error' in found) return json({ error: found.error }, 502);
+      return json(found);
+    }
+
+    if (request.method === 'POST' && path.startsWith('/api/acquisitions/') && path.endsWith('/send')) {
+      const id = Number(path.split('/')[3]);
+      if (!Number.isInteger(id)) return json({ error: 'bad acquisition id' }, 400);
+      const b = await body<{ tcgId?: string; name?: string; setName?: string; imageUrl?: string }>();
+      const link = await store.vaultLinkFor(db, userId);
+      const vaultUserId = link?.vaultUserId ?? env.VAULT_OWNER_USER_ID ?? '';
+      if (!vaultUserId) {
+        return json({ error: 'this account is not linked to a vault account — set VAULT_OWNER_USER_ID or sign in through the vault' }, 400);
+      }
+      const rows = await store.listAcquisitions(db, userId);
+      const acq = rows.find((a) => a.id === id);
+      if (!acq) return json({ error: 'no such acquisition' }, 404);
+      if (acq.status !== 'queued') return json({ error: `already ${acq.status}` }, 409);
+
+      const delivered = await deliverAcquisition(env, {
+        externalKey: acq.externalKey,
+        vaultUserId,
+        name: String(b?.name ?? '').trim() || acq.name,
+        quantity: acq.quantity,
+        priceCents: acq.unitPriceCents,
+        acquiredOn: acq.orderedOn || now.slice(0, 10),
+        retailer: acq.retailer,
+        tcgId: String(b?.tcgId ?? '').trim() || null,
+        setName: b?.setName ?? null,
+        imageUrl: b?.imageUrl ?? acq.imageUrl ?? null,
+      });
+      if (!delivered.ok) return json({ error: delivered.error }, 502);
+      const row = await store.markAcquisitionSent(db, userId, id, String(b?.tcgId ?? ''), delivered.itemIds);
+      return json({ acquisition: row });
+    }
+
+    if (request.method === 'POST' && path.startsWith('/api/acquisitions/') && path.endsWith('/dismiss')) {
+      const id = Number(path.split('/')[3]);
+      if (!Number.isInteger(id)) return json({ error: 'bad acquisition id' }, 400);
+      if (!(await store.dismissAcquisition(db, userId, id))) return json({ error: 'no queued acquisition with that id' }, 404);
+      return json({ dismissed: id });
     }
 
     if (request.method === 'GET' && path === '/api/settings') {
