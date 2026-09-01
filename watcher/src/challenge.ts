@@ -16,7 +16,10 @@
  * that cries wolf on healthy pages is worse than none, because it makes you
  * abandon a retailer that was working fine.
  */
-const CHALLENGE_PATTERNS: { name: string; test: (title: string, text: string) => boolean }[] = [
+const CHALLENGE_PATTERNS: {
+  name: string;
+  test: (title: string, text: string, html: string) => boolean;
+}[] = [
   {
     name: 'Cloudflare challenge',
     test: (t, x) =>
@@ -52,6 +55,40 @@ const CHALLENGE_PATTERNS: { name: string; test: (title: string, text: string) =>
       // on a toy listing doesn't trip it.
       /\b(?:i'?m|you'?re|you are)\s+not\s+a\s+robot\b/i.test(x),
   },
+  // ── Walls that render nothing at all ──────────────────────────────────────
+  //
+  // Everything above reads the page a person would see. These two exist for
+  // the case where there IS no page: on 1 Sep 2026 Pokémon Center went behind
+  // Imperva, and what came back was an empty body wrapping an interstitial
+  // iframe. No title, no text, nothing to match — so a wall read as "no
+  // schema.org Product on the page", which is true, useless, and made the
+  // pacer keep knocking every forty-five seconds at a door that had just been
+  // shut in our face.
+  //
+  // These are the only patterns allowed to look at raw HTML, and both are
+  // guarded by the page being EMPTY. That guard is the akamai lesson kept:
+  // a marker in the markup of a page that renders normally proves nothing,
+  // because vendors are everywhere. A marker on a page with no content is the
+  // page.
+  {
+    name: 'Imperva bot wall',
+    test: (_t, x, h) =>
+      x.trim().length < 200 && /_Incapsula_Resource|distil_referrer|Incapsula incident/i.test(h),
+  },
+  {
+    name: 'blank page — blocked or hung',
+    // Deliberately last. Anything above names the wall; this one only says
+    // that nothing arrived, which is still far better than inventing a reading
+    // from an empty document. Standing down is the right answer either way:
+    // if we are blocked, knocking harder makes it worse, and if the site is
+    // broken, there is nothing to read.
+    //
+    // `h.length > 0` is load-bearing: called with title and text alone — as
+    // the older tests do, and as any caller that has not got the markup does —
+    // an empty read means "nothing was passed", not "nothing arrived". Only
+    // markup we were actually handed can be evidence of a blank page.
+    test: (t, x, h) => t.trim() === '' && x.trim().length < 40 && h.length > 0 && h.length < 20_000,
+  },
 ];
 
 export interface Challenge {
@@ -77,11 +114,18 @@ export function isQueue(reason: string): boolean {
   return reason === 'Queue-it waiting room';
 }
 
-/** Is this a challenge page rather than a real one? Title + visible text only. */
-export function detectChallenge(title: string, visibleText: string): Challenge {
+/**
+ * Is this a challenge page rather than a real one?
+ *
+ * Title and visible text carry every pattern that describes something a person
+ * could read. `html` is passed for the two at the bottom of the list, which
+ * exist because a wall can arrive with nothing readable on it at all — and it
+ * is only ever consulted when the visible page is empty.
+ */
+export function detectChallenge(title: string, visibleText: string, html = ''): Challenge {
   const text = visibleText.slice(0, 8000);
   for (const { name, test } of CHALLENGE_PATTERNS) {
-    if (test(title, text)) return { challenged: true, reason: name };
+    if (test(title, text, html)) return { challenged: true, reason: name };
   }
   return { challenged: false, reason: '' };
 }

@@ -119,7 +119,7 @@ export async function readListing(
     const read = await readWhenReady(page, { minText: 800, settleForMs: 2000, timeoutMs: 30_000 });
     await Promise.all(pending);
 
-    const challenge = detectChallenge(read.title, read.text);
+    const challenge = detectChallenge(read.title, read.text, read.html);
     if (challenge.challenged) {
       return {
         ...unknownRead(`challenged: ${challenge.reason}`),

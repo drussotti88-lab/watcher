@@ -264,7 +264,7 @@ export async function inspectUrl(browser: Browser, url: string): Promise<Inspect
   }
 
   calls.sort((a, b) => b.score - a.score || b.bytes - a.bytes);
-  const { challenged, reason } = detectChallenge(read.title, read.text);
+  const { challenged, reason } = detectChallenge(read.title, read.text, read.html);
   const { ldRaw, meta, stateBlobs, buttons } = await scrape(page);
 
   const visiblePrices = Array.from(

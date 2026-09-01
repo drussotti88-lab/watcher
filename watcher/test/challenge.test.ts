@@ -49,6 +49,9 @@ test('a page mentioning a waiting list is not a waiting room', () => {
 });
 
 test('an empty page is not a challenge — it is just empty', () => {
+  // With no markup handed over there is no evidence either way, and guessing
+  // "blocked" from an absence would stand us down on every caller that reads
+  // title and text alone. The blank-page wall below needs the markup.
   assert.equal(detectChallenge('', '').challenged, false);
 });
 
@@ -113,4 +116,57 @@ test('a queue is told apart from a wall — they demand opposite reactions', () 
   assert.equal(isQueue('Cloudflare challenge'), false);
   assert.equal(isQueue('Access denied'), false);
   assert.equal(isQueue(''), false);
+});
+
+// ── Walls that render nothing ────────────────────────────────────────────────
+
+/** The real thing, trimmed: what Pokémon Center served at 16:50 on 1 Sep 2026. */
+const IMPERVA_HTML =
+  '<html style="height:100%"><head><meta name="ROBOTS" content="NOINDEX, NOFOLLOW">' +
+  '<script src="/vice-come-Soldenyson-it-non-Banquoh-Chare-Hart-C" async=""></script>' +
+  "<script type=\"text/javascript\">if (sessionStorage) { sessionStorage.setItem('distil_referrer', document.referrer); }</script>" +
+  '</head><body style="margin:0px;height:100%">' +
+  '<iframe id="main-iframe" src="/_Incapsula_Resource?SWUDNSAI=31&amp;xinfo=28-51753973-0"></iframe></body></html>';
+
+test('AN IMPERVA WALL IS A CHALLENGE, NOT A MISSING PRODUCT', () => {
+  // For six hours this read as "no schema.org Product on the page" — true,
+  // useless, and it kept the pacer knocking every 45 seconds at a door that
+  // had just been shut. A wall has to be named as one so we stand down.
+  const { challenged, reason } = detectChallenge('', '', IMPERVA_HTML);
+  assert.equal(challenged, true);
+  assert.equal(reason, 'Imperva bot wall');
+});
+
+test('a wall is a wall, not a queue — no shouting about a drop', () => {
+  assert.equal(isQueue('Imperva bot wall'), false);
+  assert.equal(isQueue('blank page — blocked or hung'), false);
+});
+
+test('A REAL PAGE MENTIONING THE VENDOR IS NOT A WALL', () => {
+  // The akamai lesson, kept. A marker in the markup of a page that renders
+  // proves nothing — vendors are on everything. The guard is that the page is
+  // EMPTY, not that the string is present.
+  const html = '<script src="/_Incapsula_Resource?x=1"></script><body>...</body>';
+  const text = 'Pokémon TCG: Mega Evolution Elite Trainer Box\n$59.99\nOut of stock\n'.repeat(20);
+  assert.equal(detectChallenge('Mega Evolution ETB | Pokémon Center', text, html).challenged, false);
+});
+
+test('a page that arrives with nothing on it says so, rather than guessing', () => {
+  const { challenged, reason } = detectChallenge('', '', '<html><head></head><body></body></html>');
+  assert.equal(challenged, true);
+  assert.equal(reason, 'blank page — blocked or hung');
+});
+
+test('a slow but real page is not called blank', () => {
+  // A product page that has a title has arrived, however little text it has
+  // rendered so far. Calling that blocked would stand us down at exactly the
+  // wrong moment.
+  assert.equal(detectChallenge('Mega Evolution ETB | Pokémon Center', '', '<html>' + 'x'.repeat(400) + '</html>').challenged, false);
+});
+
+test('a big empty-looking page is not called blank either', () => {
+  // 20k of markup with no text is a heavy app that has not painted yet, not a
+  // wall. The wall we saw was a kilobyte.
+  const html = '<html><body>' + '<div class="a"></div>'.repeat(2000) + '</body></html>';
+  assert.equal(detectChallenge('', '', html).challenged, false);
 });
