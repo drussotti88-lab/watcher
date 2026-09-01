@@ -329,9 +329,19 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       // stops a submission feeling like a hole in the ground.
       const requests = await store.listProductRequests(db, userId);
       const canCurate = await store.canWriteCatalogue(db, userId);
+      // What each shop can actually do, from the same table the vault's perks
+      // page reads. The front door tells a new member which retailers are
+      // watched — and a hard-coded list of three would go on promising a shop
+      // the day it goes behind a wall.
+      const shopStatus = capabilityTable().retailers.map((r) => ({
+        name: r.name,
+        watch: r.abilities.watch ?? 'none',
+        blocked: r.blocked ?? null,
+      }));
       return json({
         missions, runs, changes, products, listings, settings, discoveries, sweep, now, you,
         authorisations, committed, queues, stockLoads, acquisitions, requests, canCurate,
+        capabilities: shopStatus,
       });
     }
 

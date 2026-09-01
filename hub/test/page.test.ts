@@ -62,6 +62,11 @@ const DASHBOARD = {
       sellerKind: 'retailer', sellerName: '', isPrimary: true,
     },
   ],
+  // The owner's view. Every test below describes what the person who curates
+  // the catalogue sees; the member's view is a smaller page and is tested
+  // against `canCurate: false` where it differs.
+  canCurate: true,
+  requests: [],
 };
 
 async function boot(
@@ -2759,4 +2764,197 @@ test('the capped figure keeps its plus, staged or not', async () => {
     missions: [{ ...DASHBOARD.missions[0], state: 'out', availableQuantity: 20 }],
   });
   assert.match($(h, '#missions .card').textContent, /20\+ staged/);
+});
+
+// ── The front door ───────────────────────────────────────────────────────────
+//
+// Every other surface on this page assumes you already know what it is for.
+// Somebody arriving from the vault does not, and an empty dashboard reads as
+// broken rather than new.
+
+const NEWCOMER = {
+  missions: [],
+  runs: [],
+  changes: [],
+  products: [],
+  listings: [
+    {
+      id: 10, productKey: 'prd_etb', productName: 'Pitch Black ETB', retailer: 'Target',
+      externalId: '1012644666', url: 'https://www.target.com/p/-/A-1012644666',
+      sellerKind: 'retailer', sellerName: '', isPrimary: true,
+    },
+    {
+      id: 11, productKey: 'prd_tin', productName: 'Ascended Heroes Tin', retailer: 'Walmart',
+      externalId: '5015988981', url: 'https://www.walmart.com/ip/5015988981',
+      sellerKind: 'retailer', sellerName: '', isPrimary: true,
+    },
+  ],
+  canCurate: false,
+  requests: [],
+  capabilities: [
+    { name: 'Target', watch: 'live', blocked: null },
+    { name: 'Walmart', watch: 'live', blocked: null },
+    {
+      name: 'Pokémon Center',
+      watch: 'partial',
+      blocked: { since: '2026-09-01', what: 'behind a bot wall since 1 Sep; nothing can be read' },
+    },
+  ],
+};
+
+test('THE FRONT DOOR OPENS WHEN THERE IS NOTHING TO SHOW', async () => {
+  // The moment worth spending. A dashboard with missions on it explains
+  // itself; an empty one looks broken.
+  const h = await boot(NEWCOMER);
+  assert.equal($(h, '#wizard').hidden, false);
+  assert.match($(h, '#wiz-title').textContent, /What Phantom does/);
+  assert.equal($(h, '#wiz-step').textContent, '1 / 4');
+});
+
+test('it stays out of the way of somebody who is already using it', async () => {
+  const h = await boot();
+  assert.equal($(h, '#wizard').hidden, true);
+});
+
+test('IT NAMES A WALLED SHOP INSTEAD OF PROMISING IT', async () => {
+  // The whole reason the capability table is read here rather than a list of
+  // three retailers being typed into the page: on the day a shop goes behind
+  // a wall, a hard-coded line keeps selling it to every new member.
+  const h = await boot(NEWCOMER);
+  const text = $(h, '#wiz-body').textContent;
+  assert.match(text, /Target/);
+  assert.match(text, /Pokémon Center/);
+  assert.match(text, /bot wall/, 'and says so where it matters');
+});
+
+test('a member is told plainly that nothing here can spend their money', async () => {
+  const h = await boot(NEWCOMER);
+  assert.match($(h, '#wiz-body').textContent, /never buys anything on your behalf/i);
+});
+
+test('STEP TWO IS THE PRODUCT, NOT A TOUR OF IT — the catalogue is pickable', async () => {
+  // A walkthrough you cannot act inside is a brochure. The shared catalogue
+  // means anything already in it is one click away, and until this existed the
+  // only route in was pasting a URL for something already on the page.
+  const h = await boot(NEWCOMER);
+  $(h, '#wiz-next').click();
+  await h.settle();
+
+  assert.match($(h, '#wiz-title').textContent, /Pick something to watch/);
+  const rows = [...h.doc.querySelectorAll('#wiz-body .pickable')];
+  assert.equal(rows.length, 2, 'both catalogue listings offered');
+
+  const watch = rows[0]!.querySelector('button');
+  assert.equal(watch.textContent, 'Watch this');
+  watch.click();
+  await h.settle();
+
+  const call = h.calls.find((c) => c.method === 'POST' && c.path === '/api/missions');
+  assert.ok(call, 'it creates the mission');
+  assert.equal((call!.body as any).listingId, 10);
+  assert.equal((call!.body as any).armed, undefined, 'AND NEVER ARMS IT');
+});
+
+test('something already watched is shown as watched, not offered again', async () => {
+  const h = await boot({ ...NEWCOMER, missions: [{ ...DASHBOARD.missions[0], listingId: 10 }] });
+  // With a mission on file the door does not open by itself, so open it.
+  $(h, '#wiz-open').click();
+  $(h, '#wiz-next').click();
+  await h.settle();
+  const rows = [...h.doc.querySelectorAll('#wiz-body .pickable')];
+  const watched = rows.find((r) => r.textContent.includes('Pitch Black'));
+  assert.match(watched!.textContent, /WATCHING/);
+  assert.equal(watched!.querySelector('button'), null, 'no button to press twice');
+});
+
+test('STEP THREE TELLS A MEMBER THE TRUTH ABOUT WHERE THEIR LINK GOES', async () => {
+  // "Added" and "sent to somebody who may say no" are different promises, and
+  // a member who thinks they added it will wonder why it never appears.
+  const h = await boot(NEWCOMER);
+  $(h, '#wiz-next').click();
+  $(h, '#wiz-next').click();
+  await h.settle();
+  assert.match($(h, '#wiz-body').textContent, /goes to the catalogue owner/);
+  assert.equal($(h, '#wiz-body button').textContent, 'Send it in');
+});
+
+test('the owner is told the other truth: it goes straight in', async () => {
+  const h = await boot({ ...NEWCOMER, canCurate: true });
+  $(h, '#wiz-next').click();
+  $(h, '#wiz-next').click();
+  await h.settle();
+  assert.match($(h, '#wiz-body').textContent, /straight into the catalogue/);
+  assert.equal($(h, '#wiz-body button').textContent, 'Add and watch');
+});
+
+test('the last step ends the wizard rather than running out of Next', async () => {
+  const h = await boot(NEWCOMER);
+  for (let i = 0; i < 3; i += 1) $(h, '#wiz-next').click();
+  await h.settle();
+  assert.equal($(h, '#wiz-step').textContent, '4 / 4');
+  assert.equal($(h, '#wiz-next').textContent, 'Done');
+  $(h, '#wiz-next').click();
+  assert.equal($(h, '#wizard').hidden, true);
+});
+
+test('IT IS SKIPPABLE ON EVERY STEP, AND REOPENABLE AFTER', async () => {
+  // A wizard you cannot get out of is one people learn to click through
+  // without reading, and then it has taught them nothing twice.
+  const h = await boot(NEWCOMER);
+  $(h, '#wiz-close').click();
+  assert.equal($(h, '#wizard').hidden, true);
+  $(h, '#wiz-open').click();
+  assert.equal($(h, '#wizard').hidden, false);
+  assert.equal($(h, '#wiz-step').textContent, '1 / 4', 'and it starts from the beginning');
+});
+
+test('Back is offered only where there is something to go back to', async () => {
+  const h = await boot(NEWCOMER);
+  assert.equal($(h, '#wiz-back').hidden, true);
+  $(h, '#wiz-next').click();
+  assert.equal($(h, '#wiz-back').hidden, false);
+  $(h, '#wiz-back').click();
+  assert.equal($(h, '#wiz-step').textContent, '1 / 4');
+});
+
+// ── A member's page is a smaller page ────────────────────────────────────────
+
+test('A MEMBER IS NOT SHOWN BUTTONS THAT ALWAYS ANSWER 403', async () => {
+  // Removing a listing and adding one both write to the shared catalogue, and
+  // curation is a role. A button that always fails is worse than no button.
+  const h = await boot({ ...DASHBOARD, canCurate: false });
+  openProduct(h);
+  await h.settle();
+  const panel = $(h, '#detail-body') ?? h.doc.body;
+  const buttons = [...panel.querySelectorAll('button')].map((b) => b.textContent);
+  assert.ok(!buttons.includes('remove'), 'no remove');
+  assert.ok(!buttons.includes('Add listing and watch it'), 'no add-a-listing form');
+  assert.match(panel.textContent, /goes to the catalogue owner/, 'but it says what to do instead');
+});
+
+test('the owner keeps both', async () => {
+  const h = await boot();
+  openProduct(h);
+  await h.settle();
+  const buttons = [...h.doc.querySelectorAll('#detail-body button')].map((b) => b.textContent);
+  assert.ok(buttons.includes('remove'));
+  assert.ok(buttons.includes('Add listing and watch it'));
+});
+
+test('ANYBODY CAN WATCH A LISTING SOMEBODY ELSE CATALOGUED', async () => {
+  // The point of a shared catalogue. The listing in DASHBOARD is already
+  // watched, so this proves the state is read from your OWN missions.
+  const h = await boot({ ...DASHBOARD, canCurate: false, missions: [] });
+  openProduct(h);
+  await h.settle();
+  // Scoped to the pop-up: the quick-add form has a "Watch this" submit button
+  // of its own, and finding that one instead is how this test first passed
+  // while proving nothing.
+  const watch = [...h.doc.querySelectorAll('#detail-body button')]
+    .find((b) => b.textContent === 'Watch this');
+  assert.ok(watch, 'a member is offered the listing');
+  watch!.click();
+  await h.settle();
+  const call = h.calls.find((c) => c.method === 'POST' && c.path === '/api/missions');
+  assert.equal((call!.body as any).listingId, 10);
 });

@@ -42,6 +42,14 @@ const DASHBOARD = {
   settings: { taxRate: 0.0975, shippingAllowance: 6, spendCapDay: 300, sweepEveryHours: 24 },
   sweep: { queued: false, lastSweptAt: ago(60 * 7), lastStatus: 'ok — 131 seen' },
   authorisations: [], committed: 0, queues: [],
+  canCurate: true,
+  requests: [],
+  capabilities: [
+    { name: 'Target', watch: 'live', blocked: null },
+    { name: 'Walmart', watch: 'live', blocked: null },
+    { name: 'Pokémon Center', watch: 'partial',
+      blocked: { since: '2026-09-01', what: 'behind a bot wall since 1 Sep; nothing can be read' } },
+  ],
   missions: [
     mission({ id: 1, listingId: 1, productName: 'Pokémon Trading Card Game: 30th Celebration Elite Trainer Box', imageUrl: swatch('#6c5fb0'), releaseDate: days(16), state: 'out' }),
     mission({ id: 2, listingId: 2, productName: 'Pokémon Trading Card Game: 30th Celebration Sylveon ex Box', imageUrl: swatch('#a05f8a'), releaseDate: days(16), state: 'out' }),
@@ -118,6 +126,16 @@ for (const [w, h, label] of [[390, 844, 'phone'], [1280, 900, 'desktop']] as con
   await page.getByText('Settings').first().click();
   await page.waitForTimeout(400);
   await page.screenshot({ path: `/home/claude/scratch/hubshots/${tag}-${label}-popup.png` });
+  // The front door, opened by hand — the fixture has missions, so it does not
+  // greet on its own.
+  await page.keyboard.press('Escape').catch(() => {});
+  await page.waitForTimeout(200);
+  await page.click('#wiz-open');
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: `/home/claude/scratch/hubshots/${tag}-${label}-wizard.png` });
+  await page.click('#wiz-next');
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: `/home/claude/scratch/hubshots/${tag}-${label}-wizard2.png` });
   await page.close();
 }
 await browser.close();

@@ -245,6 +245,23 @@ a { color: var(--accent); text-underline-offset: 2px; }
   .bar button, .bar .btn { padding: 7px 11px; font-size: 13px; }
   .bar .check { font-size: 13px; }
 }
+/*
+ * The hidden attribute must actually hide.
+ *
+ * The rule below sets display: inline-block on every button, and an author
+ * rule beats the user-agent stylesheet's own [hidden] { display: none }. So a
+ * button carrying the hidden attribute stayed on screen — the Install button
+ * was visible on every browser that never offered an install prompt, and the
+ * front door's Back button sat there on step one with nothing behind it.
+ *
+ * Everything in this page toggles visibility with .hidden, so this belongs at
+ * the top rather than as a display:none sprinkled on each offender.
+ *
+ * (No backticks in this comment on purpose. It lives inside a template
+ * literal, and one of them ends the stylesheet.)
+ */
+[hidden] { display: none !important; }
+
 button, .btn {
   font: 600 14px/1.4 var(--sans); padding: 8px 15px; border-radius: var(--r-ctl);
   cursor: pointer; border: 1px solid var(--line-strong); background: var(--panel-2);
@@ -481,6 +498,22 @@ details > summary:hover { color: var(--ink); }
 
 header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .quickadd { margin-bottom: 14px; border-color: var(--accent); }
+
+/* The front door. Bordered like the quick-add card because it is the same
+   kind of thing — a panel that appears, does one job and goes away. */
+.wizard { margin-bottom: 16px; border-color: var(--accent); }
+.wizhead { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.wizard .name { font: 700 18px/1.3 var(--display); }
+.wizfoot { margin-top: 16px; align-items: center; }
+.wizfoot .sub { margin-left: auto; font-family: var(--mono); font-size: 12px; }
+.wizard p { margin: 10px 0 0; max-width: 62ch; }
+.wizard ul { margin: 10px 0 0; padding-left: 18px; max-width: 62ch; }
+.wizard li { margin: 5px 0; }
+.wizard .pickable { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+                    padding: 9px 0; border-bottom: 1px solid var(--line); }
+.wizard .pickable:last-child { border-bottom: none; }
+.wizard .pickable .grow { flex: 1 1 0; min-width: 120px; }
+.warn-text { color: var(--warn); }
 .quickadd h2 { margin: 0; font: 700 17px/1.3 var(--display); color: var(--ink); }
 .quickadd h2::after { display: none; }
 #install { flex: none; }
@@ -641,8 +674,30 @@ ${FONTS}<style>${STYLE}</style></head>
     <div>
       <span class="sub" id="summary">loading…</span> <span class="who" id="who"></span>
     </div>
+    <button id="wiz-open" class="small" title="How Phantom works">How it works</button>
     <button id="install" class="small" hidden>Install</button>
   </header>
+
+  <!-- ── The front door ──────────────────────────────────────────────────
+       Shown when there is nothing to show, and re-openable from the header
+       afterwards. Everything else on this page assumes you already know what
+       it is for; somebody arriving from the vault does not, and an empty
+       dashboard tells them nothing except that it is empty.
+
+       Deliberately not a modal, and skippable on every step: a wizard you
+       cannot get out of is a wizard people learn to click through. -->
+  <div class="card wizard" id="wizard" hidden>
+    <div class="wizhead">
+      <div class="name" id="wiz-title"></div>
+      <button type="button" class="small" id="wiz-close">Skip</button>
+    </div>
+    <div id="wiz-body"></div>
+    <div class="actions wizfoot">
+      <button type="button" class="small" id="wiz-back">Back</button>
+      <button type="button" class="primary" id="wiz-next">Next</button>
+      <span class="sub" id="wiz-step"></span>
+    </div>
+  </div>
 
   <div class="card quickadd" id="quickadd" hidden>
     <h2>Add a listing</h2>
@@ -1758,6 +1813,11 @@ function productPanel(p, listings) {
   const wrap = el('div');
   wrap.style.marginTop = '10px';
 
+  // Declared up here, not beside the form that first used it: the Watch
+  // buttons in the table below report through it too, and a member's panel
+  // returns before that form is ever built.
+  const msg = el('span', 'msg');
+
   // ── where to buy it
   wrap.appendChild(el('h3', null, 'Where to buy it'));
   if (!listings.length) {
@@ -1780,16 +1840,47 @@ function productPanel(p, listings) {
       tr.appendChild(seller);
       const actions = el('td');
       actions.style.textAlign = 'right';
-      const del = el('button', 'small danger', 'remove');
-      del.addEventListener('click', async () => {
-        if (!confirm('Remove the ' + l.retailer + ' listing?\\n\\nIts mission and run history go with it.')) return;
-        await withButton(del, 'removing…', msg, async () => {
-          await api('DELETE', '/api/listings/' + l.id);
-          load();
-          return 'removed';
+
+      // ── Watch this ────────────────────────────────────────────────────────
+      //
+      // The catalogue is shared, so a listing somebody else curated is one
+      // anybody can point a mission at. Until this button existed the only
+      // route in was pasting a URL — which, for a member, meant asking for
+      // something that was already sitting right there on the page.
+      //
+      // Never armed. Arming is a separate, deliberate act on the mission
+      // itself, and a one-click button next to a price is exactly where it
+      // must not live.
+      const mine = (DATA.missions || []).find((m) => m.listingId === l.id);
+      if (mine) {
+        const on = el('span', 'pill in', 'WATCHING');
+        actions.appendChild(on);
+      } else {
+        const watch = el('button', 'small go', 'Watch this');
+        watch.addEventListener('click', () =>
+          withButton(watch, 'Adding…', msg, async () => {
+            await api('POST', '/api/missions', { listingId: l.id, label: p.name, enabled: true });
+            await load();
+            return 'watching ' + l.retailer + ' — set a ceiling before arming it';
+          }));
+        actions.appendChild(watch);
+      }
+
+      // Removing a listing is curation, and curation is a role. A member
+      // seeing a button that always answers 403 is worse than no button.
+      if (DATA.canCurate) {
+        const del = el('button', 'small danger', 'remove');
+        del.style.marginLeft = '6px';
+        del.addEventListener('click', async () => {
+          if (!confirm('Remove the ' + l.retailer + ' listing?\\n\\nIts mission and run history go with it.')) return;
+          await withButton(del, 'removing…', msg, async () => {
+            await api('DELETE', '/api/listings/' + l.id);
+            load();
+            return 'removed';
+          });
         });
-      });
-      actions.appendChild(del);
+        actions.appendChild(del);
+      }
       tr.appendChild(actions);
       body.appendChild(tr);
     }
@@ -1797,7 +1888,22 @@ function productPanel(p, listings) {
     wrap.appendChild(table);
   }
 
-  // ── add a listing
+  // ── add a listing (curators only)
+  //
+  // Adding a listing writes to the shared catalogue. A member who has a link
+  // the catalogue is missing sends it in from Add product, which becomes a
+  // request — the same act, routed to somebody who may say yes.
+  if (!DATA.canCurate) {
+    const note = el('div', 'meta');
+    note.style.marginTop = '10px';
+    note.textContent =
+      'Missing a shop for this product? Send the link in from Add product and it goes to the ' +
+      'catalogue owner.';
+    wrap.appendChild(note);
+    wrap.appendChild(msg);
+    return wrap;
+  }
+
   const addForm = el('form', 'stack');
   addForm.style.marginTop = '10px';
   addForm.dataset.product = p.key;
@@ -1809,7 +1915,6 @@ function productPanel(p, listings) {
       <button type="submit">Add listing and watch it</button>
       <span class="sub">the retailer and SKU are read from the URL</span>
     </div>\`;
-  const msg = el('span', 'msg');
   addForm.querySelector('.actions').appendChild(msg);
   addForm.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -2284,6 +2389,8 @@ function render() {
   renderRadar();
   renderRequests();
   renderFinds();
+  maybeOpenWizard();
+  renderWizard();
   renderDetail();
   applyViews();
 
@@ -2832,6 +2939,237 @@ function renderRadar() {
  * A declined row keeps its reason. "No" with a sentence attached is a person
  * answering; "no" on its own is the thing that makes people stop sending.
  */
+/* ── The front door ──────────────────────────────────────────────────────────
+ *
+ * Every other surface on this page assumes you already know what it is for.
+ * Somebody arriving from the vault does not, and an empty dashboard tells them
+ * only that it is empty — which reads as broken, not as new.
+ *
+ * Four steps, and the middle two are the actual product rather than a tour of
+ * it: pick something to watch out of the shared catalogue, or send in a link
+ * that is missing from it. A walkthrough you cannot act inside is a brochure.
+ *
+ * Skippable on every step, and re-openable from the header afterwards. A
+ * wizard you cannot get out of is one people learn to click through without
+ * reading, and then it has taught them nothing twice.
+ */
+const WIZ_SEEN = 'phantom.frontdoor.v1';
+let WIZ_STEP = 0;
+
+/** What the steps ARE, so the count and the order have one definition. */
+function wizSteps() {
+  return [
+    { title: 'What Phantom does', render: wizWhat },
+    { title: 'Pick something to watch', render: wizPick },
+    { title: 'Something missing?', render: wizAsk },
+    { title: 'What happens next', render: wizNext },
+  ];
+}
+
+function wizWhat(body) {
+  const p1 = el('p');
+  p1.textContent =
+    'Phantom opens real product pages in a real browser on a real machine, and ' +
+    'tells you the moment something is genuinely buyable — not "back in stock" ' +
+    'from a feed that is four minutes old.';
+  body.appendChild(p1);
+
+  const list = el('ul');
+  // Read from the live capability table rather than written here, so a shop
+  // that goes behind a wall cannot keep being promised by a hard-coded line.
+  const shops = DATA.capabilities || [];
+  if (shops.length === 0) {
+    for (const name of ['Target', 'Walmart', 'Pokémon Center']) {
+      list.appendChild(el('li', null, name));
+    }
+  } else {
+    for (const shop of shops) {
+      const li = el('li');
+      li.appendChild(document.createTextNode(shop.name + ' — '));
+      const how = shop.blocked
+        ? el('span', 'warn-text', 'not readable at the moment: ' + shop.blocked.what)
+        : document.createTextNode(shop.watch === 'live' ? 'watched' : 'partly watched');
+      li.appendChild(how);
+      list.appendChild(li);
+    }
+  }
+  body.appendChild(list);
+
+  const p2 = el('p', 'sub');
+  p2.textContent =
+    'It never buys anything on your behalf. Watching and buying are separate, ' +
+    'and buying needs a machine of your own signed into your own accounts.';
+  body.appendChild(p2);
+}
+
+function wizPick(body) {
+  const p = el('p');
+  p.textContent =
+    'The catalogue is shared, so anything already in it is one click away. ' +
+    'Watching only — nothing here can spend.';
+  body.appendChild(p);
+
+  const listings = DATA.listings || [];
+  if (listings.length === 0) {
+    body.appendChild(el('div', 'meta', 'The catalogue is empty so far. The next step is how it fills up.'));
+    return;
+  }
+
+  const box = el('div');
+  box.style.marginTop = '10px';
+  const watched = new Set((DATA.missions || []).map((m) => m.listingId));
+  // The ones you are not watching first: a list that opens with six rows of
+  // WATCHING is a list that looks like it has nothing to offer.
+  const rows = listings
+    .slice()
+    .sort((a, b) => (watched.has(a.id) ? 1 : 0) - (watched.has(b.id) ? 1 : 0))
+    .slice(0, 8);
+
+  for (const l of rows) {
+    const row = el('div', 'pickable');
+    const name = el('div', 'grow');
+    name.appendChild(el('div', null, l.productName || l.externalId));
+    name.appendChild(el('div', 'meta', l.retailer + ' · ' + l.externalId));
+    row.appendChild(name);
+
+    if (watched.has(l.id)) {
+      row.appendChild(el('span', 'pill in', 'WATCHING'));
+    } else {
+      const add = el('button', 'small go', 'Watch this');
+      const msg = el('span', 'msg');
+      add.addEventListener('click', () =>
+        withButton(add, 'Adding…', msg, async () => {
+          await api('POST', '/api/missions', { listingId: l.id, label: l.productName, enabled: true });
+          await load();
+          renderWizard();
+          return 'watching';
+        }));
+      row.appendChild(add);
+      row.appendChild(msg);
+    }
+    box.appendChild(row);
+  }
+  body.appendChild(box);
+}
+
+function wizAsk(body) {
+  const p = el('p');
+  p.textContent = DATA.canCurate
+    ? 'Paste a Target, Pokémon Center or Walmart product link and it goes ' +
+      'straight into the catalogue, watched from the next pass.'
+    : 'Paste a Target, Pokémon Center or Walmart product link. It goes to the ' +
+      'catalogue owner, and once it is added you will see it on your watchlist. ' +
+      'You can see what happened to anything you send under Finds.';
+  body.appendChild(p);
+
+  const form = el('form', 'stack');
+  form.style.marginTop = '12px';
+  const input = el('input');
+  input.type = 'url';
+  input.placeholder = 'https://www.target.com/p/…/A-1012644666';
+  input.autocomplete = 'off';
+  input.spellcheck = false;
+  form.appendChild(input);
+
+  const actions = el('div', 'actions');
+  const send = el('button', 'go', DATA.canCurate ? 'Add and watch' : 'Send it in');
+  send.type = 'submit';
+  const msg = el('span', 'msg');
+  actions.appendChild(send);
+  actions.appendChild(msg);
+  form.appendChild(actions);
+
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const url = input.value.trim();
+    if (!url) return;
+    withButton(send, 'Sending…', msg, async () => {
+      const r = await api('POST', '/api/quick-add', { url });
+      input.value = '';
+      await load();
+      if (r.requested) return r.message;
+      return r.alreadyTracked ? 'already watching that one' : 'watching it now';
+    });
+  });
+  body.appendChild(form);
+}
+
+function wizNext(body) {
+  const list = el('ul');
+  const bits = [
+    'Readings land on the Missions tab. A page that has not been checked yet ' +
+      'says so rather than pretending to be out of stock.',
+    'Activity shows every check, with what the page said and why anything was ' +
+      'decided — including the checks that found nothing.',
+    'A release date or warehouse stock appearing is a warning that a drop is ' +
+      'near. Those get their own banner at the top.',
+  ];
+  if (!DATA.canCurate) {
+    bits.push(
+      'Arming — letting a machine buy — needs a Phantom of your own, signed ' +
+        'into your own accounts. Nothing here can spend your money.',
+    );
+  }
+  for (const b of bits) list.appendChild(el('li', null, b));
+  body.appendChild(list);
+
+  const p = el('p', 'sub');
+  p.textContent = 'You can reopen this any time from “How it works” at the top.';
+  body.appendChild(p);
+}
+
+function renderWizard() {
+  const card = document.getElementById('wizard');
+  if (!card || card.hidden) return;
+  const steps = wizSteps();
+  WIZ_STEP = Math.max(0, Math.min(WIZ_STEP, steps.length - 1));
+  const step = steps[WIZ_STEP];
+
+  document.getElementById('wiz-title').textContent = step.title;
+  const body = document.getElementById('wiz-body');
+  body.textContent = '';
+  step.render(body);
+
+  document.getElementById('wiz-step').textContent = (WIZ_STEP + 1) + ' / ' + steps.length;
+  document.getElementById('wiz-back').hidden = WIZ_STEP === 0;
+  document.getElementById('wiz-next').textContent =
+    WIZ_STEP === steps.length - 1 ? 'Done' : 'Next';
+}
+
+function openWizard(step) {
+  WIZ_STEP = step || 0;
+  const card = document.getElementById('wizard');
+  card.hidden = false;
+  renderWizard();
+  // Guarded: not every environment implements it, and a front door that
+  // throws while trying to be polite about scrolling is a page that dies on
+  // its first render.
+  if (card.scrollIntoView) card.scrollIntoView({ block: 'nearest' });
+}
+
+function closeWizard() {
+  document.getElementById('wizard').hidden = true;
+  // Remembered so it does not greet the same person every morning. A failure
+  // to remember is not a failure to work: the wizard is skippable either way.
+  try { localStorage.setItem(WIZ_SEEN, '1'); } catch (e) { /* private window */ }
+}
+
+/**
+ * Should the front door open by itself?
+ *
+ * Only when there is nothing to show AND it has not been dismissed. An empty
+ * dashboard reads as broken rather than new, and that is the moment worth
+ * spending; a dashboard with missions on it explains itself.
+ */
+function maybeOpenWizard() {
+  if (!document.getElementById('wizard').hidden) return;
+  if ((DATA.missions || []).length > 0) return;
+  let seen = false;
+  try { seen = localStorage.getItem(WIZ_SEEN) === '1'; } catch (e) { seen = false; }
+  if (seen) return;
+  openWizard(0);
+}
+
 function renderRequests() {
   const card = document.getElementById('requests-card');
   if (!card) return;
@@ -3522,6 +3860,18 @@ function sharedUrl() {
   const m = ((q.get('text') || '') + ' ' + (q.get('title') || '')).match(/https?:\\/\\/\\S+/);
   return m ? m[0] : '';
 }
+
+document.getElementById('wiz-open').addEventListener('click', () => openWizard(0));
+document.getElementById('wiz-close').addEventListener('click', closeWizard);
+document.getElementById('wiz-back').addEventListener('click', () => {
+  WIZ_STEP -= 1;
+  renderWizard();
+});
+document.getElementById('wiz-next').addEventListener('click', () => {
+  if (WIZ_STEP >= wizSteps().length - 1) { closeWizard(); return; }
+  WIZ_STEP += 1;
+  renderWizard();
+});
 
 document.getElementById('quick-form').addEventListener('submit', async (e) => {
   e.preventDefault();
