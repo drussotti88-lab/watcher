@@ -660,6 +660,10 @@ async function runPasses(once: boolean): Promise<void> {
 
   try {
     do {
+      // When this cycle began. The sleep at the bottom is measured from HERE,
+      // not from when the work finished — see the note there.
+      const cycleStart = Date.now();
+
       // Fail open on watching. A Hub that is briefly cold must not stop us
       // looking at pages — we keep watching the last list it gave us, and the
       // readings buffer until it comes back.
@@ -867,7 +871,22 @@ async function runPasses(once: boolean): Promise<void> {
       await activity.flush(once || stopped);
 
       if (once) break;
-      await sleep(config.intervalSec * 1000);
+
+      // ── The interval is a CADENCE, not a gap ────────────────────────────
+      //
+      // This used to sleep the full interval after the pass returned. Once a
+      // pass started draining its list that turned into: work for seventy-five
+      // seconds, then sleep another ninety on top — a cycle nearly twice as
+      // long as the interval anyone configured, and the drop window got half
+      // the checks it was asked for.
+      //
+      // Measured from the START of the cycle, "every 90 seconds" means every
+      // 90 seconds. A pass that overran its window sleeps not at all and the
+      // next one begins immediately, which is the correct behaviour when there
+      // is more to look at than time to look.
+      const spent = Date.now() - cycleStart;
+      const rest = config.intervalSec * 1000 - spent;
+      if (rest > 0) await sleep(rest);
     } while (!stopped);
   } finally {
     await activity.flush(true);
