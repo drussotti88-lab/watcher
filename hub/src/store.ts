@@ -2525,6 +2525,32 @@ export async function queueSightings(
   return rows.map((r) => ({ retailer: r.retailer, at: String(r.at) }));
 }
 
+/**
+ * Load-ins the Watcher has alarmed on: warehouse stock appearing on a watched
+ * listing that had none — Target's loudest pre-drop tell, readable hours
+ * before the page turns buyable. A long window (12h by default) on purpose:
+ * the load lands the evening before a small-hours drop, and the person who
+ * needs to see it is asleep in between.
+ */
+export async function stockLoadSightings(
+  db: Sql,
+  userId: number,
+  minutes = 720,
+): Promise<{ retailer: string; message: string; at: string }[]> {
+  const rows = await db.query<{ retailer: string; message: string; at: string }>(
+    `SELECT DISTINCT ON (message) retailer, message, at
+       FROM activity
+      WHERE user_id = $1
+        AND at > now() - ($2 || ' minutes')::interval
+        AND message LIKE 'STOCK LOADED:%'
+      ORDER BY message, at DESC`,
+    [userId, String(minutes)],
+  );
+  return rows
+    .map((r) => ({ retailer: r.retailer, message: String(r.message), at: String(r.at) }))
+    .sort((a, b) => (a.at < b.at ? 1 : -1));
+}
+
 /** What the page needs to render the sweep button and say when it last ran. */
 export async function sweepState(
   db: Sql,

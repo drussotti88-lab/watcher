@@ -597,6 +597,12 @@ ${FONTS}<style>${STYLE}</style></head>
 
   <div class="card banner alert" id="queue-banner" hidden></div>
 
+  <!-- Warehouse stock appearing on a watched listing that had none — hours of
+       warning before a scheduled drop turns buyable. Warn, not alert: nothing
+       is buyable YET, and the queue banner keeps the louder colour for the
+       moment something is. -->
+  <div class="card banner warn" id="load-banner" hidden></div>
+
 
   <div class="bar">
     <button id="add-open" class="primary">Add product</button>
@@ -2138,6 +2144,19 @@ function render() {
     a.rel = 'noreferrer';
     meta.appendChild(a);
     qb.appendChild(meta);
+  }
+
+  const lb = document.getElementById('load-banner');
+  lb.textContent = '';
+  const loads = DATA.stockLoads || [];
+  lb.hidden = loads.length === 0;
+  if (loads.length) {
+    lb.appendChild(el('div', 'name', 'STOCK IS LOADING — A DROP LOOKS NEAR'));
+    for (const s of loads) {
+      const meta = el('div', 'meta');
+      meta.append(s.message.replace('STOCK LOADED: ', '') + ' — seen ' + ago(s.at));
+      lb.appendChild(meta);
+    }
   }
 
   // The two buttons that change what the Watcher is doing, labelled with the

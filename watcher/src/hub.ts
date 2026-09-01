@@ -41,6 +41,15 @@ export interface Mission {
   checkNow?: boolean;
   state: string;
   price: number | null;
+  /**
+   * The last shipping quantity the Hub recorded for this listing. The prior
+   * value in the stock-loaded comparison: warehouse inventory appears in this
+   * field HOURS before a scheduled drop goes buyable (measured 1 Sep 2026 —
+   * a competitor announced "30k+" at 11:34pm for a 3am drop, from this very
+   * number), so a jump from ~0 while the page still says out is the loudest
+   * early warning Target gives.
+   */
+  availableQuantity?: number | null;
   lastCheckedAt: string;
   /** Target's published on-sale date, when it has one. Drives waking up. */
   releaseDate?: string | null;

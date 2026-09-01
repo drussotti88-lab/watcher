@@ -234,3 +234,36 @@ test('another user’s queue is not my alarm', async () => {
   ]);
   assert.deepEqual(await store.queueSightings(db, A, 30), []);
 });
+
+// ── stock load-ins: the pre-drop tell ────────────────────────────────────────
+
+test('A STOCK LOADED LINE BECOMES THE PRE-DROP ALARM, DEDUPED PER PRODUCT', async () => {
+  const db = await twoUsers();
+  await store.recordActivity(db, A, [
+    line({ retailer: 'Target', level: 'warn',
+      message: 'STOCK LOADED: Chaos Rising ETB — Target shows ~31000 units ready to ship; a drop is likely near' }),
+    // The same load-in seen again on the next check is one alarm, not two.
+    line({ retailer: 'Target', level: 'warn',
+      message: 'STOCK LOADED: Chaos Rising ETB — Target shows ~31000 units ready to ship; a drop is likely near' }),
+    line({ retailer: 'Target', level: 'warn',
+      message: 'STOCK LOADED: First Partner Series 2 — Target shows ~1200 units ready to ship; a drop is likely near' }),
+    // Yesterday's load-in is history — the 12h window is what keeps an evening
+    // load visible at 3am without last week's haunting the banner.
+    line({ retailer: 'Target', level: 'warn',
+      at: new Date(Date.now() - 13 * 3600_000).toISOString(),
+      message: 'STOCK LOADED: Old Thing — Target shows ~900 units ready to ship; a drop is likely near' }),
+    line({ retailer: 'Target', message: 'out, $49.99' }),
+  ]);
+  const seen = await store.stockLoadSightings(db, A, 720);
+  assert.equal(seen.length, 2);
+  assert.ok(seen.every((s) => s.message.startsWith('STOCK LOADED:')));
+  assert.ok(seen.some((s) => s.message.includes('Chaos Rising')));
+});
+
+test('another user’s load-in is not my alarm', async () => {
+  const db = await twoUsers();
+  await store.recordActivity(db, B, [
+    line({ retailer: 'Target', message: 'STOCK LOADED: X — Target shows ~500 units ready to ship; a drop is likely near' }),
+  ]);
+  assert.deepEqual(await store.stockLoadSightings(db, A, 720), []);
+});

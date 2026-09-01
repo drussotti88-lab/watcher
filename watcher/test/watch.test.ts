@@ -673,3 +673,64 @@ test('A WAITING ROOM DOES NOT STAND THE RETAILER DOWN', async () => {
   assert.match(blockedRun!.reason, /get in line yourself/);
   assert.doesNotMatch(blockedRun!.reason, /standing down/);
 });
+
+// ── the stock-loaded alarm: the drop precursor ───────────────────────────────
+
+import { stockLoaded, STOCK_LOADED_MIN } from '../src/watch.ts';
+import type { ActivityLine } from '../src/activity.ts';
+import type { Activity } from '../src/activity.ts';
+
+test('WAREHOUSE STOCK APPEARING FROM NOTHING IS THE ALARM — shelf noise is not', () => {
+  // The load-in: hundreds to tens of thousands landing where there was nothing.
+  assert.equal(stockLoaded(null, 30000), true);
+  assert.equal(stockLoaded(0, 250), true);
+  assert.equal(stockLoaded(20, STOCK_LOADED_MIN), true, 'display-capped shelf stock is a small prior');
+  // Ordinary shelf quantities (8–20, display-capped) must never cry wolf.
+  assert.equal(stockLoaded(null, 20), false);
+  assert.equal(stockLoaded(0, 99), false);
+  // A live drop draining fires nothing on the way down…
+  assert.equal(stockLoaded(30000, 12000), false);
+  assert.equal(stockLoaded(120, 90), false);
+  // …and a null reading (the page did not say) is never a load-in.
+  assert.equal(stockLoaded(0, null), false);
+  assert.equal(stockLoaded(null, null), false);
+});
+
+test('THE LOAD-IN WRITES A STOCK LOADED LINE THE HUB CAN ALARM ON', async () => {
+  const { hub } = recorder();
+  const pacer = new Pacer(STEADY, () => 0);
+  const lines: ActivityLine[] = [];
+  const activity = { record: (l: ActivityLine) => { lines.push(l); } } as unknown as Activity;
+
+  await pass([mission({ availableQuantity: 0, state: 'out' })], pacer, {
+    browser,
+    hub,
+    activity,
+    now: () => T0,
+    read: reads(() => reading({ state: 'out', availableQuantity: 31000 })),
+  });
+
+  const alarm = lines.find((l) => l.message.startsWith('STOCK LOADED:'));
+  assert.ok(alarm, 'the alarm line exists');
+  assert.equal(alarm!.level, 'warn');
+  assert.match(alarm!.message, /Mega Evolution ETB/);
+  assert.match(alarm!.message, /~31000 units/);
+  assert.match(alarm!.message, /drop is likely near/);
+});
+
+test('a quantity that was already big fires nothing — one alarm per load-in', async () => {
+  const { hub } = recorder();
+  const pacer = new Pacer(STEADY, () => 0);
+  const lines: ActivityLine[] = [];
+  const activity = { record: (l: ActivityLine) => { lines.push(l); } } as unknown as Activity;
+
+  await pass([mission({ availableQuantity: 28000, state: 'out' })], pacer, {
+    browser,
+    hub,
+    activity,
+    now: () => T0,
+    read: reads(() => reading({ state: 'out', availableQuantity: 27000 })),
+  });
+
+  assert.equal(lines.some((l) => l.message.startsWith('STOCK LOADED:')), false);
+});

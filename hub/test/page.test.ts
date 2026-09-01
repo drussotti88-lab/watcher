@@ -2583,3 +2583,27 @@ test('an empty vault queue explains itself', async () => {
   const h = await boot({ ...DASHBOARD, acquisitions: [] });
   assert.match($(h, '#acq-list').textContent, /Nothing has been bought yet/);
 });
+
+// ── the stock-loaded banner ──────────────────────────────────────────────────
+
+test('A LOAD-IN PUTS THE PRE-DROP BANNER ON THE FRONT PAGE', async () => {
+  const h = await boot({
+    ...DASHBOARD,
+    stockLoads: [{
+      retailer: 'Target',
+      message: 'STOCK LOADED: Chaos Rising ETB — Target shows ~31000 units ready to ship; a drop is likely near',
+      at: new Date().toISOString(),
+    }],
+  });
+  const lb = $(h, '#load-banner');
+  assert.equal(lb.hidden, false);
+  assert.match(lb.textContent, /STOCK IS LOADING/);
+  assert.match(lb.textContent, /Chaos Rising ETB/);
+  assert.match(lb.textContent, /~31000 units/);
+  assert.doesNotMatch(lb.textContent, /STOCK LOADED:/, 'the prefix is plumbing, not prose');
+});
+
+test('no load-ins, no banner', async () => {
+  const h = await boot(DASHBOARD);
+  assert.equal(($(h, '#load-banner') as any).hidden, true);
+});

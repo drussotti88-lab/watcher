@@ -297,11 +297,13 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       // early signal a retailer gives — it belongs on the front of the app,
       // not buried in the activity log.
       const queues = await store.queueSightings(db, userId, 30);
+      // Warehouse load-ins in the last 12 hours — the pre-drop tell.
+      const stockLoads = await store.stockLoadSightings(db, userId, 720);
       // Confirmed purchases waiting for their review-then-send to the vault.
       const acquisitions = await store.listAcquisitions(db, userId);
       return json({
         missions, runs, changes, products, listings, settings, discoveries, sweep, now, you,
-        authorisations, committed, queues, acquisitions,
+        authorisations, committed, queues, stockLoads, acquisitions,
       });
     }
 

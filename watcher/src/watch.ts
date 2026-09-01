@@ -29,6 +29,32 @@ import { readListing, type Reading } from './read.ts';
 import type { Activity } from './activity.ts';
 import { unknownRead } from './readers/types.ts';
 
+/**
+ * The stock-loaded alarm's thresholds.
+ *
+ * Target loads a scheduled drop's inventory into the shipping ATP field hours
+ * before the page turns buyable (proven 1 Sep 2026: "30k+" was readable the
+ * evening before a 3am drop — in the window this Watcher happened to be off).
+ * The field is already read on every check, so the alarm costs no traffic at
+ * all — it is a comparison, not a probe.
+ *
+ * 100 as the trip line, not 1: quantities of 8–20 are ordinary shelf stock
+ * (and 20 is display-capped), so alerting on those would cry wolf weekly. A
+ * drop load-in arrives as hundreds to tens of thousands. The prior must be
+ * small so a live drop draining 30k → 20k → 90 → 0 fires nothing on the way
+ * down and once — at most — on the way up.
+ */
+export const STOCK_LOADED_MIN = 100;
+export const STOCK_LOADED_PRIOR_MAX = 50;
+
+/** Did warehouse stock just appear where there was none? The drop precursor. */
+export function stockLoaded(
+  prev: number | null | undefined,
+  next: number | null | undefined,
+): boolean {
+  return (next ?? 0) >= STOCK_LOADED_MIN && (prev ?? 0) <= STOCK_LOADED_PRIOR_MAX;
+}
+
 export interface Verdict {
   /** Post this reading to the Hub? Almost always yes. */
   observation: ObservationOut;
@@ -362,6 +388,30 @@ export async function pass(missions: Mission[], pacer: Pacer, deps: WatchDeps): 
             'buying is not enabled on this Watcher',
         };
       }
+    }
+
+    // The drop precursor, checked before the routine line so the alarm is its
+    // own row: warehouse quantity appearing on a listing that had none. Fires
+    // once per load-in (the mission's stored quantity is the prior, and the
+    // next pull of the watchlist carries the new number).
+    if (stockLoaded(mission.availableQuantity, reading.availableQuantity)) {
+      const n = Math.round(reading.availableQuantity ?? 0);
+      log(
+        `  STOCK LOADED at ${mission.retailer} — ${mission.productName}: ` +
+          `~${n} units in the warehouse; a drop is likely near`,
+      );
+      deps.activity?.record({
+        kind: 'check',
+        level: 'warn',
+        retailer: mission.retailer,
+        missionId: mission.id,
+        listingId: mission.listingId,
+        state: reading.state,
+        availableQuantity: reading.availableQuantity,
+        message:
+          `STOCK LOADED: ${mission.productName} — ${mission.retailer} shows ` +
+          `~${n} units ready to ship; a drop is likely near`,
+      });
     }
 
     // One line per check, whether or not anything happened. This is the half

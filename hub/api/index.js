@@ -1643,6 +1643,18 @@ async function queueSightings(db2, userId, minutes = 30) {
   );
   return rows.map((r) => ({ retailer: r.retailer, at: String(r.at) }));
 }
+async function stockLoadSightings(db2, userId, minutes = 720) {
+  const rows = await db2.query(
+    `SELECT DISTINCT ON (message) retailer, message, at
+       FROM activity
+      WHERE user_id = $1
+        AND at > now() - ($2 || ' minutes')::interval
+        AND message LIKE 'STOCK LOADED:%'
+      ORDER BY message, at DESC`,
+    [userId, String(minutes)]
+  );
+  return rows.map((r) => ({ retailer: r.retailer, message: String(r.message), at: String(r.at) })).sort((a, b) => a.at < b.at ? 1 : -1);
+}
 async function sweepState(db2, userId, sourceId, everyHours) {
   const source = await getSource(db2, userId, sourceId);
   if (!source) return { queued: false, lastSweptAt: null, lastStatus: "" };
@@ -2706,6 +2718,12 @@ ${FONTS}<style>${STYLE}</style></head>
   </div>
 
   <div class="card banner alert" id="queue-banner" hidden></div>
+
+  <!-- Warehouse stock appearing on a watched listing that had none \u2014 hours of
+       warning before a scheduled drop turns buyable. Warn, not alert: nothing
+       is buyable YET, and the queue banner keeps the louder colour for the
+       moment something is. -->
+  <div class="card banner warn" id="load-banner" hidden></div>
 
 
   <div class="bar">
@@ -4250,6 +4268,19 @@ function render() {
     qb.appendChild(meta);
   }
 
+  const lb = document.getElementById('load-banner');
+  lb.textContent = '';
+  const loads = DATA.stockLoads || [];
+  lb.hidden = loads.length === 0;
+  if (loads.length) {
+    lb.appendChild(el('div', 'name', 'STOCK IS LOADING \u2014 A DROP LOOKS NEAR'));
+    for (const s of loads) {
+      const meta = el('div', 'meta');
+      meta.append(s.message.replace('STOCK LOADED: ', '') + ' \u2014 seen ' + ago(s.at));
+      lb.appendChild(meta);
+    }
+  }
+
   // The two buttons that change what the Watcher is doing, labelled with the
   // action rather than the state. "Turn watcher on" when it is off is
   // unambiguous; a toggle labelled "Paused" leaves you guessing whether that
@@ -5507,6 +5538,7 @@ function createHandler(db2, env2) {
       const authorisations = await openAuthorisations(db2, userId);
       const committed = await committedLast24h(db2, userId);
       const queues = await queueSightings(db2, userId, 30);
+      const stockLoads = await stockLoadSightings(db2, userId, 720);
       const acquisitions = await listAcquisitions(db2, userId);
       return json({
         missions,
@@ -5522,6 +5554,7 @@ function createHandler(db2, env2) {
         authorisations,
         committed,
         queues,
+        stockLoads,
         acquisitions
       });
     }
