@@ -39,6 +39,16 @@ export interface Mission {
   checkEverySeconds: number;
   /** A "test run" was asked for. Due now, whatever the schedule says. */
   checkNow?: boolean;
+  /**
+   * Somebody ELSE watches this listing; this Phantom is reading it as a favour.
+   *
+   * The shared catalogue means one machine reads a page once and everybody
+   * watching it is told. The reading is shared, so posting the observation is
+   * right and useful — but a run belongs to a mission, missions are private,
+   * and the Hub will refuse a run written against somebody else's. So these
+   * are read and reported, never run-logged and never bought.
+   */
+  readOnly?: boolean;
   state: string;
   price: number | null;
   /**

@@ -106,6 +106,18 @@ export function judge(
     sellerName: reading.seller.name,
   };
 
+  // ── Somebody else's mission ───────────────────────────────────────────────
+  //
+  // This Phantom pulls the union of every enabled mission so one read serves
+  // everyone watching that listing. The reading is shared — it is a fact about
+  // the world — but everything downstream of it belongs to the person whose
+  // mission it is: a run row is *their* history, and arming is *their* money.
+  //
+  // So a read-only mission stops here. The observation still goes to the Hub,
+  // where it lands on the listing and every mission on that listing sees it.
+  // No run, and no buy verdict, ever.
+  if (mission.readOnly) return { observation, run: null };
+
   // A challenge is about us, not the product. Worth a run: it is the thing you
   // want to see when the numbers stop moving. A QUEUE is the exception — that
   // one is about the product: retailers put up waiting rooms when something

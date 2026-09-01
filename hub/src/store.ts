@@ -1178,6 +1178,11 @@ export interface MissionRow {
   note: string;
   lastCheckedAt: string;
   lastChangedAt: string;
+  /**
+   * This listing is watched by somebody else, not by the account reading it.
+   * Read the page and post the observation; record no run and buy nothing.
+   */
+  readOnly?: boolean;
 }
 
 function toMission(r: Record<string, unknown>): MissionRow {
@@ -1291,9 +1296,77 @@ export async function requestCheckNow(db: Sql, userId: number, id: number): Prom
   return rows.length > 0;
 }
 
+/**
+ * The watchlist an agent should read this pass.
+ *
+ * ── One read serves everyone ────────────────────────────────────────────────
+ *
+ * For an ordinary account this is just its own enabled missions. For the
+ * CATALOGUE WRITER — the one machine with a browser — it is the union of
+ * everybody's, deduplicated down to one row per listing. That is the whole
+ * point of the shared catalogue: a page is read once no matter how many
+ * members are watching it, so traffic stays flat as membership grows instead
+ * of multiplying at the three retailers whose patience is the real constraint.
+ *
+ * ── Why the caller's own row wins ───────────────────────────────────────────
+ *
+ * `DISTINCT ON (l.id)` with the caller's rows sorted first means that when the
+ * owner and a member both watch a listing, the row returned is the OWNER'S —
+ * carrying their real arming, ceiling and quantity. Take somebody else's row
+ * and the agent would either buy on the wrong mandate or fail to buy on a
+ * mandate it actually had.
+ *
+ * ── readOnly ────────────────────────────────────────────────────────────────
+ *
+ * A listing only somebody else watches still has to be READ — that is the
+ * favour being done — but the agent may not report a run against a mission it
+ * does not own, because runs are private and `recordRun` will refuse. So the
+ * row is marked readOnly: post the observation, which is shared and helps
+ * everyone, and record nothing.
+ */
 export async function activeMissions(db: Sql, userId: number): Promise<MissionRow[]> {
-  const rows = await db.query(`${MISSION_SELECT} AND m.enabled = true ORDER BY m.id`, [userId]);
-  return rows.map(toMission);
+  if (!(await canWriteCatalogue(db, userId))) {
+    const rows = await db.query(`${MISSION_SELECT} AND m.enabled = true ORDER BY m.id`, [userId]);
+    return rows.map(toMission);
+  }
+
+  const rows = await db.query(
+    `SELECT DISTINCT ON (l.id) m.*, l.product_key, l.retailer, l.external_id, l.url,
+            p.name AS product_name, p.image_url, p.msrp,
+            COALESCE(w.state, 'unchecked') AS state,
+            COALESCE(w.confidence, 'unknown') AS confidence,
+            w.price,
+            COALESCE(w.seller_kind, l.seller_kind) AS ws_seller_kind,
+            COALESCE(NULLIF(w.seller_name, ''), l.seller_name) AS ws_seller_name,
+            w.available_quantity, w.order_limit,
+            COALESCE(w.is_preorder, false) AS is_preorder,
+            COALESCE(w.release_date, p.release_date) AS release_date,
+            COALESCE(w.note, '') AS note,
+            w.last_checked_at, w.last_changed_at,
+            (m.user_id <> $1) AS read_only,
+            -- Anyone watching this listing may press "check now"; the row we
+            -- return is whoever's mandate wins, which may not be theirs.
+            (SELECT max(m2.check_now_at) FROM missions m2
+              WHERE m2.listing_id = l.id AND m2.enabled = true) AS any_check_now
+       FROM missions m
+       JOIN listings l ON l.id = m.listing_id
+       JOIN products p ON p.key = l.product_key
+       LEFT JOIN watch_state w ON w.listing_id = l.id
+      WHERE m.enabled = true
+      -- Mine first, so a listing we both watch comes back on MY mandate.
+      ORDER BY l.id, (m.user_id = $1) DESC, m.id`,
+    [userId],
+  );
+  return rows.map((r) => {
+    // A hand-pressed check belongs to the LISTING once the read is shared: a
+    // member pressing "check now" on a listing the owner also watches must not
+    // be swallowed just because the owner's row is the one that won.
+    const mission = { ...toMission(r), checkNow: r.any_check_now != null };
+    // Somebody else's mission may never be armed by this agent, whatever its
+    // own row says. Belt as well as braces: only the owner can arm at all.
+    if (r.read_only === true) return { ...mission, readOnly: true, armed: false };
+    return mission;
+  });
 }
 
 /**
@@ -2732,4 +2805,174 @@ export async function sweepState(
     lastSweptAt: source.lastSweptAt,
     lastStatus: source.lastStatus ?? '',
   };
+}
+
+/* ── Requests: the way a member gets something into the catalogue ────────────
+ *
+ * Curation is a role, so a member cannot add a product. But a member is the
+ * one out there finding things, and a system where the only way to say "you
+ * are missing this" is to message a person is a system that loses most of
+ * what it is told.
+ *
+ * So they send a LINK. It goes in a queue with their name on it, the owner
+ * turns it into a real listing, and the person who asked can see what happened
+ * to it. The catalogue stays curated; the finding does not have to be.
+ */
+
+export interface ProductRequestRow {
+  id: number;
+  userId: number;
+  handle: string;
+  url: string;
+  note: string;
+  status: 'pending' | 'approved' | 'declined';
+  listingId: number | null;
+  decidedAt: string | null;
+  decidedNote: string;
+  createdAt: string;
+}
+
+function toRequest(r: Record<string, unknown>): ProductRequestRow {
+  return {
+    id: Number(r.id),
+    userId: Number(r.user_id),
+    handle: String(r.handle ?? ''),
+    url: String(r.url),
+    note: String(r.note ?? ''),
+    status: String(r.status) as ProductRequestRow['status'],
+    listingId: r.listing_id === null || r.listing_id === undefined ? null : Number(r.listing_id),
+    decidedAt: r.decided_at ? String(r.decided_at) : null,
+    decidedNote: String(r.decided_note ?? ''),
+    createdAt: String(r.created_at),
+  };
+}
+
+const REQUEST_SELECT = `SELECT r.*, u.handle FROM product_requests r
+   JOIN users u ON u.id = r.user_id`;
+
+/**
+ * File a link for the catalogue owner to look at.
+ *
+ * Re-sending the same URL does not queue a second copy — the unique key sees
+ * to that — and it does not silently resurrect a request that was already
+ * DECLINED either. Saying no once has to mean something, or the queue becomes
+ * the same argument every week.
+ */
+export async function requestProduct(
+  db: Sql,
+  userId: number,
+  url: string,
+  note = '',
+): Promise<ProductRequestRow> {
+  const clean = url.trim();
+  if (!clean) throw new Error('a request needs a URL');
+  if (clean.length > 2000) throw new Error('that URL is too long to be a product link');
+
+  const rows = await db.query(
+    `INSERT INTO product_requests (user_id, url, note)
+          VALUES ($1, $2, $3)
+     ON CONFLICT (user_id, url) DO UPDATE
+            SET note = EXCLUDED.note
+          WHERE product_requests.status = 'pending'
+      RETURNING id`,
+    [userId, clean, note.trim().slice(0, 500)],
+  );
+
+  // No row back means the conflict hit a row that is already decided. Return
+  // it as it stands rather than pretending a new request was filed.
+  const id = rows[0]
+    ? Number(rows[0].id)
+    : Number(
+        (
+          await db.query<{ id: number }>(
+            'SELECT id FROM product_requests WHERE user_id = $1 AND url = $2',
+            [userId, clean],
+          )
+        )[0]!.id,
+      );
+  const full = await db.query(`${REQUEST_SELECT} WHERE r.id = $1`, [id]);
+  return toRequest(full[0]!);
+}
+
+/**
+ * What this account should see of the queue.
+ *
+ * A catalogue writer sees everybody's, because deciding them is their job. A
+ * member sees only their own — the queue is other people's finds, and there is
+ * nothing in someone else's pending link that is any of their business.
+ */
+export async function listProductRequests(
+  db: Sql,
+  userId: number,
+  status?: ProductRequestRow['status'],
+): Promise<ProductRequestRow[]> {
+  const mine = !(await canWriteCatalogue(db, userId));
+  const where: string[] = [];
+  const args: unknown[] = [];
+  if (mine) {
+    args.push(userId);
+    where.push(`r.user_id = $${args.length}`);
+  }
+  if (status) {
+    args.push(status);
+    where.push(`r.status = $${args.length}`);
+  }
+  const rows = await db.query(
+    `${REQUEST_SELECT} ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+      ORDER BY (r.status = 'pending') DESC, r.created_at DESC
+      LIMIT 200`,
+    args,
+  );
+  return rows.map(toRequest);
+}
+
+export async function getProductRequest(
+  db: Sql,
+  userId: number,
+  id: number,
+): Promise<ProductRequestRow | null> {
+  const writer = await canWriteCatalogue(db, userId);
+  const rows = await db.query(
+    `${REQUEST_SELECT} WHERE r.id = $1 ${writer ? '' : 'AND r.user_id = $2'}`,
+    writer ? [id] : [id, userId],
+  );
+  return rows[0] ? toRequest(rows[0]) : null;
+}
+
+/**
+ * Say yes or no to a request. Owner only, and the row is kept either way.
+ *
+ * A declined request is not deleted, so the same link cannot come back around
+ * as a fresh ask, and the person who sent it can see that it was looked at
+ * rather than assuming it fell down a hole.
+ */
+export async function decideProductRequest(
+  db: Sql,
+  userId: number,
+  id: number,
+  status: 'approved' | 'declined',
+  opts: { listingId?: number | null; note?: string } = {},
+): Promise<ProductRequestRow | null> {
+  if (!(await canWriteCatalogue(db, userId))) {
+    throw new Error('this account may not decide requests for the catalogue');
+  }
+  const rows = await db.query<{ id: number }>(
+    `UPDATE product_requests
+        SET status = $2, listing_id = $3, decided_note = $4, decided_at = now()
+      WHERE id = $1
+      RETURNING id`,
+    [id, status, opts.listingId ?? null, (opts.note ?? '').trim().slice(0, 500)],
+  );
+  if (!rows[0]) return null;
+  const full = await db.query(`${REQUEST_SELECT} WHERE r.id = $1`, [id]);
+  return toRequest(full[0]!);
+}
+
+/** How many links are waiting — the number that belongs on the owner's tab. */
+export async function pendingRequestCount(db: Sql, userId: number): Promise<number> {
+  if (!(await canWriteCatalogue(db, userId))) return 0;
+  const rows = await db.query<{ n: string }>(
+    `SELECT count(*)::text AS n FROM product_requests WHERE status = 'pending'`,
+  );
+  return Number(rows[0]?.n ?? 0);
 }

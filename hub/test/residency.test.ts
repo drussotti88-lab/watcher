@@ -178,6 +178,11 @@ test('EVERY QUERY THAT TOUCHES AN OWNED TABLE FILTERS ON THE OWNER', async () =>
   const statements = [
     ...code.matchAll(/`([^`]*?(?:SELECT|INSERT|UPDATE|DELETE)[^`]*?)`/gis),
     ...code.matchAll(/'((?:SELECT|INSERT|UPDATE|DELETE)[^']*?)'/gis),
+    // Double quotes too. The convention here is backticks and single quotes,
+    // so this found nothing when it was added — which is the point. A guard
+    // that only reads two of the three ways to write a string is a guard with
+    // a documented way past it.
+    ...code.matchAll(/"((?:SELECT|INSERT|UPDATE|DELETE)[^"]*?)"/gis),
   ].map((m) => m[1]!);
 
   assert.ok(statements.length > 30, `expected to have found the SQL, got ${statements.length}`);
@@ -193,8 +198,20 @@ test('EVERY QUERY THAT TOUCHES AN OWNED TABLE FILTERS ON THE OWNER', async () =>
   // It carries no money: the flag only ever moves a mission UP the queue, and
   // arming, ceilings and spend caps are untouched by it. Naming the statement
   // means a second cross-user write cannot hide behind this one.
+  //
+  // ── The inbox ────────────────────────────────────────────────────────────
+  //
+  // `product_requests` is a member's own list to read and the OWNER'S INBOX to
+  // work. Deciding a request and counting what is waiting are both the owner
+  // acting across everybody's rows on purpose, so neither can filter on the
+  // caller. Both are gated on `can_write_catalogue` in code — and the test
+  // below this one holds them to that, so the exemption cannot become a way in.
+  //
+  // Nothing in this table spends: a request is a URL and a sentence.
   const ALLOWED = [
     'UPDATE missions SET check_now_at = NULL WHERE listing_id = $1 AND check_now_at IS NOT NULL',
+    'UPDATE product_requests SET status = $2, listing_id = $3, decided_note = $4, decided_at = now() WHERE id = $1 RETURNING id',
+    "SELECT count(*)::text AS n FROM product_requests WHERE status = 'pending'",
   ];
 
   const unfiltered: string[] = [];
@@ -213,6 +230,55 @@ test('EVERY QUERY THAT TOUCHES AN OWNED TABLE FILTERS ON THE OWNER', async () =>
     'these statements touch a PRIVATE table without filtering on user_id:\n  ' +
       unfiltered.join('\n  '),
   );
+});
+
+test('THE ONE DELIBERATE CROSS-USER READ IS MARKED AS ONE', async () => {
+  // The fan-out is a hole in the wall this file guards, dug on purpose: the
+  // owner's Phantom reads the union of everybody's missions so one fetch of a
+  // page serves every member watching it.
+  //
+  // The statement-level guard above is satisfied by any mention of user_id,
+  // and this query mentions it in an ORDER BY — which is exactly the sort of
+  // accident that turns a safety property into a comment. So the hole gets
+  // named here: any SELECT over missions that is NOT scoped by
+  // `m.user_id = $1` in its WHERE must hand back `read_only`, and the mapper
+  // must blank `armed` on those rows. One hole, and it cannot widen quietly.
+  const src = await readFile(new URL('../src/store.ts', import.meta.url), 'utf8');
+
+  const selects = [...src.matchAll(/`(SELECT[^`]*?\bFROM missions\b[^`]*?)`/gis)].map(
+    (m) => m[1]!,
+  );
+  assert.ok(selects.length > 0, 'expected to find the mission SELECTs');
+
+  const unscoped = selects.filter((q) => !/\bm\.user_id\s*=\s*\$1/.test(q.split(/order\s+by/i)[0]!));
+  assert.equal(unscoped.length, 1, 'exactly one query may read other people\'s missions');
+  assert.match(unscoped[0]!, /AS read_only/, 'and it must say which rows are not ours');
+
+  assert.match(
+    src,
+    /read_only === true\) return \{ \.\.\.mission, readOnly: true, armed: false \}/,
+    'a borrowed mission comes back disarmed, in code, not by convention',
+  );
+});
+
+test('THE INBOX EXEMPTIONS ARE ROLE-GATED, NOT JUST EXEMPT', async () => {
+  // An entry in ALLOWED is a hole with a name on it. The reason those two
+  // product_requests statements are safe is not that they are listed — it is
+  // that the functions holding them refuse anyone without can_write_catalogue.
+  // If that gate is ever deleted, the exemption alone would let a member
+  // approve their own links straight into the shared catalogue.
+  const src = await readFile(new URL('../src/store.ts', import.meta.url), 'utf8');
+
+  for (const fn of ['decideProductRequest', 'pendingRequestCount']) {
+    const start = src.indexOf(`export async function ${fn}(`);
+    assert.ok(start > 0, `${fn} should exist`);
+    const body = src.slice(start, start + 900);
+    assert.match(body, /canWriteCatalogue\(db, userId\)/, `${fn} must check the role first`);
+    assert.ok(
+      body.indexOf('canWriteCatalogue') < body.indexOf('product_requests'),
+      `${fn} must check the role BEFORE it touches the table`,
+    );
+  }
 });
 
 test('the users table holds a label and a hash, and nothing else about a person', async () => {

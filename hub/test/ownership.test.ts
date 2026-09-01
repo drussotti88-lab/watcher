@@ -260,6 +260,95 @@ test('THE WATCHLIST IS THE CATALOGUE — read once, for everybody', async () => 
   );
 });
 
+/**
+ * A second listing that ONLY the member watches.
+ *
+ * This is the case the fan-out exists for: nobody with a browser is watching
+ * it, so unless the owner's agent picks it up, it is never read at all.
+ */
+async function theirsAlone(db: TestDb) {
+  const product = await store.upsertProduct(db, A, { name: 'Phantom Forces ETB', msrp: 39.99 });
+  const listing = await store.addListing(db, A, {
+    productKey: product.key, retailer: 'Walmart', externalId: '999',
+    url: 'https://www.walmart.com/ip/999',
+  });
+  const mission = await store.upsertMission(db, B, { listingId: listing.id, label: 'only theirs' });
+  return { listing, mission };
+}
+
+test('ONE READ SERVES EVERYONE — the owner pulls the union of every mission', async () => {
+  // The whole economics of the shared catalogue. Without this, ten members
+  // watching one Target page is ten fetches of one page, and the constraint on
+  // this system is the retailer's patience, not our CPU.
+  const { db, listing } = await twoUsers();
+  const other = await theirsAlone(db);
+
+  const mine = await store.activeMissions(db, A);
+  assert.deepEqual(
+    mine.map((m) => m.listingId).sort((x, y) => x - y),
+    [listing.id, other.listing.id].sort((x, y) => x - y),
+    'both shelves, even the one only they watch',
+  );
+  assert.equal(mine.length, 2, 'and the shared listing appears ONCE, not once per member');
+});
+
+test('A MEMBER PULLS ONLY THEIR OWN — no browser, no favours to do', async () => {
+  const { db, listing } = await twoUsers();
+  await theirsAlone(db);
+  const theirs = await store.activeMissions(db, B);
+  assert.equal(theirs.length, 2, 'their two missions');
+  assert.ok(theirs.every((m) => !m.readOnly), 'all their own — nothing borrowed');
+  assert.ok(theirs.some((m) => m.listingId === listing.id));
+});
+
+test('A BORROWED MISSION COMES BACK READ-ONLY AND DISARMED', async () => {
+  // Runs are private and recordRun would refuse one written against somebody
+  // else's mission. Marking the row is what stops the agent trying — and
+  // blanking `armed` is what stops it spending on a mandate that is not ours.
+  const { db } = await twoUsers();
+  const other = await theirsAlone(db);
+  // Straight to SQL on purpose: upsertMission refuses to arm a member at all
+  // (proved above). This forges the row that rule is meant to make impossible,
+  // so the second lock is tested rather than assumed.
+  await db.query('UPDATE missions SET armed = true, ceiling = 200 WHERE id = $1', [
+    other.mission.id,
+  ]);
+
+  const row = (await store.activeMissions(db, A)).find((m) => m.listingId === other.listing.id);
+  assert.ok(row, 'the owner still reads it');
+  assert.equal(row!.readOnly, true);
+  assert.equal(row!.armed, false, 'armed is blanked no matter what their row says');
+});
+
+test('MY OWN ROW WINS ON A LISTING WE BOTH WATCH — my mandate, not theirs', async () => {
+  // Take the wrong row and the agent either buys on somebody else's ceiling or
+  // sits on its hands while the drop it was armed for goes by.
+  const { db, listing, myMission, theirMission } = await twoUsers();
+  await store.upsertMission(db, A, {
+    listingId: listing.id, label: 'mine', armed: true, ceiling: 60,
+  });
+  await db.query('UPDATE missions SET armed = true, ceiling = 999 WHERE id = $1', [
+    theirMission.id,
+  ]);
+
+  const row = (await store.activeMissions(db, A)).find((m) => m.listingId === listing.id);
+  assert.equal(row!.id, myMission.id);
+  assert.ok(!row!.readOnly);
+  assert.equal(row!.ceiling, 60, "their ceiling never becomes mine");
+});
+
+test("a member's CHECK NOW is honoured on a listing the owner also watches", async () => {
+  // "Check now" belongs to the LISTING once the read is shared. The row the
+  // owner's agent gets back is their own — so without folding the flag in, a
+  // member's button would set a flag nobody ever looks at.
+  const { db, listing, theirMission } = await twoUsers();
+  assert.equal(await store.requestCheckNow(db, B, theirMission.id), true);
+
+  const row = (await store.activeMissions(db, A)).find((m) => m.listingId === listing.id);
+  assert.ok(!row!.readOnly, 'still my row, my mandate');
+  assert.equal(row!.checkNow, true, 'but their request is what gets the page fetched');
+});
+
 test('A PHANTOM TOKEN IDENTIFIES EXACTLY ONE USER, BY HASH', async () => {
   const { db } = await twoUsers();
   const hash = 'a'.repeat(64);

@@ -324,9 +324,14 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       const stockLoads = await store.stockLoadSightings(db, userId, 720);
       // Confirmed purchases waiting for their review-then-send to the vault.
       const acquisitions = await store.listAcquisitions(db, userId);
+      // Links people sent in. For the owner this is an inbox to work; for a
+      // member it is the receipt for what they sent, which is the half that
+      // stops a submission feeling like a hole in the ground.
+      const requests = await store.listProductRequests(db, userId);
+      const canCurate = await store.canWriteCatalogue(db, userId);
       return json({
         missions, runs, changes, products, listings, settings, discoveries, sweep, now, you,
-        authorisations, committed, queues, stockLoads, acquisitions,
+        authorisations, committed, queues, stockLoads, acquisitions, requests, canCurate,
       });
     }
 
@@ -448,6 +453,40 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       };
 
       const existing = await store.findListing(db, userId, parsed.retailer, parsed.externalId);
+
+      // ── A member sending in a link ─────────────────────────────────────────
+      //
+      // Same button, different outcome, said plainly. A member cannot write to
+      // the catalogue, but they are the ones out there finding things, and the
+      // worst answer to "here's a link" is a permissions error.
+      //
+      // If the listing already EXISTS they need no favour at all — the shelf is
+      // shared, so they just get a mission on it, same as the owner would.
+      // Only a link nobody has catalogued yet becomes a request.
+      if (!(await store.canWriteCatalogue(db, userId))) {
+        if (existing) {
+          const mission =
+            (await store.missionForListing(db, userId, existing.id)) ??
+            (await store.upsertMission(db, userId, {
+              listingId: existing.id,
+              label: existing.productName,
+            }));
+          return json({ product: null, listing: existing, mission, alreadyTracked: true });
+        }
+        const req = await store.requestProduct(db, userId, parsed.url || raw, [typedName, (b?.notes ?? '').trim()].filter(Boolean).join(' — '));
+        return json(
+          {
+            requested: true,
+            request: req,
+            message:
+              req.status === 'declined'
+                ? 'this link was sent in before and turned down'
+                : 'sent to the catalogue — you will see it on your watchlist once it is added',
+          },
+          202,
+        );
+      }
+
       if (existing) {
         // Only touch the product when a person actually typed something. The
         // slug-derived name is a guess, and letting a guess overwrite a name
@@ -487,6 +526,100 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
         label: product.name,
       });
       return json({ product, listing, mission, alreadyTracked: false }, 201);
+    }
+
+    // ── The request queue ────────────────────────────────────────────────────
+    //
+    // A member's route to the catalogue. GET is safe for everyone — a member
+    // sees their own links and what became of them, the owner sees the inbox.
+    // Deciding is the owner's, enforced in the store, not here.
+    if (request.method === 'GET' && path === '/api/requests') {
+      const status = url.searchParams.get('status') as
+        | 'pending'
+        | 'approved'
+        | 'declined'
+        | null;
+      const requests = await store.listProductRequests(db, userId, status ?? undefined);
+      return json({ requests });
+    }
+
+    if (request.method === 'POST' && path === '/api/requests') {
+      const b = await body<{ url?: string; note?: string }>();
+      const raw = (b?.url ?? '').trim();
+      if (!raw) return json({ error: 'need a URL' }, 400);
+      const req = await store.requestProduct(db, userId, raw, b?.note ?? '');
+      return json({ request: req }, 201);
+    }
+
+    // Approving is quick-add with a name on it: the same parse, the same
+    // upsert, and then the request is stamped with the listing it became so
+    // the person who sent it can see it land on their watchlist.
+    if (request.method === 'POST' && path.startsWith('/api/requests/') && path.endsWith('/approve')) {
+      const id = Number(path.slice('/api/requests/'.length, -'/approve'.length));
+      if (!Number.isInteger(id)) return json({ error: 'bad request id' }, 400);
+      // Checked here as well as in the store. Approving writes a product and a
+      // listing before it stamps the request, and those would throw first —
+      // giving a member a 500 for something that is simply not theirs to do.
+      if (!(await store.canWriteCatalogue(db, userId))) {
+        return json({ error: 'this account may not decide requests for the catalogue' }, 403);
+      }
+      const req = await store.getProductRequest(db, userId, id);
+      if (!req) return json({ error: 'no such request' }, 404);
+
+      const b = await body<{ name?: string; msrp?: number | null; note?: string }>();
+      const parsed = identifyListing(req.url);
+      if (!parsed) return json({ error: 'that URL is not a product page we can read' }, 400);
+
+      const typedName = (b?.name ?? '').trim();
+      let listing = await store.findListing(db, userId, parsed.retailer, parsed.externalId);
+      if (!listing) {
+        const product = await store.upsertProduct(db, userId, {
+          name: typedName || parsed.name || `${parsed.retailer} ${parsed.externalId}`,
+          nameIsGuess: !typedName,
+          msrp: b?.msrp ?? null,
+        });
+        listing = await store.addListing(db, userId, {
+          productKey: product.key,
+          retailer: parsed.retailer,
+          externalId: parsed.externalId,
+          url: parsed.url || req.url,
+        });
+      }
+
+      // The mission belongs to the person who ASKED, not to whoever approved
+      // it. Otherwise the owner's watchlist fills up with other people's finds
+      // and the member who sent the link still cannot see it.
+      await store.upsertMission(db, req.userId, {
+        listingId: listing.id,
+        label: listing.productName,
+      });
+
+      let decided;
+      try {
+        decided = await store.decideProductRequest(db, userId, id, 'approved', {
+          listingId: listing.id,
+          note: b?.note ?? '',
+        });
+      } catch (err) {
+        return json({ error: (err as Error).message }, 403);
+      }
+      return json({ request: decided, listing });
+    }
+
+    if (request.method === 'POST' && path.startsWith('/api/requests/') && path.endsWith('/decline')) {
+      const id = Number(path.slice('/api/requests/'.length, -'/decline'.length));
+      if (!Number.isInteger(id)) return json({ error: 'bad request id' }, 400);
+      const b = await body<{ note?: string }>();
+      let decided;
+      try {
+        decided = await store.decideProductRequest(db, userId, id, 'declined', {
+          note: b?.note ?? '',
+        });
+      } catch (err) {
+        return json({ error: (err as Error).message }, 403);
+      }
+      if (!decided) return json({ error: 'no such request' }, 404);
+      return json({ request: decided });
     }
 
     if (request.method === 'DELETE' && path.startsWith('/api/listings/')) {

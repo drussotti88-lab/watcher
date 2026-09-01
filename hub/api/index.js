@@ -937,8 +937,42 @@ async function requestCheckNow(db2, userId, id) {
   return rows.length > 0;
 }
 async function activeMissions(db2, userId) {
-  const rows = await db2.query(`${MISSION_SELECT} AND m.enabled = true ORDER BY m.id`, [userId]);
-  return rows.map(toMission);
+  if (!await canWriteCatalogue(db2, userId)) {
+    const rows2 = await db2.query(`${MISSION_SELECT} AND m.enabled = true ORDER BY m.id`, [userId]);
+    return rows2.map(toMission);
+  }
+  const rows = await db2.query(
+    `SELECT DISTINCT ON (l.id) m.*, l.product_key, l.retailer, l.external_id, l.url,
+            p.name AS product_name, p.image_url, p.msrp,
+            COALESCE(w.state, 'unchecked') AS state,
+            COALESCE(w.confidence, 'unknown') AS confidence,
+            w.price,
+            COALESCE(w.seller_kind, l.seller_kind) AS ws_seller_kind,
+            COALESCE(NULLIF(w.seller_name, ''), l.seller_name) AS ws_seller_name,
+            w.available_quantity, w.order_limit,
+            COALESCE(w.is_preorder, false) AS is_preorder,
+            COALESCE(w.release_date, p.release_date) AS release_date,
+            COALESCE(w.note, '') AS note,
+            w.last_checked_at, w.last_changed_at,
+            (m.user_id <> $1) AS read_only,
+            -- Anyone watching this listing may press "check now"; the row we
+            -- return is whoever's mandate wins, which may not be theirs.
+            (SELECT max(m2.check_now_at) FROM missions m2
+              WHERE m2.listing_id = l.id AND m2.enabled = true) AS any_check_now
+       FROM missions m
+       JOIN listings l ON l.id = m.listing_id
+       JOIN products p ON p.key = l.product_key
+       LEFT JOIN watch_state w ON w.listing_id = l.id
+      WHERE m.enabled = true
+      -- Mine first, so a listing we both watch comes back on MY mandate.
+      ORDER BY l.id, (m.user_id = $1) DESC, m.id`,
+    [userId]
+  );
+  return rows.map((r) => {
+    const mission = { ...toMission(r), checkNow: r.any_check_now != null };
+    if (r.read_only === true) return { ...mission, readOnly: true, armed: false };
+    return mission;
+  });
 }
 function validateMission(m) {
   if (!Number.isFinite(m.listingId) || m.listingId <= 0) return "a mission needs a listing";
@@ -1733,6 +1767,87 @@ async function sweepState(db2, userId, sourceId, everyHours) {
     lastSweptAt: source.lastSweptAt,
     lastStatus: source.lastStatus ?? ""
   };
+}
+function toRequest(r) {
+  return {
+    id: Number(r.id),
+    userId: Number(r.user_id),
+    handle: String(r.handle ?? ""),
+    url: String(r.url),
+    note: String(r.note ?? ""),
+    status: String(r.status),
+    listingId: r.listing_id === null || r.listing_id === void 0 ? null : Number(r.listing_id),
+    decidedAt: r.decided_at ? String(r.decided_at) : null,
+    decidedNote: String(r.decided_note ?? ""),
+    createdAt: String(r.created_at)
+  };
+}
+var REQUEST_SELECT = `SELECT r.*, u.handle FROM product_requests r
+   JOIN users u ON u.id = r.user_id`;
+async function requestProduct(db2, userId, url, note = "") {
+  const clean = url.trim();
+  if (!clean) throw new Error("a request needs a URL");
+  if (clean.length > 2e3) throw new Error("that URL is too long to be a product link");
+  const rows = await db2.query(
+    `INSERT INTO product_requests (user_id, url, note)
+          VALUES ($1, $2, $3)
+     ON CONFLICT (user_id, url) DO UPDATE
+            SET note = EXCLUDED.note
+          WHERE product_requests.status = 'pending'
+      RETURNING id`,
+    [userId, clean, note.trim().slice(0, 500)]
+  );
+  const id = rows[0] ? Number(rows[0].id) : Number(
+    (await db2.query(
+      "SELECT id FROM product_requests WHERE user_id = $1 AND url = $2",
+      [userId, clean]
+    ))[0].id
+  );
+  const full = await db2.query(`${REQUEST_SELECT} WHERE r.id = $1`, [id]);
+  return toRequest(full[0]);
+}
+async function listProductRequests(db2, userId, status) {
+  const mine = !await canWriteCatalogue(db2, userId);
+  const where = [];
+  const args = [];
+  if (mine) {
+    args.push(userId);
+    where.push(`r.user_id = $${args.length}`);
+  }
+  if (status) {
+    args.push(status);
+    where.push(`r.status = $${args.length}`);
+  }
+  const rows = await db2.query(
+    `${REQUEST_SELECT} ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
+      ORDER BY (r.status = 'pending') DESC, r.created_at DESC
+      LIMIT 200`,
+    args
+  );
+  return rows.map(toRequest);
+}
+async function getProductRequest(db2, userId, id) {
+  const writer = await canWriteCatalogue(db2, userId);
+  const rows = await db2.query(
+    `${REQUEST_SELECT} WHERE r.id = $1 ${writer ? "" : "AND r.user_id = $2"}`,
+    writer ? [id] : [id, userId]
+  );
+  return rows[0] ? toRequest(rows[0]) : null;
+}
+async function decideProductRequest(db2, userId, id, status, opts = {}) {
+  if (!await canWriteCatalogue(db2, userId)) {
+    throw new Error("this account may not decide requests for the catalogue");
+  }
+  const rows = await db2.query(
+    `UPDATE product_requests
+        SET status = $2, listing_id = $3, decided_note = $4, decided_at = now()
+      WHERE id = $1
+      RETURNING id`,
+    [id, status, opts.listingId ?? null, (opts.note ?? "").trim().slice(0, 500)]
+  );
+  if (!rows[0]) return null;
+  const full = await db2.query(`${REQUEST_SELECT} WHERE r.id = $1`, [id]);
+  return toRequest(full[0]);
 }
 
 // src/discover.ts
@@ -2863,6 +2978,7 @@ ${FONTS}<style>${STYLE}</style></head>
       so the next sweep will not re-suggest it.
     </p>
     <div class="card radar" id="release-radar" hidden></div>
+    <div class="card" id="requests-card" hidden></div>
   <div class="listtools"><div class="vt" data-list="finds"><button type="button" data-view="list" title="List view">\u2630</button><button type="button" data-view="grid" title="Grid view">\u25A6</button></div></div>
     <div class="filters" id="finds-filters">
       <div class="chips seg" id="find-shops"></div>
@@ -4396,6 +4512,7 @@ function render() {
   renderShops(st);
 
   renderRadar();
+  renderRequests();
   renderFinds();
   renderDetail();
   applyViews();
@@ -4934,6 +5051,97 @@ function renderRadar() {
   }
 }
 
+/**
+ * Links people sent in.
+ *
+ * Two audiences, one card, because they are two views of the same fact. The
+ * OWNER sees an inbox with buttons: a link somebody found, and yes or no. A
+ * MEMBER sees a receipt \u2014 what they sent, and what became of it \u2014 which is the
+ * half that stops "send us a link" feeling like a hole in the ground.
+ *
+ * A declined row keeps its reason. "No" with a sentence attached is a person
+ * answering; "no" on its own is the thing that makes people stop sending.
+ */
+function renderRequests() {
+  const card = document.getElementById('requests-card');
+  if (!card) return;
+  const all = DATA.requests || [];
+  const mine = DATA.canCurate === true;
+  card.textContent = '';
+
+  // Nothing sent and nothing to work: no empty box on the owner's screen.
+  if (all.length === 0) { card.hidden = true; return; }
+  card.hidden = false;
+
+  const pending = all.filter((r) => r.status === 'pending');
+  card.appendChild(el('div', 'name', mine
+    ? (pending.length ? 'Links people sent in \u2014 ' + pending.length + ' waiting' : 'Links people sent in')
+    : 'Links you sent in'));
+  card.appendChild(el('div', 'sub', mine
+    ? 'Approve puts it in the shared catalogue and starts the mission on the watchlist of whoever asked.'
+    : 'A link goes to the catalogue owner. Once it is added you will see it on your watchlist.'));
+
+  for (const r of all) {
+    const row = el('div', 'find');
+    const head = el('div', 'name');
+    head.appendChild(document.createTextNode(prettyUrl(r.url)));
+    const pill = el('span', 'pill ' + (r.status === 'approved' ? 'in' : r.status === 'declined' ? 'out' : ''),
+      r.status === 'pending' ? 'WAITING' : r.status.toUpperCase());
+    pill.style.marginLeft = '8px';
+    head.appendChild(pill);
+    row.appendChild(head);
+
+    const bits = [];
+    if (mine && r.handle) bits.push('from ' + r.handle);
+    if (r.note) bits.push('\u201C' + r.note + '\u201D');
+    if (r.decidedNote) bits.push('answer: ' + r.decidedNote);
+    if (bits.length) row.appendChild(el('div', 'meta', bits.join(' \xB7 ')));
+
+    if (mine && r.status === 'pending') {
+      const actions = el('div', 'actions');
+      const nameIn = el('input');
+      nameIn.placeholder = 'Product name (optional \u2014 the slug is a guess)';
+      nameIn.style.flex = '1';
+      actions.appendChild(nameIn);
+
+      const yes = el('button', 'go', 'Approve');
+      yes.type = 'button';
+      const msg = el('div', 'msg');
+      yes.addEventListener('click', () => withButton(yes, 'Adding\u2026', msg, async () => {
+        await api('POST', '/api/requests/' + r.id + '/approve', { name: nameIn.value.trim() });
+        await load();
+        return 'added to the catalogue';
+      }));
+
+      const no = el('button', '', 'Decline');
+      no.type = 'button';
+      no.addEventListener('click', () => withButton(no, 'Saving\u2026', msg, async () => {
+        // The reason is optional but asked for every time, because a decline
+        // with no reason is what makes people stop sending links.
+        const why = prompt('Why not? (the person who sent it will see this)') || '';
+        await api('POST', '/api/requests/' + r.id + '/decline', { note: why.trim() });
+        await load();
+        return 'declined';
+      }));
+
+      actions.appendChild(yes);
+      actions.appendChild(no);
+      row.appendChild(actions);
+      row.appendChild(msg);
+    }
+    card.appendChild(row);
+  }
+}
+
+/** A link, shortened to the part a person recognises. */
+function prettyUrl(u) {
+  try {
+    const p = new URL(u);
+    const tail = p.pathname.split('/').filter(Boolean).slice(0, 2).join('/');
+    return p.hostname.replace(/^www./, '') + '/' + tail;
+  } catch { return u; }
+}
+
 function renderFinds() {
   const list = document.getElementById('finds-list');
   list.textContent = '';
@@ -5253,6 +5461,7 @@ document.getElementById('product-form').addEventListener('submit', async (e) => 
       const r = await api('POST', '/api/quick-add', { ...details, url });
       form.reset();
       closeAdd();
+      if (r.requested) { load(); return r.message; }
       // Open the new product's pop-up once fresh data is in, so the next
       // step is in front of you. The key is read HERE, inside the button's
       // own error handling \u2014 a surprise response shape must fail the button,
@@ -5552,6 +5761,10 @@ document.getElementById('quick-form').addEventListener('submit', async (e) => {
     form.reset();
     history.replaceState(null, '', '/');
     load();
+    // An account that cannot write the catalogue gets a REQUEST back instead
+    // of a product. Say what actually happened rather than reading a name off
+    // an object that was never sent.
+    if (r.requested) return r.message;
     return r.alreadyTracked
       ? 'already watching that one \u2014 nothing changed'
       : 'watching \u201C' + r.product.name + '\u201D \u2014 set a ceiling before arming it';
@@ -5956,6 +6169,8 @@ function createHandler(db2, env2) {
       const queues = await queueSightings(db2, userId, 30);
       const stockLoads = await stockLoadSightings(db2, userId, 720);
       const acquisitions = await listAcquisitions(db2, userId);
+      const requests = await listProductRequests(db2, userId);
+      const canCurate = await canWriteCatalogue(db2, userId);
       return json({
         missions,
         runs,
@@ -5971,7 +6186,9 @@ function createHandler(db2, env2) {
         committed,
         queues,
         stockLoads,
-        acquisitions
+        acquisitions,
+        requests,
+        canCurate
       });
     }
     if (request.method === "GET" && path.startsWith("/api/missions/") && path.endsWith("/runs")) {
@@ -6038,6 +6255,24 @@ function createHandler(db2, env2) {
         imageUrl: b?.imageUrl ?? ""
       };
       const existing = await findListing(db2, userId, parsed.retailer, parsed.externalId);
+      if (!await canWriteCatalogue(db2, userId)) {
+        if (existing) {
+          const mission2 = await missionForListing(db2, userId, existing.id) ?? await upsertMission(db2, userId, {
+            listingId: existing.id,
+            label: existing.productName
+          });
+          return json({ product: null, listing: existing, mission: mission2, alreadyTracked: true });
+        }
+        const req = await requestProduct(db2, userId, parsed.url || raw, [typedName, (b?.notes ?? "").trim()].filter(Boolean).join(" \u2014 "));
+        return json(
+          {
+            requested: true,
+            request: req,
+            message: req.status === "declined" ? "this link was sent in before and turned down" : "sent to the catalogue \u2014 you will see it on your watchlist once it is added"
+          },
+          202
+        );
+      }
       if (existing) {
         let product2 = null;
         if (typedName || details.msrp !== null || details.releaseDate || details.notes) {
@@ -6068,6 +6303,74 @@ function createHandler(db2, env2) {
         label: product.name
       });
       return json({ product, listing, mission, alreadyTracked: false }, 201);
+    }
+    if (request.method === "GET" && path === "/api/requests") {
+      const status = url.searchParams.get("status");
+      const requests = await listProductRequests(db2, userId, status ?? void 0);
+      return json({ requests });
+    }
+    if (request.method === "POST" && path === "/api/requests") {
+      const b = await body();
+      const raw = (b?.url ?? "").trim();
+      if (!raw) return json({ error: "need a URL" }, 400);
+      const req = await requestProduct(db2, userId, raw, b?.note ?? "");
+      return json({ request: req }, 201);
+    }
+    if (request.method === "POST" && path.startsWith("/api/requests/") && path.endsWith("/approve")) {
+      const id = Number(path.slice("/api/requests/".length, -"/approve".length));
+      if (!Number.isInteger(id)) return json({ error: "bad request id" }, 400);
+      if (!await canWriteCatalogue(db2, userId)) {
+        return json({ error: "this account may not decide requests for the catalogue" }, 403);
+      }
+      const req = await getProductRequest(db2, userId, id);
+      if (!req) return json({ error: "no such request" }, 404);
+      const b = await body();
+      const parsed = identifyListing(req.url);
+      if (!parsed) return json({ error: "that URL is not a product page we can read" }, 400);
+      const typedName = (b?.name ?? "").trim();
+      let listing = await findListing(db2, userId, parsed.retailer, parsed.externalId);
+      if (!listing) {
+        const product = await upsertProduct(db2, userId, {
+          name: typedName || parsed.name || `${parsed.retailer} ${parsed.externalId}`,
+          nameIsGuess: !typedName,
+          msrp: b?.msrp ?? null
+        });
+        listing = await addListing(db2, userId, {
+          productKey: product.key,
+          retailer: parsed.retailer,
+          externalId: parsed.externalId,
+          url: parsed.url || req.url
+        });
+      }
+      await upsertMission(db2, req.userId, {
+        listingId: listing.id,
+        label: listing.productName
+      });
+      let decided;
+      try {
+        decided = await decideProductRequest(db2, userId, id, "approved", {
+          listingId: listing.id,
+          note: b?.note ?? ""
+        });
+      } catch (err) {
+        return json({ error: err.message }, 403);
+      }
+      return json({ request: decided, listing });
+    }
+    if (request.method === "POST" && path.startsWith("/api/requests/") && path.endsWith("/decline")) {
+      const id = Number(path.slice("/api/requests/".length, -"/decline".length));
+      if (!Number.isInteger(id)) return json({ error: "bad request id" }, 400);
+      const b = await body();
+      let decided;
+      try {
+        decided = await decideProductRequest(db2, userId, id, "declined", {
+          note: b?.note ?? ""
+        });
+      } catch (err) {
+        return json({ error: err.message }, 403);
+      }
+      if (!decided) return json({ error: "no such request" }, 404);
+      return json({ request: decided });
     }
     if (request.method === "DELETE" && path.startsWith("/api/listings/")) {
       const id = Number(path.slice("/api/listings/".length));

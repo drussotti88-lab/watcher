@@ -671,6 +671,7 @@ ${FONTS}<style>${STYLE}</style></head>
       so the next sweep will not re-suggest it.
     </p>
     <div class="card radar" id="release-radar" hidden></div>
+    <div class="card" id="requests-card" hidden></div>
   <div class="listtools"><div class="vt" data-list="finds"><button type="button" data-view="list" title="List view">☰</button><button type="button" data-view="grid" title="Grid view">▦</button></div></div>
     <div class="filters" id="finds-filters">
       <div class="chips seg" id="find-shops"></div>
@@ -2204,6 +2205,7 @@ function render() {
   renderShops(st);
 
   renderRadar();
+  renderRequests();
   renderFinds();
   renderDetail();
   applyViews();
@@ -2742,6 +2744,97 @@ function renderRadar() {
   }
 }
 
+/**
+ * Links people sent in.
+ *
+ * Two audiences, one card, because they are two views of the same fact. The
+ * OWNER sees an inbox with buttons: a link somebody found, and yes or no. A
+ * MEMBER sees a receipt — what they sent, and what became of it — which is the
+ * half that stops "send us a link" feeling like a hole in the ground.
+ *
+ * A declined row keeps its reason. "No" with a sentence attached is a person
+ * answering; "no" on its own is the thing that makes people stop sending.
+ */
+function renderRequests() {
+  const card = document.getElementById('requests-card');
+  if (!card) return;
+  const all = DATA.requests || [];
+  const mine = DATA.canCurate === true;
+  card.textContent = '';
+
+  // Nothing sent and nothing to work: no empty box on the owner's screen.
+  if (all.length === 0) { card.hidden = true; return; }
+  card.hidden = false;
+
+  const pending = all.filter((r) => r.status === 'pending');
+  card.appendChild(el('div', 'name', mine
+    ? (pending.length ? 'Links people sent in — ' + pending.length + ' waiting' : 'Links people sent in')
+    : 'Links you sent in'));
+  card.appendChild(el('div', 'sub', mine
+    ? 'Approve puts it in the shared catalogue and starts the mission on the watchlist of whoever asked.'
+    : 'A link goes to the catalogue owner. Once it is added you will see it on your watchlist.'));
+
+  for (const r of all) {
+    const row = el('div', 'find');
+    const head = el('div', 'name');
+    head.appendChild(document.createTextNode(prettyUrl(r.url)));
+    const pill = el('span', 'pill ' + (r.status === 'approved' ? 'in' : r.status === 'declined' ? 'out' : ''),
+      r.status === 'pending' ? 'WAITING' : r.status.toUpperCase());
+    pill.style.marginLeft = '8px';
+    head.appendChild(pill);
+    row.appendChild(head);
+
+    const bits = [];
+    if (mine && r.handle) bits.push('from ' + r.handle);
+    if (r.note) bits.push('“' + r.note + '”');
+    if (r.decidedNote) bits.push('answer: ' + r.decidedNote);
+    if (bits.length) row.appendChild(el('div', 'meta', bits.join(' · ')));
+
+    if (mine && r.status === 'pending') {
+      const actions = el('div', 'actions');
+      const nameIn = el('input');
+      nameIn.placeholder = 'Product name (optional — the slug is a guess)';
+      nameIn.style.flex = '1';
+      actions.appendChild(nameIn);
+
+      const yes = el('button', 'go', 'Approve');
+      yes.type = 'button';
+      const msg = el('div', 'msg');
+      yes.addEventListener('click', () => withButton(yes, 'Adding…', msg, async () => {
+        await api('POST', '/api/requests/' + r.id + '/approve', { name: nameIn.value.trim() });
+        await load();
+        return 'added to the catalogue';
+      }));
+
+      const no = el('button', '', 'Decline');
+      no.type = 'button';
+      no.addEventListener('click', () => withButton(no, 'Saving…', msg, async () => {
+        // The reason is optional but asked for every time, because a decline
+        // with no reason is what makes people stop sending links.
+        const why = prompt('Why not? (the person who sent it will see this)') || '';
+        await api('POST', '/api/requests/' + r.id + '/decline', { note: why.trim() });
+        await load();
+        return 'declined';
+      }));
+
+      actions.appendChild(yes);
+      actions.appendChild(no);
+      row.appendChild(actions);
+      row.appendChild(msg);
+    }
+    card.appendChild(row);
+  }
+}
+
+/** A link, shortened to the part a person recognises. */
+function prettyUrl(u) {
+  try {
+    const p = new URL(u);
+    const tail = p.pathname.split('/').filter(Boolean).slice(0, 2).join('/');
+    return p.hostname.replace(/^www\./, '') + '/' + tail;
+  } catch { return u; }
+}
+
 function renderFinds() {
   const list = document.getElementById('finds-list');
   list.textContent = '';
@@ -3061,6 +3154,7 @@ document.getElementById('product-form').addEventListener('submit', async (e) => 
       const r = await api('POST', '/api/quick-add', { ...details, url });
       form.reset();
       closeAdd();
+      if (r.requested) { load(); return r.message; }
       // Open the new product's pop-up once fresh data is in, so the next
       // step is in front of you. The key is read HERE, inside the button's
       // own error handling — a surprise response shape must fail the button,
@@ -3360,6 +3454,10 @@ document.getElementById('quick-form').addEventListener('submit', async (e) => {
     form.reset();
     history.replaceState(null, '', '/');
     load();
+    // An account that cannot write the catalogue gets a REQUEST back instead
+    // of a product. Say what actually happened rather than reading a name off
+    // an object that was never sent.
+    if (r.requested) return r.message;
     return r.alreadyTracked
       ? 'already watching that one — nothing changed'
       : 'watching “' + r.product.name + '” — set a ceiling before arming it';

@@ -268,6 +268,43 @@ test('a pre-order release date is carried through to the Hub', () => {
   assert.equal(v.observation.releaseDate, '2026-09-26');
 });
 
+test('a read-only mission is read for its owner and nothing else', () => {
+  // One read serves everyone: this Phantom pulls the union of every enabled
+  // mission so a page is fetched once no matter how many members watch it.
+  // The reading is a fact about the world and is shared. The run row is not —
+  // it is the owner's history, and the Hub would refuse it anyway.
+  const v = judge(
+    mission({ readOnly: true, armed: false }),
+    reading({ state: 'in', price: 49.99 }),
+  );
+  assert.equal(v.observation.state, 'in', 'the reading still goes to the Hub');
+  assert.equal(v.observation.price, 49.99);
+  assert.equal(v.run, null, 'but no run is written against a mission we do not own');
+  assert.ok(!v.buy, 'and nothing is ever bought on somebody else\'s mandate');
+});
+
+test('a read-only mission never buys even if its row claims to be armed', () => {
+  // The store already blanks `armed` on a borrowed row. This is the second
+  // lock: a bad row, a stale cache or a hand-written mission cannot turn
+  // somebody else's watch into a purchase on this card.
+  const v = judge(
+    mission({ readOnly: true, armed: true, ceiling: 500 }),
+    reading({ state: 'in', price: 49.99 }),
+  );
+  assert.ok(!v.buy);
+  assert.equal(v.run, null);
+});
+
+test('a read-only mission stays silent about a challenge too', () => {
+  // A challenge is about us, not the product, and "blocked" belongs in the
+  // history of the account that got blocked.
+  const v = judge(
+    mission({ readOnly: true }),
+    reading({ challenged: true, challengeReason: 'press and hold', state: 'unknown' }),
+  );
+  assert.equal(v.run, null);
+});
+
 // ── pass ─────────────────────────────────────────────────────────────────────
 
 interface Recorder {
@@ -733,4 +770,25 @@ test('a quantity that was already big fires nothing — one alarm per load-in', 
   });
 
   assert.equal(lines.some((l) => l.message.startsWith('STOCK LOADED:')), false);
+});
+
+test('a pass reports a read-only mission but records no run for it', async () => {
+  // End to end: the observation reaches the Hub — that is the favour — and
+  // recordRun is never called, so `runs` stays empty and the member's history
+  // is written only by their own account.
+  const { hub, observations, runs } = recorder();
+  const pacer = new Pacer(STEADY, () => 0);
+
+  const result = await pass([mission({ readOnly: true })], pacer, {
+    browser,
+    hub,
+    now: () => T0,
+    read: reads(() => reading({ state: 'in', price: 49.99 })),
+  });
+
+  assert.equal(result.checked, 1);
+  assert.equal(observations.length, 1, 'the reading is shared');
+  assert.equal(observations[0]!.listingId, 11);
+  assert.equal(runs.length, 0, 'the run is not');
+  assert.equal(result.runs, 0);
 });
