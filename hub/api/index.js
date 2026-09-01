@@ -1857,6 +1857,18 @@ async function agentLastSeen(db2, userId) {
   const at = rows[0]?.at;
   return at ? String(at) : null;
 }
+async function urgentListings(db2, userId) {
+  const writer = await canWriteCatalogue(db2, userId);
+  const rows = writer ? await db2.query(
+    `SELECT DISTINCT listing_id FROM missions
+          WHERE enabled = true AND check_now_at IS NOT NULL`
+  ) : await db2.query(
+    `SELECT DISTINCT listing_id FROM missions
+          WHERE user_id = $1 AND enabled = true AND check_now_at IS NOT NULL`,
+    [userId]
+  );
+  return rows.map((r) => Number(r.listing_id));
+}
 
 // src/discover.ts
 var DEFAULT_CHILD_LIMIT = 3;
@@ -7347,6 +7359,9 @@ function createHandler(db2, env2) {
           "Content-Disposition": `attachment; filename="phantom-activity-${now.slice(0, 10)}.json"`
         }
       });
+    }
+    if (request.method === "GET" && path === "/api/check-now") {
+      return json({ listingIds: await urgentListings(db2, userId) });
     }
     if (request.method === "GET" && path === "/api/missions/active") {
       const [missions, settings] = await Promise.all([

@@ -3005,3 +3005,42 @@ export async function agentLastSeen(db: Sql, userId: number): Promise<string | n
   const at = rows[0]?.at;
   return at ? String(at) : null;
 }
+
+/**
+ * Which listings somebody has asked to be checked RIGHT NOW.
+ *
+ * ── Why this is its own query ───────────────────────────────────────────────
+ *
+ * "Check now" could only ever be as fast as Phantom's next poll of the Hub,
+ * because the Hub cannot call a machine sitting behind somebody's router — the
+ * traffic only goes one way. That poll was the full watchlist: every mission
+ * joined to its listing, product and watch_state, once a cycle. Fine every
+ * ninety seconds, absurd every three.
+ *
+ * So this is the fast lane: one indexed column, no joins, a few integers back.
+ * Cheap enough to ask constantly, which is the only thing that turns "queued"
+ * into "now".
+ *
+ * Listing ids rather than mission ids, deliberately. The catalogue is shared,
+ * so a member pressing the button and the owner's agent doing the reading are
+ * talking about the same shelf under different mission numbers — and one read
+ * answers both.
+ */
+export async function urgentListings(db: Sql, userId: number): Promise<number[]> {
+  const writer = await canWriteCatalogue(db, userId);
+  // A catalogue writer reads for everybody, so it honours everybody's button.
+  // Anyone else sees only their own — asking for a check on a listing you do
+  // not watch is not a thing the app offers, and it is not a thing this should
+  // start allowing by accident.
+  const rows = writer
+    ? await db.query<{ listing_id: number }>(
+        `SELECT DISTINCT listing_id FROM missions
+          WHERE enabled = true AND check_now_at IS NOT NULL`,
+      )
+    : await db.query<{ listing_id: number }>(
+        `SELECT DISTINCT listing_id FROM missions
+          WHERE user_id = $1 AND enabled = true AND check_now_at IS NOT NULL`,
+        [userId],
+      );
+  return rows.map((r) => Number(r.listing_id));
+}

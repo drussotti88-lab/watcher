@@ -266,6 +266,44 @@ function money(n: number | null): string {
   return n === null ? 'an unknown price' : `$${n.toFixed(2)}`;
 }
 
+/**
+ * The longest one check may take before we call it stuck.
+ *
+ * The read's own slow path tops out around nineteen seconds, so this is not a
+ * performance limit — it is the line past which a check is not slow, it is
+ * hung, and the pass has to move on without it.
+ */
+const CHECK_CEILING_MS = 45_000;
+
+/**
+ * Reject if a promise has not settled in time.
+ *
+ * The underlying work is NOT cancelled — nothing here can force Playwright to
+ * abandon a stalled socket. What this does is stop that work from holding the
+ * watcher hostage: the pass records a failed check, says so, and carries on.
+ * An orphaned promise resolving into nothing later is a leak we can live with;
+ * a watcher that quietly stops watching is not.
+ *
+ * The timer is deliberately NOT unref'd. It was, briefly, and that let the
+ * event loop drain early enough that `--test-force-exit` cut the suite short —
+ * 38 tests reported out of 57, all passing, nothing red. A test run that
+ * silently stops early is the same species of lie as a watcher that silently
+ * stops watching. Every timer here is cleared the moment its promise settles,
+ * so holding a reference costs nothing real.
+ */
+function withDeadline<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`the check did not finish within ${Math.round(ms / 1000)}s — abandoned`)),
+      ms,
+    );
+    p.then(
+      (v) => { clearTimeout(timer); resolve(v); },
+      (e) => { clearTimeout(timer); reject(e); },
+    );
+  });
+}
+
 /** A reading that commits to nothing, for when the check itself threw. */
 function failedRead(note: string): Reading {
   return {
@@ -329,6 +367,8 @@ export interface WatchDeps {
   windowMs?: number;
   /** Injectable so draining can be tested without real time passing. */
   wait?: (ms: number) => Promise<void>;
+  /** The per-check ceiling. Injectable so a hang can be tested in milliseconds. */
+  checkCeilingMs?: number;
 }
 
 export interface PassResult {
@@ -427,7 +467,25 @@ export async function pass(missions: Mission[], pacer: Pacer, deps: WatchDeps): 
     // still worth checking, and the failure is worth a row saying so.
     let reading: Reading;
     try {
-      reading = await read(deps.browser, mission.retailer, mission.externalId, mission.url);
+      // ── The belt ──────────────────────────────────────────────────────────
+      //
+      // A hard ceiling on one check, because on 1 Sep 2026 a read hung
+      // forever and took the whole watcher with it. The process stayed alive
+      // and stopped doing anything, which is worse than crashing: the
+      // supervisor restarts a crash and cannot see a hang.
+      //
+      // The specific cause was a captured response body with no timeout, and
+      // that is fixed at its source. This is here because the lesson is not
+      // "that one await" — it is that any await against a browser can be the
+      // one that never comes back, and a watcher must not be able to stop
+      // watching quietly.
+      //
+      // Generous: the slow path inside a read is already bounded at about
+      // nineteen seconds, so anything reaching this is not slow, it is stuck.
+      reading = await withDeadline(
+        read(deps.browser, mission.retailer, mission.externalId, mission.url),
+        deps.checkCeilingMs ?? CHECK_CEILING_MS,
+      );
     } catch (err) {
       reading = failedRead(`the check could not be completed: ${(err as Error).message}`);
       result.failed += 1;

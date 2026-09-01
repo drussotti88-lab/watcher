@@ -55,6 +55,45 @@ const FAST_TIMEOUT_MS = 9_000;
  */
 const SLOW_TIMEOUT_MS = 10_000;
 
+/**
+ * A promise that cannot wait forever.
+ *
+ * ── The hang this exists for ────────────────────────────────────────────────
+ *
+ * On the evening of 1 Sep 2026 Phantom stopped reporting three times and
+ * looked, each time, like a crash: the log ended mid-pass, no stack, no exit
+ * line. It was not a crash. The process was ALIVE and stuck — which is the
+ * worse failure, because a crash gets restarted by the supervisor and a hang
+ * does not. The machine sat there for an hour with a drop running.
+ *
+ * The culprit is below: `response.text()` in Playwright has no timeout, and
+ * the pass then waited on `Promise.all` of every captured body. One response
+ * whose body never finishes arriving — a stalled connection, a request that
+ * outlives the navigation that made it — and that await never returns. Nothing
+ * downstream of it ever runs again.
+ *
+ * Two guards now. This one bounds each body, and pass() bounds the whole read,
+ * because the lesson is not "that one await" — it is that ANY await against a
+ * browser can be the one that never comes back.
+ */
+function withTimeout<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return new Promise<T>((resolve) => {
+    let done = false;
+    const timer = setTimeout(() => {
+      if (!done) { done = true; resolve(fallback); }
+    }, ms);
+    p.then(
+      (v) => { if (!done) { done = true; clearTimeout(timer); resolve(v); } },
+      () => { if (!done) { done = true; clearTimeout(timer); resolve(fallback); } },
+    );
+  });
+}
+
+/** How long a single captured response body may take to arrive. */
+const BODY_MS = 4_000;
+/** How long the whole set of them may hold up a finished read. */
+const BODIES_MS = 1_500;
+
 /** Everything the readers need, pulled out of the page in one pass. */
 interface Scraped {
   ld: unknown[];
@@ -117,7 +156,7 @@ export async function readListing(
     if (!isInterestingApi(res.url(), type)) return;
     pending.push(
       (async () => {
-        const text = await res.text().catch(() => '');
+        const text = await withTimeout(res.text(), BODY_MS, '');
         if (!text || text.length > 4_000_000) return;
         try {
           bodies.push(JSON.parse(text));
@@ -166,7 +205,9 @@ export async function readListing(
     );
 
     if (race.won && race.read) {
-      await Promise.all(pending);
+      // Bounded. We want the bodies that arrived, not a promise that one more
+      // is still coming — the reader has already said it knows the answer.
+      await withTimeout(Promise.all(pending), BODIES_MS, [] as unknown[]);
       return {
         ...race.read,
         challenged: false,
@@ -188,7 +229,7 @@ export async function readListing(
       settleForMs: 1200,
       timeoutMs: SLOW_TIMEOUT_MS,
     });
-    await Promise.all(pending);
+    await withTimeout(Promise.all(pending), BODIES_MS, [] as unknown[]);
 
     const challenge = detectChallenge(read.title, read.text, read.html);
     if (challenge.challenged) {

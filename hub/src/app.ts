@@ -947,6 +947,21 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
      * and the account settings, because the mandate is not complete without
      * them. A ceiling means item plus tax, and tax needs a rate.
      */
+    /*
+     * The fast lane.
+     *
+     * Phantom polls this every few seconds. It is deliberately the cheapest
+     * endpoint in the app — one indexed column, no joins, a handful of
+     * integers — because "check now" is only ever as fast as the next poll,
+     * and the Hub cannot ring a machine behind somebody's router.
+     *
+     * It does not clear the flag. Clearing belongs to the observation landing,
+     * so a poll that Phantom never acts on cannot swallow the request.
+     */
+    if (request.method === 'GET' && path === '/api/check-now') {
+      return json({ listingIds: await store.urgentListings(db, userId) });
+    }
+
     if (request.method === 'GET' && path === '/api/missions/active') {
       const [missions, settings] = await Promise.all([
         store.activeMissions(db, userId),

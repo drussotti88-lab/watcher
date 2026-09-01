@@ -911,3 +911,60 @@ test('a retailer standing down does not keep the pass awake either', async () =>
   assert.equal(r.checked, 0);
   assert.ok(clock.now() - T0 < 1000, 'it returned rather than sitting out a stand-down');
 });
+
+// ── A hang is worse than a crash ─────────────────────────────────────────────
+//
+// Phantom stopped reporting three times on the evening of 1 Sep 2026 and looked
+// like a crash each time: log ends mid-pass, no stack, no exit line. It was not
+// a crash. The process was ALIVE and stuck, which is the worse failure — the
+// supervisor restarts a crash and cannot see a hang. The machine sat there for
+// an hour with a drop running.
+//
+// The cause was a captured response body with no timeout, fixed at its source.
+// This is the belt: whichever await hangs next, one check cannot take the
+// watcher with it.
+
+test('A CHECK THAT NEVER RETURNS DOES NOT TAKE THE WATCHER WITH IT', async () => {
+  const { hub } = recorder();
+  const pacer = new Pacer(STEADY, () => 0);
+  const forever: ReadFn = () => new Promise<Reading>(() => {});
+
+  const started = Date.now();
+  const r = await pass([mission()], pacer, { browser, hub, read: forever, checkCeilingMs: 60 });
+  const took = Date.now() - started;
+
+  assert.equal(r.checked, 1, 'the check is counted — it was attempted');
+  assert.equal(r.failed, 1, 'and recorded as a failure, not as out of stock');
+  assert.ok(took < 5_000, `the pass returned in ${took}ms rather than never`);
+});
+
+test('the abandoned check says it was abandoned, not that the page was empty', async () => {
+  // "out of stock" from a check that never happened is the reading that gets
+  // acted on. A failure has to look like one.
+  const { hub, observations } = recorder();
+  const pacer = new Pacer(STEADY, () => 0);
+  const forever: ReadFn = () => new Promise<Reading>(() => {});
+
+  await pass([mission()], pacer, { browser, hub, read: forever, checkCeilingMs: 60 });
+  assert.equal(observations.length, 1);
+  assert.equal(observations[0]!.state, 'unknown');
+  assert.match(observations[0]!.note, /did not finish|abandoned/);
+});
+
+test('one stuck check does not stop the ones behind it', async () => {
+  // The whole point of a ceiling. Target hangs, Walmart is still worth reading.
+  const { hub } = recorder();
+  const pacer = new Pacer(STEADY, () => 0);
+  const read: ReadFn = async (_b, retailer) => {
+    if (retailer === 'Target') return new Promise<Reading>(() => {});
+    return reading();
+  };
+
+  const r = await pass(
+    [mission({ id: 1, retailer: 'Target' }), mission({ id: 2, retailer: 'Walmart' })],
+    pacer,
+    { browser, hub, read, checkCeilingMs: 60 },
+  );
+  assert.equal(r.checked, 2);
+  assert.equal(r.failed, 1, 'one abandoned');
+});

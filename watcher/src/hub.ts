@@ -364,6 +364,29 @@ export class Hub {
    *     fails closed, so the worst a stale watchlist can do is look at a page
    *     nobody asked about any more.
    */
+  /**
+   * Which listings somebody has just asked to be checked.
+   *
+   * The cheapest call this client makes, and the only one it is allowed to
+   * make constantly. Everything else here is a considered request once a
+   * cycle; this one is a heartbeat, because the button that fires it is
+   * pressed by a person who is watching a page and needs an answer now.
+   *
+   * Fails SILENT and returns nothing. A missed poll costs one round of
+   * latency on a button; a thrown error out of a background timer would take
+   * down the loop that is doing the actual watching. This is the one call in
+   * the system where being wrong is cheaper than being loud.
+   */
+  async urgentListings(): Promise<number[]> {
+    try {
+      const data = await this.call<{ listingIds?: number[] } | null>('GET', '/api/check-now');
+      const ids = data?.listingIds;
+      return Array.isArray(ids) ? ids.filter((n) => Number.isInteger(n)) : [];
+    } catch {
+      return [];
+    }
+  }
+
   async missionsOrCached(
     now: number = Date.now(),
     maxAgeMs = 15 * 60_000,
