@@ -224,3 +224,32 @@ test('a retailer with no checkout flow is declined by name, before any grant', a
   assert.match(run.reason, /no checkout flow exists for Walmart/);
   assert.deepEqual(w.resolutions, [], 'no grant was taken for a flow that cannot use it');
 });
+
+// ── Where the seconds went ───────────────────────────────────────────────────
+
+import { stopwatch } from '../src/buy.ts';
+
+test('THE STOPWATCH NAMES THE SLOW PHASE INSTEAD OF ONE OPAQUE NUMBER', () => {
+  // A drop is decided in the gap between "stock appeared" and "order placed".
+  // Knowing that gap was 14s tells you nothing; knowing 11s of it was the cart
+  // read tells you what to fix.
+  let t = 1_000;
+  const clock = stopwatch(() => t);
+  t += 400; clock.mark('authorise');
+  t += 2_600; clock.mark('browser');
+  t += 1_500; clock.mark('open');
+  t += 900; clock.mark('cart');
+
+  const summary = clock.summary();
+  assert.match(summary, /authorise 0\.4s/);
+  assert.match(summary, /browser 2\.6s/);
+  assert.match(summary, /cart 0\.9s/);
+  assert.match(summary, /5\.4s total/);
+  assert.equal(clock.total(), 5_400);
+});
+
+test('a stopwatch nobody marked says nothing rather than lying', () => {
+  const clock = stopwatch(() => 5_000);
+  assert.equal(clock.summary(), '');
+  assert.equal(clock.total(), 0);
+});

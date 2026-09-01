@@ -48,6 +48,44 @@ export function makeBuyer(deps: BuyDeps): (mission: Mission, reading: Reading) =
   return (mission, reading) => attemptBuy(deps, mission, reading);
 }
 
+/**
+ * Where the seconds went.
+ *
+ * A drop is decided in the gap between "stock appeared" and "order placed",
+ * and until this existed that gap was one opaque number — you could see a buy
+ * took 14 seconds and not which part to fix. Every phase is marked, so the
+ * next slow buy names its own bottleneck instead of inviting a guess.
+ *
+ * Deliberately plain: a clock and a list. Nothing here may throw, because a
+ * stopwatch that can break a purchase is worse than no stopwatch.
+ */
+export interface Stopwatch {
+  mark(phase: string): void;
+  summary(): string;
+  total(): number;
+}
+
+export function stopwatch(now: () => number = Date.now): Stopwatch {
+  const started = now();
+  let last = started;
+  const marks: [string, number][] = [];
+  return {
+    mark(phase) {
+      const at = now();
+      marks.push([phase, at - last]);
+      last = at;
+    },
+    summary() {
+      const secs = (ms: number): string => `${(ms / 1000).toFixed(1)}s`;
+      const parts = marks.map(([phase, ms]) => `${phase} ${secs(ms)}`);
+      return parts.length ? `${parts.join(' · ')} — ${secs(last - started)} total` : '';
+    },
+    total() {
+      return last - started;
+    },
+  };
+}
+
 export async function attemptBuy(
   deps: BuyDeps,
   mission: Mission,
@@ -61,14 +99,21 @@ export async function attemptBuy(
     sellerKind: reading.seller.kind,
     sellerName: reading.seller.name,
   };
+  // Started before the authorisation so the clock covers everything a drop
+  // spends, not just the browser half.
+  const clock = stopwatch();
   const record = (run: RunOut): RunOut => {
+    const timing = clock.summary();
     deps.activity?.record({
       kind: 'buy',
       level: run.outcome === 'bought' || run.outcome === 'dry_run' ? 'info' : 'warn',
       retailer: mission.retailer,
       missionId: mission.id,
+      ms: clock.total(),
       message: `${run.outcome}: ${run.reason}`,
+      detail: timing,
     });
+    if (timing) log(`  timing: ${timing}`);
     return run;
   };
 
@@ -83,6 +128,7 @@ export async function attemptBuy(
 
   // ── 1. Permission, from the one place that can give it ─────────────────────
   const auth = await deps.hub.authorise(mission.id);
+  clock.mark('authorise');
   if (!auth.granted) {
     return record({ ...base, outcome: auth.refusal, reason: auth.reason });
   }
@@ -94,12 +140,16 @@ export async function attemptBuy(
   try {
     browser = await deps.openBuyBrowser();
     const page = await browser.page();
+    clock.mark('browser');
 
     await page.goto(mission.url, { waitUntil: 'domcontentloaded' });
+    clock.mark('open');
     await driver.addToCart(page);
+    clock.mark('cart');
     inCart = true;
 
     const cart: CartTotals = await driver.readCart(page);
+    clock.mark('read');
     const check = verifyCart({
       watch: {
         id: String(mission.id),
@@ -158,6 +208,7 @@ export async function attemptBuy(
     // stays live and a person checks the orders page. 'spent' is only ever
     // written about an order the retailer acknowledged.
     await driver.placeOrder(page);
+    clock.mark('place');
     await deps.hub.resolveAuthorisation(
       auth.id,
       'spent',

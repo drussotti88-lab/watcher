@@ -1013,3 +1013,60 @@ test('a kept find brings its street date to the product', async () => {
   const [product] = await store.listProducts(db, USER);
   assert.equal(product!.releaseDate, '2026-09-16');
 });
+
+// ── Shops on and off, and the drop window ────────────────────────────────────
+
+test('A SHOP CAN BE SWITCHED OFF WITHOUT TOUCHING THE OTHERS', async () => {
+  const db = await TestDb.create();
+  const saved = await store.setSettings(db, 1, { pausedRetailers: ['Walmart'] });
+  assert.deepEqual(saved.pausedRetailers, ['Walmart']);
+  // It survives the round trip through the key-value table.
+  assert.deepEqual((await store.getSettings(db, 1)).pausedRetailers, ['Walmart']);
+  // And clearing it puts every shop back on.
+  const cleared = await store.setSettings(db, 1, { pausedRetailers: [] });
+  assert.deepEqual(cleared.pausedRetailers, []);
+  await db.close();
+});
+
+test('a shop this system does not watch cannot be toggled', async () => {
+  const db = await TestDb.create();
+  await assert.rejects(
+    () => store.setSettings(db, 1, { pausedRetailers: ['Costco'] }),
+    /not a shop this system watches/,
+  );
+  await db.close();
+});
+
+test('THE DROP-WINDOW SPACING REFUSES A FLOOR THAT WOULD GET US BLOCKED', async () => {
+  const db = await TestDb.create();
+  await assert.rejects(
+    () => store.setSettings(db, 1, { burstSpacingSeconds: 2 }),
+    /at least 5 seconds/,
+    'below five seconds is not a setting, it is a way to be blocked mid-drop',
+  );
+  await assert.rejects(
+    () => store.setSettings(db, 1, { burstSpacingSeconds: 90 }),
+    /slower than the ordinary pace/,
+  );
+  // Zero is the honest spelling of "off".
+  assert.equal((await store.setSettings(db, 1, { burstSpacingSeconds: 0 })).burstSpacingSeconds, 0);
+  assert.equal((await store.setSettings(db, 1, { burstSpacingSeconds: 8 })).burstSpacingSeconds, 8);
+  await db.close();
+});
+
+test('a drop window cannot be opened days ahead — it exists to be brief', async () => {
+  const db = await TestDb.create();
+  const soon = new Date(Date.now() + 60 * 60_000).toISOString();
+  assert.equal((await store.setSettings(db, 1, { dropModeUntil: soon })).dropModeUntil, soon);
+  await assert.rejects(
+    () => store.setSettings(db, 1, {
+      dropModeUntil: new Date(Date.now() + 48 * 3600_000).toISOString(),
+    }),
+    /more than 12 hours ahead/,
+  );
+  await assert.rejects(
+    () => store.setSettings(db, 1, { dropModeUntil: 'sometime tuesday' }),
+    /must be a timestamp/,
+  );
+  await db.close();
+});

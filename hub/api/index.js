@@ -694,8 +694,12 @@ var DEFAULT_SETTINGS = {
   timezone: "",
   paused: false,
   sweepEveryHours: 24,
-  spendCapDay: null
+  spendCapDay: null,
+  pausedRetailers: [],
+  burstSpacingSeconds: 0,
+  dropModeUntil: ""
 };
+var KNOWN_RETAILERS = ["Target", "Walmart", "Pokemon Center"];
 function isClockTime(v) {
   if (v === "") return true;
   const parts = v.split(":");
@@ -723,6 +727,27 @@ function validateSettings(s) {
       return "a shipping allowance cannot be negative";
     }
     if (s.shippingAllowance > 100) return "that shipping allowance looks like a typo";
+  }
+  if (s.pausedRetailers !== void 0) {
+    if (!Array.isArray(s.pausedRetailers)) return "paused shops must be a list of names";
+    for (const r of s.pausedRetailers) {
+      if (!KNOWN_RETAILERS.includes(String(r))) {
+        return `"${r}" is not a shop this system watches`;
+      }
+    }
+  }
+  if (s.burstSpacingSeconds !== void 0) {
+    const n = Number(s.burstSpacingSeconds);
+    if (!Number.isFinite(n) || n < 0) return "the drop-window spacing cannot be negative";
+    if (n > 0 && n < 5) return "the drop-window spacing must be at least 5 seconds";
+    if (n > 60) return "a drop-window spacing above 60s is slower than the ordinary pace";
+  }
+  if (s.dropModeUntil !== void 0 && String(s.dropModeUntil) !== "") {
+    const t = Date.parse(String(s.dropModeUntil));
+    if (!Number.isFinite(t)) return "the drop window end must be a timestamp";
+    if (t > Date.now() + 12 * 36e5) {
+      return "a drop window cannot be opened more than 12 hours ahead";
+    }
   }
   for (const key of ["activeFrom", "activeUntil"]) {
     if (s[key] !== void 0 && !isClockTime(String(s[key]))) {
@@ -775,7 +800,12 @@ async function getSettings(db2, userId) {
     timezone: text("timezone", ""),
     paused: text("paused", "") === "true",
     sweepEveryHours: num2("sweepEveryHours", DEFAULT_SETTINGS.sweepEveryHours),
-    spendCapDay: map.has("spendCapDay") && Number.isFinite(Number(map.get("spendCapDay"))) && Number(map.get("spendCapDay")) > 0 ? Number(map.get("spendCapDay")) : null
+    spendCapDay: map.has("spendCapDay") && Number.isFinite(Number(map.get("spendCapDay"))) && Number(map.get("spendCapDay")) > 0 ? Number(map.get("spendCapDay")) : null,
+    // Stored as one comma-separated string: the set is three names, and a
+    // table for it would be three joins to answer "is Target on".
+    pausedRetailers: text("pausedRetailers", "").split(",").map((r) => r.trim()).filter((r) => KNOWN_RETAILERS.includes(r)),
+    burstSpacingSeconds: num2("burstSpacingSeconds", DEFAULT_SETTINGS.burstSpacingSeconds),
+    dropModeUntil: text("dropModeUntil", "")
   };
 }
 async function setSettings(db2, userId, patch) {
@@ -790,7 +820,10 @@ async function setSettings(db2, userId, patch) {
     "timezone",
     "paused",
     "sweepEveryHours",
-    "spendCapDay"
+    "spendCapDay",
+    "pausedRetailers",
+    "burstSpacingSeconds",
+    "dropModeUntil"
   ]) {
     const value = patch[key];
     if (value === void 0) continue;
@@ -799,7 +832,11 @@ async function setSettings(db2, userId, patch) {
              ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
       // null clears a key back to unset — for the spend cap, that means
       // nothing further can be armed until a person sets one again.
-      params: [userId, key, value === null ? "" : String(value)]
+      params: [
+        userId,
+        key,
+        value === null ? "" : Array.isArray(value) ? value.join(",") : String(value)
+      ]
     });
   }
   if (statements.length) await db2.batch(statements);
@@ -2897,6 +2934,42 @@ ${FONTS}<style>${STYLE}</style></head>
       </form>
     </div>
 
+    <h2>Which shops, and how hard</h2>
+    <p class="sub" style="margin:-6px 0 14px">
+      A shop at a time, above each mission's own switch and below the master
+      one. Off means off for both halves \u2014 no checks and no sweeps. The drop
+      window is the exception to the polite pace: it tightens the gap between
+      checks, and it closes itself, because the failure mode of a switch is
+      leaving it on.
+    </p>
+    <div class="card">
+      <form class="stack" id="shops-form">
+        <div class="chips" id="shop-toggles"></div>
+        <div class="grid2">
+          <label class="f">Drop-window spacing
+            <span class="hint">seconds between checks while a window is open \u2014 blank or 0 keeps the ordinary 20s</span>
+            <input type="number" name="burstSpacingSeconds" step="1" min="5" max="60" placeholder="0">
+          </label>
+          <label class="f">Open a drop window for
+            <span class="hint">it closes itself when the time is up</span>
+            <select id="drop-minutes">
+              <option value="30">30 minutes</option>
+              <option value="60" selected>1 hour</option>
+              <option value="120">2 hours</option>
+              <option value="240">4 hours</option>
+            </select>
+          </label>
+        </div>
+        <p class="sub" style="margin:0" id="drop-state"></p>
+        <div class="actions">
+          <button type="submit" class="primary">Save shops</button>
+          <button type="button" id="drop-open">Open a drop window now</button>
+          <button type="button" id="drop-close" hidden>Close it</button>
+          <span class="msg" id="shops-msg"></span>
+        </div>
+      </form>
+    </div>
+
     <h2>Diagnostics</h2>
     <p class="sub" style="margin:-6px 0 14px">
       Every check the Watcher makes is written down \u2014 the ones that worked as
@@ -4219,6 +4292,8 @@ function render() {
     sf.querySelector('[name=sweepEveryHours]').value = st.sweepEveryHours || '';
   }
 
+  renderShops(st);
+
   renderRadar();
   renderFinds();
   renderDetail();
@@ -4324,6 +4399,60 @@ function render() {
  * matched once is remembered \u2014 vaultTcgId arrives pre-filled on the next buy
  * of the same thing \u2014 so the second time is one click.
  */
+/** The shop switches, the burst field, and whether a window is open. */
+const SHOPS = ['Target', 'Walmart', 'Pokemon Center'];
+
+function renderShops(st) {
+  const box = document.getElementById('shop-toggles');
+  if (!box) return;
+  const off = st.pausedRetailers || [];
+  box.textContent = '';
+  for (const shop of SHOPS) {
+    const on = !off.some((r) => String(r).toLowerCase() === shop.toLowerCase());
+    // The chip says the STATE, and pressing it flips that state. A control
+    // labelled with what it will do next reads as a description of now.
+    const chip = el('button', 'chip' + (on ? ' on' : ''), shop + (on ? ' \xB7 on' : ' \xB7 off'));
+    chip.type = 'button';
+    chip.setAttribute('aria-pressed', on ? 'true' : 'false');
+    chip.addEventListener('click', async () => {
+      const next = on
+        ? [...off.filter((r) => String(r).toLowerCase() !== shop.toLowerCase()), shop]
+        : off.filter((r) => String(r).toLowerCase() !== shop.toLowerCase());
+      const msg = document.getElementById('shops-msg');
+      await withButton(chip, '\u2026', msg, async () => {
+        await api('POST', '/api/settings', { pausedRetailers: next });
+        await load();
+        return shop + (on ? ' is off' : ' is on');
+      });
+    });
+    box.appendChild(chip);
+  }
+
+  const sform = document.getElementById('shops-form');
+  const burst = sform.querySelector('[name=burstSpacingSeconds]');
+  if (document.activeElement !== burst) burst.value = st.burstSpacingSeconds || '';
+
+  // Is a window open, and how long is left? Said in words, because "true" is
+  // not an answer to "am I about to be checking Target every 8 seconds".
+  const state = document.getElementById('drop-state');
+  const closeBtn = document.getElementById('drop-close');
+  const until = st.dropModeUntil ? Date.parse(st.dropModeUntil) : NaN;
+  const openNow = Number.isFinite(until) && until > Date.now();
+  closeBtn.hidden = !openNow;
+  if (!st.burstSpacingSeconds) {
+    state.textContent =
+      'No drop-window spacing set, so a window would change nothing \u2014 set the seconds first.';
+  } else if (openNow) {
+    const mins = Math.ceil((until - Date.now()) / 60000);
+    state.textContent =
+      'DROP WINDOW OPEN \u2014 checking every ' + st.burstSpacingSeconds +
+      's, closing in ' + mins + ' minute' + (mins === 1 ? '' : 's') + '.';
+  } else {
+    state.textContent =
+      'Ordinary pace. A window also opens by itself on the day something you watch is released.';
+  }
+}
+
 function renderVault() {
   const list = document.getElementById('acq-list');
   if (!list) return;
@@ -5106,6 +5235,41 @@ document.getElementById('settings-form').addEventListener('submit', async (e) =>
     });
     load();
     return 'saved \u2014 applies to every mission';
+  });
+});
+
+document.getElementById('shops-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const form = e.target;
+  const f = fields(form);
+  const msg = document.getElementById('shops-msg');
+  await withButton(form.querySelector('button[type=submit]'), 'Saving\u2026', msg, async () => {
+    await api('POST', '/api/settings', {
+      burstSpacingSeconds: f.burstSpacingSeconds === '' ? 0 : Number(f.burstSpacingSeconds),
+    });
+    load();
+    return 'saved';
+  });
+});
+
+document.getElementById('drop-open').addEventListener('click', async (e) => {
+  const mins = Number(document.getElementById('drop-minutes').value || 60);
+  const msg = document.getElementById('shops-msg');
+  await withButton(e.target, 'Opening\u2026', msg, async () => {
+    await api('POST', '/api/settings', {
+      dropModeUntil: new Date(Date.now() + mins * 60000).toISOString(),
+    });
+    await load();
+    return 'drop window open for ' + mins + ' minutes';
+  });
+});
+
+document.getElementById('drop-close').addEventListener('click', async (e) => {
+  const msg = document.getElementById('shops-msg');
+  await withButton(e.target, 'Closing\u2026', msg, async () => {
+    await api('POST', '/api/settings', { dropModeUntil: '' });
+    await load();
+    return 'back to the ordinary pace';
   });
 });
 

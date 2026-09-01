@@ -2607,3 +2607,54 @@ test('no load-ins, no banner', async () => {
   const h = await boot(DASHBOARD);
   assert.equal(($(h, '#load-banner') as any).hidden, true);
 });
+
+// ── Shop switches and the drop window ────────────────────────────────────────
+
+const SETTINGS = {
+  taxRate: 0, shippingAllowance: 0, activeFrom: '', activeUntil: '', timezone: '',
+  paused: false, sweepEveryHours: 24, spendCapDay: 200,
+  pausedRetailers: [], burstSpacingSeconds: 0, dropModeUntil: '',
+};
+
+test('EVERY SHOP GETS ITS OWN SWITCH, LABELLED WITH THE STATE IT IS IN', async () => {
+  const h = await boot({ ...DASHBOARD, settings: { ...SETTINGS, pausedRetailers: ['Walmart'] } });
+  const chips = [...h.doc.querySelectorAll('#shop-toggles button')] as any[];
+  assert.equal(chips.length, 3, 'Target, Walmart, Pokemon Center');
+  const walmart = chips.find((c) => c.textContent.startsWith('Walmart'));
+  const target = chips.find((c) => c.textContent.startsWith('Target'));
+  assert.match(walmart.textContent, /off/);
+  assert.equal(walmart.getAttribute('aria-pressed'), 'false');
+  assert.match(target.textContent, /on/);
+  assert.equal(target.getAttribute('aria-pressed'), 'true');
+});
+
+test('pressing a shop switch sends only that shop’s change', async () => {
+  const h = await boot({ ...DASHBOARD, settings: { ...SETTINGS, pausedRetailers: ['Walmart'] } });
+  const target = ([...h.doc.querySelectorAll('#shop-toggles button')] as any[])
+    .find((c) => c.textContent.startsWith('Target'));
+  target.click();
+  await h.settle();
+  const posted = h.calls.find((c) => c.method === 'POST' && c.path === '/api/settings');
+  assert.ok(posted, 'the toggle saved');
+  assert.deepEqual(posted!.body.pausedRetailers.sort(), ['Target', 'Walmart'],
+    'Walmart stays off; Target joins it — one switch does not rewrite the others');
+});
+
+test('the drop window says what it is doing in words, and offers a way out', async () => {
+  const until = new Date(Date.now() + 42 * 60000).toISOString();
+  const h = await boot({
+    ...DASHBOARD,
+    settings: { ...SETTINGS, burstSpacingSeconds: 8, dropModeUntil: until },
+  });
+  const state = $(h, '#drop-state');
+  assert.match(state.textContent, /DROP WINDOW OPEN/);
+  assert.match(state.textContent, /every 8s/);
+  assert.match(state.textContent, /closing in 42 minutes/);
+  assert.equal(($(h, '#drop-close') as any).hidden, false, 'and it can be closed early');
+});
+
+test('a window with no spacing set is honest that it would change nothing', async () => {
+  const h = await boot({ ...DASHBOARD, settings: SETTINGS });
+  assert.match($(h, '#drop-state').textContent, /would change nothing/);
+  assert.equal(($(h, '#drop-close') as any).hidden, true);
+});

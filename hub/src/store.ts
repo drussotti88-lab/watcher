@@ -868,6 +868,40 @@ export interface Settings {
    * Watcher, whose process can die and forget.
    */
   spendCapDay: number | null;
+  /**
+   * Shops that are switched off, by name.
+   *
+   * A shop at a time, rather than the master switch or nothing. There are
+   * evenings when Target is the only thing dropping and spending Walmart's
+   * budget on a catalogue that has not moved in a week is pure risk for no
+   * information — and evenings when one shop has served a challenge and the
+   * honest move is to leave that one alone without blinding the other two.
+   *
+   * Off means off for BOTH halves: no mission checks and no sweeps. A toggle
+   * that stopped watching but kept sweeping would be a toggle that lies.
+   */
+  pausedRetailers: string[];
+  /**
+   * The tight floor between requests to one shop, in seconds, used only
+   * inside a drop window. 0 means the feature is off and the ordinary floor
+   * (20s) always applies.
+   *
+   * The ordinary floor is sized for a system that runs all day for years. A
+   * drop is over in ninety seconds, and checking once every 20–28s during one
+   * means seeing it, at best, three times. This is the exception that window
+   * earns — and it is deliberately a separate number rather than a smaller
+   * default, so the polite pace stays the pace we live at.
+   */
+  burstSpacingSeconds: number;
+  /**
+   * When the manual drop window ends, as an ISO timestamp. Blank means no
+   * manual window is open.
+   *
+   * An expiry rather than a toggle, on purpose: the failure mode of a switch
+   * is leaving it on. A window that closes itself cannot quietly become the
+   * new normal pace at three in the morning.
+   */
+  dropModeUntil: string;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -879,7 +913,13 @@ export const DEFAULT_SETTINGS: Settings = {
   paused: false,
   sweepEveryHours: 24,
   spendCapDay: null,
+  pausedRetailers: [],
+  burstSpacingSeconds: 0,
+  dropModeUntil: '',
 };
+
+/** The shops this system knows. A toggle for a shop we cannot read is a lie. */
+export const KNOWN_RETAILERS = ['Target', 'Walmart', 'Pokemon Center'] as const;
 
 /** HH:MM, 24-hour, or blank. Deliberately strict: a half-parsed time is worse. */
 export function isClockTime(v: string): boolean {
@@ -912,6 +952,31 @@ export function validateSettings(s: Partial<Settings>): string | null {
       return 'a shipping allowance cannot be negative';
     }
     if (s.shippingAllowance > 100) return 'that shipping allowance looks like a typo';
+  }
+  if (s.pausedRetailers !== undefined) {
+    if (!Array.isArray(s.pausedRetailers)) return 'paused shops must be a list of names';
+    for (const r of s.pausedRetailers) {
+      if (!(KNOWN_RETAILERS as readonly string[]).includes(String(r))) {
+        return `"${r}" is not a shop this system watches`;
+      }
+    }
+  }
+  if (s.burstSpacingSeconds !== undefined) {
+    const n = Number(s.burstSpacingSeconds);
+    if (!Number.isFinite(n) || n < 0) return 'the drop-window spacing cannot be negative';
+    // A floor below five seconds is not a setting, it is a way to get blocked
+    // during the one window that matters. The probe test moves this number,
+    // not a hunch typed into a box.
+    if (n > 0 && n < 5) return 'the drop-window spacing must be at least 5 seconds';
+    if (n > 60) return 'a drop-window spacing above 60s is slower than the ordinary pace';
+  }
+  if (s.dropModeUntil !== undefined && String(s.dropModeUntil) !== '') {
+    const t = Date.parse(String(s.dropModeUntil));
+    if (!Number.isFinite(t)) return 'the drop window end must be a timestamp';
+    // Twelve hours is already generous for something that exists to be brief.
+    if (t > Date.now() + 12 * 3600_000) {
+      return 'a drop window cannot be opened more than 12 hours ahead';
+    }
   }
   for (const key of ['activeFrom', 'activeUntil'] as const) {
     if (s[key] !== undefined && !isClockTime(String(s[key]))) {
@@ -974,6 +1039,14 @@ export async function getSettings(db: Sql, userId: number): Promise<Settings> {
     spendCapDay: map.has('spendCapDay') && Number.isFinite(Number(map.get('spendCapDay'))) && Number(map.get('spendCapDay')) > 0
       ? Number(map.get('spendCapDay'))
       : null,
+    // Stored as one comma-separated string: the set is three names, and a
+    // table for it would be three joins to answer "is Target on".
+    pausedRetailers: text('pausedRetailers', '')
+      .split(',')
+      .map((r) => r.trim())
+      .filter((r) => (KNOWN_RETAILERS as readonly string[]).includes(r)),
+    burstSpacingSeconds: num('burstSpacingSeconds', DEFAULT_SETTINGS.burstSpacingSeconds),
+    dropModeUntil: text('dropModeUntil', ''),
   };
 }
 
@@ -995,6 +1068,9 @@ export async function setSettings(
     'paused',
     'sweepEveryHours',
     'spendCapDay',
+    'pausedRetailers',
+    'burstSpacingSeconds',
+    'dropModeUntil',
   ] as const) {
     const value = patch[key];
     if (value === undefined) continue;
@@ -1003,7 +1079,11 @@ export async function setSettings(
              ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
       // null clears a key back to unset — for the spend cap, that means
       // nothing further can be armed until a person sets one again.
-      params: [userId, key, value === null ? '' : String(value)],
+      params: [
+        userId,
+        key,
+        value === null ? '' : Array.isArray(value) ? value.join(',') : String(value),
+      ],
     });
   }
   if (statements.length) await db.batch(statements);

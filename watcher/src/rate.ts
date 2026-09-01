@@ -31,6 +31,15 @@ export interface Pacing {
   maxBackoffMs: number;
 }
 
+/**
+ * The floor beneath the floor.
+ *
+ * A drop window may tighten the spacing; it may not abolish it. Five seconds
+ * is the hard stop no setting can go under, so that the worst a mistyped
+ * burst value can do is make us brisk rather than blocked.
+ */
+export const MIN_SAFE_SPACING_MS = 5_000;
+
 export const DEFAULT_PACING: Pacing = {
   // One request per retailer every 20s at the very fastest. A mission asking
   // for 30s intervals still gets them; three missions on one retailer share.
@@ -54,10 +63,38 @@ export class Pacer {
   private readonly pacing: Pacing;
   private readonly random: () => number;
   private readonly state = new Map<string, State>();
+  /** A tighter floor while a drop window is open. Null means the ordinary one. */
+  private burstMs: number | null = null;
 
   constructor(pacing: Pacing = DEFAULT_PACING, random: () => number = Math.random) {
     this.pacing = pacing;
     this.random = random;
+  }
+
+  /**
+   * Tighten the floor for a drop window, or restore it.
+   *
+   * Only the *spacing* moves. The challenge back-off is untouched and still
+   * takes precedence — bursting is about how eagerly we look at a shop that is
+   * answering, never about arguing with one that has said no. A stand-down in
+   * progress stays in force at full length, which is the whole point of it.
+   *
+   * Refuses to go below the safe floor rather than trusting its caller: this
+   * number arrives from a settings field, and the cost of a typo here is the
+   * block that takes the Watcher off the air during the drop it was tightened
+   * for.
+   */
+  setBurstSpacing(ms: number | null): void {
+    if (ms === null || !Number.isFinite(ms) || ms <= 0) {
+      this.burstMs = null;
+      return;
+    }
+    this.burstMs = Math.max(MIN_SAFE_SPACING_MS, ms);
+  }
+
+  /** The floor in force right now, burst or ordinary. */
+  get spacingMs(): number {
+    return this.burstMs ?? this.pacing.minSpacingMs;
   }
 
   private get(retailer: string): State {
@@ -83,7 +120,10 @@ export class Pacer {
   /** Note that a request just went out. Sets the next allowed time, with jitter. */
   record(retailer: string, now: number): void {
     const s = this.get(retailer);
-    s.nextAllowedAt = now + this.pacing.minSpacingMs + this.random() * this.pacing.jitterMs;
+    // Jitter scales with the floor: 8s of wobble on a 5s burst would make the
+    // burst meaningless, and clockwork is only a tell at a steady cadence.
+    const jitter = Math.min(this.pacing.jitterMs, Math.round(this.spacingMs * 0.4));
+    s.nextAllowedAt = now + this.spacingMs + this.random() * jitter;
   }
 
   /**

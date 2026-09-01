@@ -75,6 +75,15 @@ export interface Settings {
   paused: boolean;
   /** How often to sweep the catalogue. Hours; 0 means never. */
   sweepEveryHours: number;
+  /**
+   * Shops that are switched off by name. Off means no checks AND no sweeps —
+   * a toggle that stopped one but not the other would be a toggle that lies.
+   */
+  pausedRetailers?: string[];
+  /** The tight per-shop floor used only inside a drop window. 0 means off. */
+  burstSpacingSeconds?: number;
+  /** ISO timestamp the manual drop window closes at. Blank means none open. */
+  dropModeUntil?: string;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -85,6 +94,9 @@ export const DEFAULT_SETTINGS: Settings = {
   timezone: '',
   paused: false,
   sweepEveryHours: 24,
+  pausedRetailers: [],
+  burstSpacingSeconds: 0,
+  dropModeUntil: '',
 };
 
 export interface ObservationOut {
@@ -300,6 +312,18 @@ export class Hub {
         sweepEveryHours: Number.isFinite(incoming.sweepEveryHours)
           ? Math.max(0, incoming.sweepEveryHours)
           : DEFAULT_SETTINGS.sweepEveryHours,
+        // Every one of these defaults to "the ordinary behaviour" rather than
+        // to what it was: a Hub that has forgotten how to say them must leave
+        // us watching every shop at the polite pace, never bursting at a shop
+        // it can no longer tell us about.
+        pausedRetailers: Array.isArray(incoming.pausedRetailers)
+          ? incoming.pausedRetailers.filter((r: unknown) => typeof r === 'string')
+          : [],
+        burstSpacingSeconds: Number.isFinite(incoming.burstSpacingSeconds)
+          ? Math.max(0, Number(incoming.burstSpacingSeconds))
+          : 0,
+        dropModeUntil:
+          typeof incoming.dropModeUntil === 'string' ? incoming.dropModeUntil : '',
       };
     }
     // Whether a sweep is due is the Hub's answer, not ours. This process

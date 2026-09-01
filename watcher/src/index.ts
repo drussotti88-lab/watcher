@@ -13,6 +13,7 @@ import { inspectUrl, renderInspection } from './inspect.ts';
 import { Hub } from './hub.ts';
 import { Pacer } from './rate.ts';
 import { isAwake, overrides } from './hours.ts';
+import { dropWindow, burstMsFor, retailerOn, pausedList } from './drop.ts';
 import { pass } from './watch.ts';
 import {
   scanTargetSearch,
@@ -297,6 +298,9 @@ async function runPasses(once: boolean): Promise<void> {
   let sweepPlan: SweepStep[] = [];
   /** Alternates while a sweep is planned, so watching and sweeping share the budget. */
   let sweepTurn = false;
+  /** Last-said states, so these lines appear on change rather than every pass. */
+  let dropSaid = '';
+  let retailersOffSaid = '';
 
   let stopped = false;
   process.on('SIGINT', () => {
@@ -627,11 +631,48 @@ async function runPasses(once: boolean): Promise<void> {
         /* an unreadable stop file is not a reason to stop */
       }
 
-      const { missions, stale, reason } = await hub.missionsOrCached();
+      const { missions: allMissions, stale, reason } = await hub.missionsOrCached();
       if (stale) {
         const said = reason || 'the Hub did not answer';
         console.log(`  ${timestamp()}  ${said}`);
         activity.record({ kind: 'hub', level: 'warn', message: said });
+      }
+
+      // ── Which shops are switched on ───────────────────────────────────
+      //
+      // A shop at a time, above the mission's own enabled flag and below the
+      // master switch. Off means off for both halves — checks here, sweeps
+      // below — because a toggle that stopped one and not the other would be
+      // a toggle that lies about what it is doing.
+      const missions = allMissions.filter((m) => retailerOn(hub.settings, m.retailer));
+      const offNow = pausedList(hub.settings);
+      if (offNow !== retailersOffSaid) {
+        retailersOffSaid = offNow;
+        const said = offNow ? `shops switched off: ${offNow}` : 'every shop is switched on';
+        console.log(`  ${timestamp()}  ${said}`);
+        activity.record({ kind: 'pass', message: said });
+      }
+
+      // ── How hard to look ──────────────────────────────────────────────
+      //
+      // The burst is an exception with an end: a manual window with an expiry,
+      // or the day something on the watchlist is released. Outside one, the
+      // ordinary 20s floor is restored — including the moment a window closes,
+      // which is why this is recomputed every pass rather than latched.
+      const window = dropWindow(hub.settings, allMissions, Date.now());
+      pacer.setBurstSpacing(burstMsFor(hub.settings, allMissions, Date.now()));
+      if (window.reason !== dropSaid) {
+        dropSaid = window.reason;
+        if (window.open) {
+          const secs = Math.round(pacer.spacingMs / 1000);
+          const said = `DROP WINDOW open — checking every ${secs}s (${window.reason})`;
+          console.log(`  ${timestamp()}  ${said}`);
+          activity.record({ kind: 'pass', level: 'warn', message: said });
+        } else {
+          const said = 'drop window closed — back to the ordinary pace';
+          console.log(`  ${timestamp()}  ${said}`);
+          activity.record({ kind: 'pass', message: said });
+        }
       }
 
       // ── Should we be looking at all? ──────────────────────────────────
@@ -693,7 +734,12 @@ async function runPasses(once: boolean): Promise<void> {
           query,
           page: 1,
         }));
-        sweepPlan = interleave(targetSteps, pcSteps, walmartSteps);
+        // A switched-off shop is not swept either. Same rule as the checks
+        // above, applied where the plan is built so a paused shop never even
+        // takes a turn in the rotation.
+        sweepPlan = interleave(targetSteps, pcSteps, walmartSteps).filter((step) =>
+          retailerOn(hub.settings, step.retailer),
+        );
         // Pressed by hand means somebody is looking at the button. Take the
         // next turn rather than waiting for one — the alternation exists to
         // stop a background sweep starving the watching, not to make a person
@@ -968,7 +1014,13 @@ async function main(): Promise<void> {
     if (command === 'browser' || command === 'signin') {
       await browser.open();
       const page = await browser.page();
-      await page.goto(PROBE_TARGETS[0]!.url).catch(() => {});
+      // The buy profile opens on Target and nowhere else: it is the one shop
+      // with a checkout flow, and the whole point of this profile is to touch
+      // nothing it does not need. Landing on Pokémon Center here was extra
+      // signed-profile traffic for zero benefit — Roberto's call, 31 Aug.
+      await page
+        .goto(persona === 'buy' ? 'https://www.target.com' : PROBE_TARGETS[0]!.url)
+        .catch(() => {});
       console.log(`
   The ${persona === 'buy' ? 'BUY' : 'WATCH'} profile is open (${browser.profileDir}).
 ${

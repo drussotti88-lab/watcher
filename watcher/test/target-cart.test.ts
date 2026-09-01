@@ -65,10 +65,23 @@ test('THE SITTING IS COMPLETE — every selector is a verified reading', () => {
 // returned after clicking, the caller recorded "bought", and the pens were
 // still sitting in the cart. These pin the fix: confirmation or a loud throw.
 
-const fakeCheckoutPage = (opts: { bodyText?: string; url?: string }) =>
+const fakeCheckoutPage = (opts: {
+  bodyText?: string;
+  url?: string;
+  /** Budgets handed to waitForLoadState, so a test can prove we wait on the
+   *  page rather than on the clock. */
+  settles?: number[];
+  /** A page that never goes quiet — settle must swallow it, not fail the buy. */
+  neverIdle?: boolean;
+}) =>
   ({
     url: () => opts.url ?? 'https://www.target.com/checkout',
     waitForTimeout: async () => {},
+    waitForLoadState: async (_state: string, o?: { timeout?: number }) => {
+      opts.settles?.push(o?.timeout ?? 0);
+      if (opts.neverIdle) throw new Error('timeout exceeded');
+    },
+    goto: async () => {},
     evaluate: async () => opts.bodyText ?? 'Review your order and payment',
     locator: () => ({
       first: () => ({
@@ -98,4 +111,36 @@ test('a click with no confirmation throws instead of claiming bought', async () 
       /no confirmation appeared/.test(e.message) &&
       /orders page/.test(e.message),
   );
+});
+
+// ── Waiting on the page, not on the clock ────────────────────────────────────
+//
+// The checkout path used to carry ~10s of flat `waitForTimeout` — 2.5s after
+// add, 3s after landing on the cart, 4s before looking for Place Order —
+// mostly stacked on top of `find()`, which already waits for its element to be
+// visible. A drop is decided in exactly those seconds, so they are now bounded
+// waits for the page to go quiet: instant on a fast page, capped on a slow one.
+
+test('PLACE ORDER WAITS FOR THE PAGE, NOT A FLAT FOUR SECONDS', async () => {
+  const settles: number[] = [];
+  await targetCart.placeOrder(
+    fakeCheckoutPage({ bodyText: 'Thanks for your order!', settles }),
+  );
+  assert.equal(settles.length, 1, 'one bounded settle between checkout and Place Order');
+  assert.ok(settles[0]! <= 1500, `the cap is a floor for find(), not a sleep — got ${settles[0]}`);
+});
+
+test('a page that never goes quiet does not fail the checkout', async () => {
+  // networkidle never arriving is a chatty page, not a broken order. The real
+  // gates are `find` and the confirmation check, both of which still run.
+  await targetCart.placeOrder(
+    fakeCheckoutPage({ bodyText: 'Thanks for your order!', neverIdle: true }),
+  );
+});
+
+test('the add-to-cart settle is brief, because readCart re-verifies the item', async () => {
+  const settles: number[] = [];
+  await targetCart.addToCart(fakeCheckoutPage({ settles }));
+  assert.equal(settles.length, 1);
+  assert.ok(settles[0]! <= 2000, 'brief on purpose — an empty cart is caught downstream');
 });

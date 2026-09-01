@@ -176,18 +176,53 @@ export interface CartDriver {
   placeOrder(page: Page): Promise<void>;
 }
 
+/**
+ * Waiting on a real signal instead of on the clock.
+ *
+ * Every one of these was a fixed `waitForTimeout` — a flat sleep sized for the
+ * worst case and paid on every buy, drop day or dead afternoon. Ten seconds of
+ * it, mostly stacked on top of `find()`, which already waits for the element
+ * it wants to be *visible*. So the rule now is: wait for the thing, capped, not
+ * for a guess at how long the thing takes. Same requests, same politeness — the
+ * only thing removed is the standing around, and in a drop the standing around
+ * is the box.
+ *
+ * `settle` is a bounded network-quiet wait, not a sleep: it returns the instant
+ * the page goes idle and only spends the whole budget when the page really is
+ * slow. It never throws — a page that stays chatty is not a checkout failure,
+ * and the self-verifying reads downstream are what actually gate the buy.
+ */
+const SETTLE = {
+  /** After add-to-cart, before navigating away. readCart re-verifies the item
+   *  actually landed, so this only has to let the add request dispatch. */
+  afterAdd: 1500,
+  /** After opening the order-summary accordion, before reading its lines. */
+  afterToggle: 800,
+  /** After clicking checkout, before looking for Place Order. `find` waits for
+   *  the button on top of this, so it is a floor, not the whole wait. */
+  afterCheckout: 1200,
+} as const;
+
+async function settle(page: Page, maxMs: number): Promise<void> {
+  await page.waitForLoadState('networkidle', { timeout: maxMs }).catch(() => {});
+}
+
 export const targetCart: CartDriver = {
   async addToCart(page) {
     const button = await find(page, 'addToCart');
     await button.click();
-    // Target confirms with a side sheet; give it a moment rather than racing
-    // to the cart while the add is still in flight.
-    await page.waitForTimeout(2500);
+    // Let the add request go out, then move on the moment the page is quiet —
+    // not a flat 2.5s. If it didn't land, readCart's own waits refuse the buy,
+    // so this can be brief without risking a purchase of an empty cart.
+    await settle(page, SETTLE.afterAdd);
   },
 
   async readCart(page) {
     await page.goto('https://www.target.com/cart', { waitUntil: 'domcontentloaded' });
-    await page.waitForTimeout(3000);
+
+    // No flat wait here any more: every read below goes through `find`, which
+    // waits for its element to be visible. A slow cart is caught by that wait;
+    // a fast cart is read the instant it renders.
 
     // Open the order summary when it says it is shut. Soft on purpose: if
     // Target ever renders it open, or renames the toggle while leaving the
@@ -197,7 +232,7 @@ export const targetCart: CartDriver = {
     const toggle = page.locator(TARGET_SELECTORS.summaryToggle.candidates[0]!).first();
     if ((await toggle.getAttribute('aria-expanded').catch(() => null)) === 'false') {
       await toggle.click().catch(() => {});
-      await page.waitForTimeout(1200);
+      await settle(page, SETTLE.afterToggle);
     }
 
     const qty = await find(page, 'cartItemQuantity');
@@ -245,7 +280,10 @@ export const targetCart: CartDriver = {
     }
     const checkout = await find(page, 'checkoutButton');
     await checkout.click();
-    await page.waitForTimeout(4000);
+    // A brief settle, then `find` waits for Place Order to be visible on top
+    // of it — the flat 4s that used to sit here was spent waiting for a button
+    // we were about to wait for anyway.
+    await settle(page, SETTLE.afterCheckout);
     const place = await find(page, 'placeOrder');
     await place.click();
 
