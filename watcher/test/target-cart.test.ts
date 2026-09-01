@@ -73,10 +73,15 @@ const fakeCheckoutPage = (opts: {
   settles?: number[];
   /** A page that never goes quiet — settle must swallow it, not fail the buy. */
   neverIdle?: boolean;
+  /** Every flat sleep the driver asks for, so a test can prove there are none
+   *  left on the critical path and that the confirmation poll is fine-grained. */
+  sleeps?: number[];
 }) =>
   ({
     url: () => opts.url ?? 'https://www.target.com/checkout',
-    waitForTimeout: async () => {},
+    waitForTimeout: async (ms: number) => {
+      opts.sleeps?.push(ms);
+    },
     waitForLoadState: async (_state: string, o?: { timeout?: number }) => {
       opts.settles?.push(o?.timeout ?? 0);
       if (opts.neverIdle) throw new Error('timeout exceeded');
@@ -143,4 +148,43 @@ test('the add-to-cart settle is brief, because readCart re-verifies the item', a
   await targetCart.addToCart(fakeCheckoutPage({ settles }));
   assert.equal(settles.length, 1);
   assert.ok(settles[0]! <= 2000, 'brief on purpose — an empty cart is caught downstream');
+});
+
+test('REMOVING AN ITEM WAITS ON THE PAGE TOO — no flat sleep is left', async () => {
+  // The last one. Nothing races a cleanup, but this is paid on every refused
+  // cart and every dry run, and those happen inside drop windows.
+  const settles: number[] = [];
+  const sleeps: number[] = [];
+  await targetCart.removeFromCart(fakeCheckoutPage({ settles, sleeps }));
+  assert.equal(sleeps.length, 0, `still sleeping: ${sleeps.join(', ')}`);
+  assert.equal(settles.length, 1, 'a bounded settle instead');
+  assert.ok(settles[0]! <= 1500);
+});
+
+test('THE CONFIRMATION POLL IS FINE-GRAINED — being late to know still costs', async () => {
+  // The order is already submitted here, so this is not a race. But at a 2.5s
+  // poll the machine could be 2.1 seconds late to know it worked, and the
+  // grant resolving to 'spent', the acquisition row and the line a person
+  // reads at 3am all wait on that.
+  const sleeps: number[] = [];
+  await targetCart.placeOrder(
+    fakeCheckoutPage({ bodyText: 'Thanks for your order!', sleeps }),
+  );
+  assert.ok(sleeps.length >= 1, 'it does poll');
+  assert.ok(
+    sleeps.every((ms) => ms <= 500),
+    `the poll should be sub-second, got ${sleeps.join(', ')}`,
+  );
+});
+
+test('the confirmation budget is still a full 30 seconds', async () => {
+  // Finer polling must not become a shorter wait. A slow confirmation page is
+  // the case where giving up early would mean throwing about an order that
+  // was actually placed.
+  const sleeps: number[] = [];
+  await assert.rejects(() =>
+    targetCart.placeOrder(fakeCheckoutPage({ bodyText: 'Review your order', sleeps })),
+  );
+  const total = sleeps.reduce((a, b) => a + b, 0);
+  assert.ok(total >= 30_000, `only waited ${total}ms before giving up`);
 });

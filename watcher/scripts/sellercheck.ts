@@ -21,7 +21,7 @@ try {
       `\n  ${url.split('/ip/')[1]?.slice(0, 52)}\n` +
         `    seller   ${String(r.seller.kind).padEnd(12)} ${r.seller.name}\n` +
         `    price    ${r.price ?? '-'}    state ${r.state}    ${r.challenged ? 'CHALLENGED' : ''}\n` +
-        `    note     ${(r.notes ?? []).join(' · ') || '-'}`,
+        `    note     ${r.note || '-'}`,
     );
     await new Promise((r) => setTimeout(r, 6000));
   }

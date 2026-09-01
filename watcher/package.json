@@ -21,7 +21,8 @@
     "test": "node --experimental-strip-types --test test/*.test.ts",
     "package": "node --experimental-strip-types scripts/package.ts",
     "typecheck": "tsc --noEmit",
-    "inspect": "node --experimental-strip-types src/index.ts inspect"
+    "inspect": "node --experimental-strip-types src/index.ts inspect",
+    "buy-timing": "node --experimental-strip-types scripts/buy-timing.ts"
   },
   "dependencies": {
     "playwright": "^1.49.0"

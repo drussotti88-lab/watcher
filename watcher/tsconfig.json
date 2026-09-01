@@ -12,5 +12,6 @@
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": ["src/**/*.ts", "test/**/*.ts"]
+  "//": "scripts/ is in here because it was not, and sellercheck.ts had been reading reading.notes — a field that does not exist — since the day it was written. A script nobody type-checks is a script that breaks silently the one time you need it.",
+  "include": ["src/**/*.ts", "test/**/*.ts", "scripts/**/*.ts"]
 }

@@ -201,7 +201,14 @@ const SETTLE = {
   /** After clicking checkout, before looking for Place Order. `find` waits for
    *  the button on top of this, so it is a floor, not the whole wait. */
   afterCheckout: 1200,
+  /** After removing an item. Nothing is racing a cleanup, but a flat sleep
+   *  here is paid on every refused cart and every dry run. */
+  afterRemove: 1200,
 } as const;
+
+/** How often, and for how long, to ask whether the order actually exists. */
+const CONFIRM_POLL_MS = 400;
+const CONFIRM_TIMEOUT_MS = 30_000;
 
 async function settle(page: Page, maxMs: number): Promise<void> {
   await page.waitForLoadState('networkidle', { timeout: maxMs }).catch(() => {});
@@ -264,7 +271,11 @@ export const targetCart: CartDriver = {
     await page.goto('https://www.target.com/cart', { waitUntil: 'domcontentloaded' });
     const remove = await find(page, 'removeItem');
     await remove.click();
-    await page.waitForTimeout(2000);
+    // The last flat sleep on this path. Same rule as the others: wait for the
+    // page to go quiet, not for a guess at how long quiet takes. It matters
+    // less here — nothing is racing a cleanup — but a 2s sleep on every
+    // refused cart and every dry run is 2s of a drop window spent tidying.
+    await settle(page, SETTLE.afterRemove);
   },
 
   async placeOrder(page) {
@@ -311,8 +322,14 @@ export const targetCart: CartDriver = {
         text,
       );
     };
-    for (let waited = 0; waited < 30_000; waited += 2500) {
-      await page.waitForTimeout(2500);
+    // Polled at 400ms, not 2.5s. The order is already submitted by this point,
+    // so this is not a race — but a coarse poll means the machine can be up to
+    // 2.1 seconds late to know it succeeded, and everything downstream (the
+    // grant resolving to 'spent', the acquisition row, the log line a person
+    // reads at 3am) waits on that. The budget is unchanged: still 30 seconds
+    // before it gives up and shouts.
+    for (let waited = 0; waited < CONFIRM_TIMEOUT_MS; waited += CONFIRM_POLL_MS) {
+      await page.waitForTimeout(CONFIRM_POLL_MS);
       if (await confirmed()) return;
     }
     const shot = await screenshot(page, 'placeOrder-unconfirmed');
