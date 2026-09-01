@@ -49,6 +49,16 @@ export interface RetailerCaps {
   /** ability key → how well it works at this shop. Absent means 'none'. */
   abilities: Record<string, Status>;
   note?: string;
+  /**
+   * The shop is currently refusing us.
+   *
+   * Additive and optional on purpose: a consumer that has never heard of this
+   * field still reads correct statuses, because the abilities above are
+   * downgraded at the same time. This is the human explanation of WHY, and
+   * since when — which is the difference between "we never built that" and
+   * "they shut the door this afternoon".
+   */
+  blocked?: { since: string; what: string };
 }
 
 /**
@@ -143,17 +153,30 @@ export const RETAILERS: readonly RetailerCaps[] = [
     key: 'pokemon-center',
     name: 'Pokémon Center',
     abilities: {
-      watch: 'live',
-      discover: 'live',
+      // Downgraded from 'live' on 1 Sep 2026. The reader is unchanged and
+      // correct; the shop stopped answering. See `blocked` below — this table
+      // is what the vault's perks page reads, and a page that promises
+      // watching we cannot currently do is the one failure mode it exists to
+      // prevent.
+      watch: 'partial',
+      discover: 'partial',
       releaseDates: 'partial',
       // JSON-LD carries in-stock/out-of-stock and nothing else. There is no
       // quantity to watch even in principle.
       stagedStock: 'none',
-      queueAlarm: 'live',
+      // A waiting room cannot be spotted on a page that never renders.
+      queueAlarm: 'partial',
       sellerCheck: 'none',
       autoCheckout: 'planned',
     },
-    note: 'First-party only, so there is no reseller to detect. Availability is a yes/no — no quantity exists to warn on.',
+    note: 'First-party only, so there is no reseller to detect. Availability is a yes/no — no quantity exists to warn on. Currently behind a bot wall (see below).',
+    blocked: {
+      since: '2026-09-01',
+      what:
+        'Pokémon Center moved behind Imperva at 16:50 UTC on 1 Sep 2026. Product pages return an empty ' +
+        'document, so nothing can be read. Phantom names the wall and stands down rather than knocking; ' +
+        'it does not attempt to get past one, and it will not. Watching resumes by itself if the wall lifts.',
+    },
   },
 ];
 

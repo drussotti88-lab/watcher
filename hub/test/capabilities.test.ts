@@ -61,7 +61,10 @@ test('a shop that claims watching has a reader on disk', (t) => {
   const readers = readdirSync(dir);
 
   for (const r of RETAILERS) {
-    if (statusOf(r.key, 'watch') !== 'live') continue;
+    // 'partial' still claims watching — a shop that is walled today has the
+    // same reader it had yesterday. Only 'none' and 'planned' are exempt.
+    const watch = statusOf(r.key, 'watch');
+    if (watch === 'none' || watch === 'planned') continue;
     const stem = r.key.replace(/-/g, '');
     assert.ok(
       readers.some((f) => f === `${stem}.ts`),
@@ -171,5 +174,23 @@ test('the endpoint says nothing about any person', async () => {
   const text = JSON.stringify(await res.json()).toLowerCase();
   for (const leak of ['roberto', 'danru', 'password', 'token', 'secret', '@']) {
     assert.ok(!text.includes(leak), `the public feature list must not contain "${leak}"`);
+  }
+});
+
+test('A BLOCKED SHOP CANNOT ALSO CLAIM IT IS WORKING', () => {
+  // The table exists so the vault's perks page stays honest. Saying a shop is
+  // blocked in prose while its abilities still read 'live' would sell exactly
+  // the thing that is not happening — and prose is the half nobody renders.
+  for (const r of RETAILERS) {
+    if (!r.blocked) continue;
+    assert.match(r.blocked.since, /^\d{4}-\d{2}-\d{2}$/, `${r.name}: blocked.since needs a date`);
+    assert.ok(r.blocked.what.length > 40, `${r.name}: say what happened`);
+    for (const ability of ['watch', 'discover', 'queueAlarm']) {
+      assert.notEqual(
+        statusOf(r.key, ability),
+        'live',
+        `${r.name} is blocked but still claims ${ability} works`,
+      );
+    }
   }
 });
