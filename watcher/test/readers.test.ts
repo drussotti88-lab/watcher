@@ -519,3 +519,31 @@ test('a vendor name on a first-party listing does not make it a marketplace one'
   assert.equal(read.seller.kind, 'retailer');
   assert.equal(read.seller.name, 'Target');
 });
+
+test('STOCK COUNTED BUT NOT SELLABLE IS NAMED STAGED, NOT CONTRADICTED', async () => {
+  // "shipping OUT_OF_STOCK; atp 31000" reads as the reader disagreeing with
+  // itself. It is not a contradiction — it is a drop being loaded in — and
+  // the note now says which of the two facts is the news.
+  const loaded = JSON.parse(JSON.stringify(streetFixture));
+  const product =
+    loaded.data_source_modules[0].module_data.search_response.products[0];
+  product.fulfillment.shipping_options.available_to_promise_quantity = 31000;
+
+  const read = readTargetBodies([loaded], '1010892076', CAPTURE_DAY);
+  assert.equal(read.state, 'out', 'staged stock is still not buyable');
+  assert.equal(read.availableQuantity, 31000);
+  assert.match(read.note, /atp 31000 STAGED — not sellable yet/);
+});
+
+test('stock that IS sellable is just stock', async () => {
+  const live = JSON.parse(JSON.stringify(streetFixture));
+  const product =
+    live.data_source_modules[0].module_data.search_response.products[0];
+  product.fulfillment.shipping_options.availability_status = 'IN_STOCK';
+  product.fulfillment.shipping_options.available_to_promise_quantity = 14;
+
+  const read = readTargetBodies([live], '1010892076', CAPTURE_DAY);
+  assert.equal(read.state, 'in');
+  assert.match(read.note, /atp 14/);
+  assert.doesNotMatch(read.note, /STAGED/);
+});

@@ -279,6 +279,11 @@ button.small { padding: 4px 10px; font-size: 12px; border-radius: var(--r-sm); b
 .flag { background: var(--alert-bg); color: var(--alert); }
 .info { background: var(--accent-soft); color: var(--accent); }
 .fresh { background: var(--accent); color: #fff; }
+/* Staged stock: counted, not sellable. Its own colour because it is a third
+   state, not a shade of in or out — and a bright one, because it is the hour
+   before a drop and the whole point is that it catches your eye. */
+.staged { background: var(--alert-bg); color: var(--alert); font-weight: 700; }
+.meta.staged { background: none; letter-spacing: 0; text-transform: none; }
 /* The grid restyles the same cards; it lives below the rules it overrides so
    the pinned .pill/.right definitions stay the first (and canonical) ones. */
 .gridded { display: grid; grid-template-columns: repeat(auto-fill, minmax(228px, 1fr));
@@ -1144,6 +1149,45 @@ function emptyBlock(title, detail) {
   return box;
 }
 
+/**
+ * Stock that EXISTS but cannot be bought yet.
+ *
+ * Three states, not two, and the middle one is the whole point. "0 available"
+ * and "8 available" were the only things this card could say, which collapsed
+ * a genuinely different situation into one of them: units sitting in the
+ * warehouse against a listing the site still refuses to sell. That is what a
+ * scheduled drop looks like in the hours before it goes live — measured 1 Sep
+ * 2026, when a competitor read 30,000 units at 11:34pm for a 3am drop — and
+ * calling it "30000 available" would be a lie you could act on, while calling
+ * it "0 available" throws away the best warning Target gives.
+ *
+ * So: staged means counted and not yet sellable. It is the same fact the
+ * STOCK LOADED alarm fires on, said in the standing state of the card rather
+ * than as a one-off event.
+ */
+function isStaged(r) {
+  const q = r.availableQuantity;
+  return q !== null && q !== undefined && q > 0 && r.state !== 'in';
+}
+
+/**
+ * The count, in words that say which of the three it is.
+ *
+ * The plus carries its own meaning: Target's figure is a real number below a
+ * ceiling and a ceiling above it (0, 8, 9, 10, 14, 18, 20 across every reading
+ * so far, 10 and 20 far too often to be chance), so "20" means at least twenty
+ * and "9" means nine. Which makes it precise exactly when it matters: as a
+ * drop is eaten the number falls under the ceiling and starts telling truth.
+ */
+function stockLine(r) {
+  const q = r.availableQuantity;
+  if (q === null || q === undefined) return '';
+  const capped = q === 10 || q === 20;
+  const n = capped ? q + '+' : String(q);
+  if (isStaged(r)) return n + ' staged · not sellable yet';
+  return n + ' available';
+}
+
 /* ── missions ───────────────────────────────────────────────────────────── */
 
 function missionCard(m) {
@@ -1190,6 +1234,11 @@ function missionCard(m) {
       flags.appendChild(el('span', 'pill s-queue', 'PRE-ORDER'));
     } else {
       flags.appendChild(el('span', 'pill s-' + m.state, label));
+    }
+    // Loud, and next to the "out of stock" it qualifies: the site says no, and
+    // the warehouse says otherwise. This is the hour to be awake.
+    if (isStaged(m)) {
+      flags.appendChild(el('span', 'pill staged', 'STOCK STAGED · DROP NEAR'));
     }
   }
 
@@ -1297,13 +1346,10 @@ function missionCard(m) {
   //
   // Which makes it precise exactly when it matters: as a drop is eaten the
   // number falls under the ceiling and starts telling the truth.
-  if (m.availableQuantity !== null && m.availableQuantity !== undefined) {
-    const q = m.availableQuantity;
-    // The plus carries the whole meaning. A sentence underneath explaining
-    // that "10+" means at least ten is the interface apologising for itself.
-    const capped = q === 10 || q === 20;
-    right.appendChild(el('div', 'meta', capped ? q + '+ available' : q + ' available'));
-  }
+  // Three answers, not two — see stockLine(). Staged stock is the pre-drop
+  // tell and gets said as such rather than being rounded to one of the others.
+  const stock = stockLine(m);
+  if (stock) right.appendChild(el('div', isStaged(m) ? 'meta staged' : 'meta', stock));
   // The number you can actually walk away with, which is not the one above.
   // A limit of 2 against 10 available is two, and burying that in the note
   // line while the headline says 10 is the wrong way round.

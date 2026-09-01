@@ -2658,3 +2658,52 @@ test('a window with no spacing set is honest that it would change nothing', asyn
   assert.match($(h, '#drop-state').textContent, /would change nothing/);
   assert.equal(($(h, '#drop-close') as any).hidden, true);
 });
+
+// ── Staged stock: counted, not sellable ──────────────────────────────────────
+
+test('STAGED STOCK IS ITS OWN ANSWER, NOT ROUNDED TO IN OR OUT', async () => {
+  // Units in the warehouse against a listing the site still refuses to sell:
+  // what a scheduled drop looks like in the hours before it opens. Calling it
+  // "31000 available" is a lie you could act on; calling it "0 available"
+  // throws away the best warning Target gives.
+  const staged = {
+    ...DASHBOARD,
+    missions: [{ ...DASHBOARD.missions[0], state: 'out', availableQuantity: 31000, price: 59.99 }],
+  };
+  const h = await boot(staged);
+  const card = $(h, '#missions .card');
+  assert.match(card.textContent, /31000 staged/);
+  assert.match(card.textContent, /not sellable yet/);
+  assert.match(card.textContent, /STOCK STAGED · DROP NEAR/);
+  assert.doesNotMatch(card.textContent, /31000 available/, 'never say a staged count is available');
+  assert.match(card.textContent, /out of stock/, 'and the site’s own answer still stands beside it');
+});
+
+test('sellable stock is just available, with no staged noise', async () => {
+  const live = {
+    ...DASHBOARD,
+    missions: [{ ...DASHBOARD.missions[0], state: 'in', availableQuantity: 14 }],
+  };
+  const h = await boot(live);
+  const card = $(h, '#missions .card');
+  assert.match(card.textContent, /14 available/);
+  assert.doesNotMatch(card.textContent, /staged/i);
+});
+
+test('a read zero stays "0 available" — absence is reserved for "never said"', async () => {
+  const zero = {
+    ...DASHBOARD,
+    missions: [{ ...DASHBOARD.missions[0], state: 'out', availableQuantity: 0 }],
+  };
+  const h = await boot(zero);
+  assert.match($(h, '#missions .card').textContent, /0 available/);
+  assert.doesNotMatch($(h, '#missions .card').textContent, /staged/i);
+});
+
+test('the capped figure keeps its plus, staged or not', async () => {
+  const h = await boot({
+    ...DASHBOARD,
+    missions: [{ ...DASHBOARD.missions[0], state: 'out', availableQuantity: 20 }],
+  });
+  assert.match($(h, '#missions .card').textContent, /20\+ staged/);
+});

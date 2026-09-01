@@ -255,7 +255,14 @@ export function readTargetBodies(
 
   const notes: string[] = [];
   if (shippingStatus) notes.push(`shipping ${shippingStatus}`);
-  if (quantity !== null) notes.push(`atp ${quantity}`);
+  // Counted, but not sellable: the shape of a scheduled drop in the hours
+  // before it opens. Saying only "atp 31000" next to OUT_OF_STOCK reads as a
+  // contradiction; naming it staged says which of the two is the news.
+  if (quantity !== null) {
+    notes.push(
+      quantity > 0 && state !== 'in' ? `atp ${quantity} STAGED — not sellable yet` : `atp ${quantity}`,
+    );
+  }
   if (orderLimit !== null) notes.push(`limit ${orderLimit}`);
   // Only dates that are still ahead (or today) are information. Target keeps
   // publishing a street date long after it has passed — Chaos Rising carried
