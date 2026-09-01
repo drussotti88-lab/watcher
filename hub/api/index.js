@@ -5610,6 +5610,148 @@ self.addEventListener('fetch', (event) => {
 });
 `;
 
+// src/capabilities.ts
+var ABILITIES = [
+  {
+    key: "watch",
+    label: "Stock watching",
+    blurb: "Reads the real product page on a schedule and says what it actually said.",
+    audience: "member"
+  },
+  {
+    key: "discover",
+    label: "New-product discovery",
+    blurb: "Sweeps the catalogue and finds products before anyone links you to them.",
+    audience: "member"
+  },
+  {
+    key: "releaseDates",
+    label: "Release dates",
+    blurb: "Reads the publisher\u2019s street date, so a pre-order has a countdown.",
+    audience: "member"
+  },
+  {
+    key: "stagedStock",
+    label: "Staged-stock warning",
+    blurb: "Sees warehouse stock loaded against a listing that cannot be sold yet \u2014 hours of warning before a drop opens.",
+    audience: "member"
+  },
+  {
+    key: "queueAlarm",
+    label: "Queue alarm",
+    blurb: "Shouts the moment a waiting room goes up, which is the loudest sign a drop is live.",
+    audience: "member"
+  },
+  {
+    key: "sellerCheck",
+    label: "Marketplace detection",
+    blurb: "Tells a first-party listing from a third-party reseller, so you are not shown a scalper at 1.5\xD7.",
+    audience: "member"
+  },
+  {
+    key: "autoCheckout",
+    label: "Automatic checkout",
+    blurb: "Adds to cart and completes an order unattended, under a price ceiling and a daily spend cap.",
+    audience: "owner"
+  }
+];
+var RETAILERS = [
+  {
+    key: "target",
+    name: "Target",
+    abilities: {
+      watch: "live",
+      discover: "live",
+      releaseDates: "live",
+      stagedStock: "live",
+      queueAlarm: "live",
+      sellerCheck: "live",
+      autoCheckout: "live"
+    },
+    note: "The most complete shop, and the only one with a checkout that has been verified against a real cart."
+  },
+  {
+    key: "walmart",
+    name: "Walmart",
+    abilities: {
+      watch: "live",
+      discover: "live",
+      releaseDates: "live",
+      // The reader parses a quantity, but across every capture so far Walmart
+      // has returned null for it. Claiming 'live' would be claiming a warning
+      // that has never once been able to fire.
+      stagedStock: "partial",
+      queueAlarm: "live",
+      sellerCheck: "live",
+      autoCheckout: "planned"
+    },
+    note: "Watching and discovery are solid. Checkout is planned; the quantity Walmart publishes has never been a real number."
+  },
+  {
+    key: "pokemon-center",
+    name: "Pok\xE9mon Center",
+    abilities: {
+      watch: "live",
+      discover: "live",
+      releaseDates: "partial",
+      // JSON-LD carries in-stock/out-of-stock and nothing else. There is no
+      // quantity to watch even in principle.
+      stagedStock: "none",
+      queueAlarm: "live",
+      sellerCheck: "none",
+      autoCheckout: "planned"
+    },
+    note: "First-party only, so there is no reseller to detect. Availability is a yes/no \u2014 no quantity exists to warn on."
+  }
+];
+var FEATURES = [
+  {
+    key: "releaseRadar",
+    label: "Release radar",
+    blurb: "Every known street date ahead, soonest first.",
+    status: "live",
+    audience: "member"
+  },
+  {
+    key: "dropWindow",
+    label: "Drop-window burst",
+    blurb: "Checks faster while staged stock says a drop is near, and returns to a polite pace afterwards.",
+    status: "live",
+    audience: "member"
+  },
+  {
+    key: "activityLog",
+    label: "Activity log",
+    blurb: "Every check, with what the page said and why anything was decided.",
+    status: "live",
+    audience: "member"
+  },
+  {
+    key: "vaultWriteback",
+    label: "Purchases into your vault",
+    blurb: "A confirmed order becomes a collection item with its real cost basis, after you confirm the match.",
+    status: "live",
+    audience: "owner"
+  },
+  {
+    key: "spendCap",
+    label: "Spend cap and price ceilings",
+    blurb: "Nothing can be armed without a daily cap, and the cart gets the final word on the price.",
+    status: "live",
+    audience: "owner"
+  },
+  {
+    key: "memberMissions",
+    label: "Your own watchlist",
+    blurb: "Members watching their own products on their own machine.",
+    status: "planned",
+    audience: "member"
+  }
+];
+function capabilityTable() {
+  return { app: "Phantom by DNA", abilities: ABILITIES, retailers: RETAILERS, features: FEATURES };
+}
+
 // src/app.ts
 var SWEEP_SOURCE = "target-tcg";
 function json(body, status = 200, headers = {}) {
@@ -5678,6 +5820,15 @@ function createHandler(db2, env2) {
     if (request.method === "GET" && (path === "/apple-touch-icon.png" || path === "/apple-touch-icon-precomposed.png")) {
       const icon = iconResponse("192");
       if (icon) return icon;
+    }
+    if (path === "/api/capabilities" && (request.method === "GET" || request.method === "OPTIONS")) {
+      const headers = {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET, OPTIONS",
+        "Cache-Control": "public, s-maxage=3600, stale-while-revalidate=86400"
+      };
+      if (request.method === "OPTIONS") return new Response(null, { status: 204, headers });
+      return json(capabilityTable(), 200, headers);
     }
     if (request.method === "GET" && path.startsWith("/icon-") && path.endsWith(".png")) {
       const icon = iconResponse(path.slice("/icon-".length, -".png".length));

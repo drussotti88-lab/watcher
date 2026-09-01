@@ -46,6 +46,7 @@ import {
 import { loginPage, ssoPage, dashboardPage } from './page.ts';
 import { identifyListing } from './parsers/identify.ts';
 import { MANIFEST, SERVICE_WORKER, iconResponse } from './pwa.ts';
+import { capabilityTable } from './capabilities.ts';
 
 /**
  * The source a Phantom-side sweep reports into.
@@ -154,6 +155,28 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
         (path === '/apple-touch-icon.png' || path === '/apple-touch-icon-precomposed.png')) {
       const icon = iconResponse('192');
       if (icon) return icon;
+    }
+
+    /**
+     * What Phantom can do, per retailer — read by DNA Card Vault's membership
+     * page so its claims cannot drift from this code.
+     *
+     * Public and unauthenticated on purpose: it describes the product, not any
+     * person, and a page that must sign in to learn the feature list is a page
+     * that will hard-code the feature list instead. CORS is open for the same
+     * reason — the vault may render it on the server or in the browser.
+     *
+     * Cached for an hour at the edge. A capability changes when code ships, not
+     * by the minute, and a marketing page should not be a load on this app.
+     */
+    if (path === '/api/capabilities' && (request.method === 'GET' || request.method === 'OPTIONS')) {
+      const headers = {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, OPTIONS',
+        'Cache-Control': 'public, s-maxage=3600, stale-while-revalidate=86400',
+      };
+      if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers });
+      return json(capabilityTable(), 200, headers);
     }
 
     if (request.method === 'GET' && path.startsWith('/icon-') && path.endsWith('.png')) {
