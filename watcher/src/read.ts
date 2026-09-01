@@ -15,6 +15,7 @@
 import type { Page, Response } from 'playwright';
 import type { Browser } from './browser.ts';
 import { detectChallenge } from './challenge.ts';
+import { raceToRead } from './racer.ts';
 import { readWhenReady } from './settle.ts';
 import { isInterestingApi } from './apisniff.ts';
 import { offersFromLd } from './inspect.ts';
@@ -32,6 +33,28 @@ export interface Reading extends ProductRead {
   ms: number;
 }
 
+/**
+ * How hard to look, and for how long.
+ *
+ * 120ms because the overshoot is the cost: at the old 400ms poll a page that
+ * became readable at t+1010 was reported at t+1200. At 120 the worst case is a
+ * tenth of a second, and each look is one `page.evaluate` costing single-digit
+ * milliseconds.
+ *
+ * 9s for the confident answer. Every clean read measured has come in under
+ * three; anything past nine is not slow, it is wrong, and the fallback below
+ * is what finds out which kind of wrong.
+ */
+const FAST_POLL_MS = 120;
+const FAST_TIMEOUT_MS = 9_000;
+
+/**
+ * The fallback's own budget. Was 30s, which is what made a walled Pokémon
+ * Center page cost half a minute EACH — and there were eight of them. The page
+ * has already had nine seconds by the time we get here.
+ */
+const SLOW_TIMEOUT_MS = 10_000;
+
 /** Everything the readers need, pulled out of the page in one pass. */
 interface Scraped {
   ld: unknown[];
@@ -40,6 +63,8 @@ interface Scraped {
 }
 
 async function scrape(page: Page): Promise<Scraped> {
+  // With `waitUntil: 'commit'` the first look can land before there is a
+  // document to look at. That is a normal moment in the race, not a failure.
   return page.evaluate(() => {
     const ld: unknown[] = [];
     for (const el of Array.from(document.querySelectorAll('script[type="application/ld+json"]'))) {
@@ -112,11 +137,57 @@ export async function readListing(
   });
 
   page.on('response', onResponse);
+  let lastOgImage = '';
   try {
-    await page.goto(url, { waitUntil: 'domcontentloaded' });
-    // Settle rather than stop at a character count: the price is one of the
-    // last things to land, so "enough text" is not the same as "finished".
-    const read = await readWhenReady(page, { minText: 800, settleForMs: 2000, timeoutMs: 30_000 });
+    // `commit`, not `domcontentloaded`. We are not waiting for a lifecycle
+    // event any more — the reader itself says when it knows the answer — so
+    // returning the moment the response starts means the race below begins
+    // one to two seconds earlier on a heavy app.
+    await page.goto(url, { waitUntil: 'commit' });
+    const navMs = Date.now() - started;
+
+    // ── The race ────────────────────────────────────────────────────────────
+    //
+    // Ask the real reader every 120ms and stop the instant it is confident.
+    // On Target the answer arrives on the wire, not in the DOM, so the old
+    // two-second text-settle was two seconds spent watching something the
+    // reader never looks at.
+    const race = await raceToRead(
+      {
+        read: async () => {
+          const scraped = await scrape(page);
+          lastOgImage = scraped.ogImage || lastOgImage;
+          return readFor(retailer, externalId, scraped, bodies);
+        },
+        wait: (ms) => page.waitForTimeout(ms),
+        now: () => Date.now(),
+      },
+      { pollMs: FAST_POLL_MS, timeoutMs: FAST_TIMEOUT_MS },
+    );
+
+    if (race.won && race.read) {
+      await Promise.all(pending);
+      return {
+        ...race.read,
+        challenged: false,
+        challengeReason: '',
+        imageUrl: race.read.imageUrl || lastOgImage,
+        ms: Date.now() - started,
+      };
+    }
+
+    // ── The page did not answer ─────────────────────────────────────────────
+    //
+    // Either it is a wall, or it is genuinely slow. Both need the page's title
+    // and text, which the race never asked for. The settle window is short
+    // here on purpose: the page has already had FAST_TIMEOUT_MS of our
+    // attention, and the reason we are down here is that watching it has not
+    // been working.
+    const read = await readWhenReady(page, {
+      minText: 800,
+      settleForMs: 1200,
+      timeoutMs: SLOW_TIMEOUT_MS,
+    });
     await Promise.all(pending);
 
     const challenge = detectChallenge(read.title, read.text, read.html);
@@ -132,17 +203,22 @@ export async function readListing(
 
     const scraped = await scrape(page);
     const base = readFor(retailer, externalId, scraped, bodies);
+    // The best the race managed beats a last look that knows less — a body
+    // that was captured and then a navigation that cleared the DOM would
+    // otherwise turn "out of stock" back into "unknown".
+    const answer = base.state === 'unknown' && race.read ? race.read : base;
 
     return {
-      ...base,
+      ...answer,
       challenged: false,
       challengeReason: '',
       // The reader's own answer wins. og:image is the fallback because it is
       // chosen for social previews — on a seasonal page it can be a banner
       // rather than the product, and that image then sticks forever, since the
       // Hub keeps the first one it is given.
-      imageUrl: base.imageUrl || scraped.ogImage,
+      imageUrl: answer.imageUrl || scraped.ogImage || lastOgImage,
       ms: Date.now() - started,
+      note: answer.note || `slow page: ${navMs}ms to first byte, ${race.polls} looks`,
     };
   } catch (err) {
     return fail(`could not read the page: ${(err as Error).message}`);

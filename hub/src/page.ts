@@ -51,6 +51,45 @@ const FONTS =
   'family=Syne:wght@700;800&family=DM+Sans:wght@400;500;600;700&' +
   'family=DM+Mono:wght@400;500&display=swap">';
 
+/**
+ * Nav icons.
+ *
+ * Inline SVG rather than a font or a sprite: they inherit `currentColor`, so
+ * the selected state is one CSS rule and not a second copy of every drawing,
+ * and there is no second request to fail on a phone with one bar of signal.
+ *
+ * Stroke-only, 24-unit box, no fills. They are read at 21px on a bottom bar,
+ * where anything with interior detail turns to mud.
+ *
+ * `aria-hidden` on every one of them: the label beside it is the accessible
+ * name, and a screen reader announcing "image, crosshair, Missions" is worse
+ * than silence.
+ */
+const svg = (paths: string): string =>
+  `<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" ` +
+  `stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">` +
+  `${paths}</svg>`;
+
+const ICONS = {
+  // A crosshair: a mission is one thing, watched.
+  missions: svg('<circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2.2"/>' +
+    '<path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>'),
+  // A box.
+  products: svg('<path d="M3.5 7.5 12 3l8.5 4.5v9L12 21l-8.5-4.5z"/>' +
+    '<path d="M3.5 7.5 12 12l8.5-4.5M12 12v9"/>'),
+  // A pulse line: the log is a heartbeat, and its silences mean something.
+  activity: svg('<path d="M3 12h4l2.5-6 4 12L16 12h5"/>'),
+  // A magnifier: finds are what the sweep turned up.
+  finds: svg('<circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.5 15.5 5 5"/>'),
+  // A shield: the vault is where a bought thing is kept.
+  vault: svg('<path d="M12 3l7.5 3v6c0 4.5-3.2 7.6-7.5 9-4.3-1.4-7.5-4.5-7.5-9V6z"/>' +
+    '<path d="m9 12 2.2 2.2L15.5 10"/>'),
+  // A dial.
+  settings: svg('<circle cx="12" cy="12" r="3"/>' +
+    '<path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3' +
+    'M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/>'),
+};
+
 const STYLE = `
 :root {
   color-scheme: dark;
@@ -111,52 +150,86 @@ h3 { font: 700 14px/1.4 var(--display); margin: 0 0 8px; letter-spacing: -0.01em
 a { color: var(--accent); text-underline-offset: 2px; }
 
 /*
- * Tabs wrap rather than run off the edge.
+ * The nav. One element, two shapes, and they are the two shapes the platform
+ * already taught people:
  *
- * Five tabs with their counts are wider than a phone, and the fifth was simply
- * gone — not scrolled, not clipped with an affordance, just off the right-hand
- * side with nothing to say it was there. Horizontal scrolling would hide it
- * just as well for anyone who does not think to swipe a tab strip, so they
- * wrap: two short rows beat one row with a secret.
+ *   PHONE   a fixed bar along the BOTTOM, icon over label, one row, thumb-high.
+ *   BROWSER a side panel down the LEFT, icon beside label, brand on top.
+ *
+ * It used to be a wrapping strip stuck to the top on a phone. That solved the
+ * real problem it was written for — six tabs are wider than a phone, and the
+ * sixth was simply gone off the right-hand edge — but it solved it by eating
+ * two rows of the most valuable space on the screen, at the end furthest from
+ * the thumb. Every app this competes with puts its nav at the bottom because
+ * that is where the hand already is.
+ *
+ * Six items across the narrowest phone is ~53px each. That is why the label
+ * drops to 10px and the icon carries the recognition: a bottom bar is scanned
+ * by shape, not read.
  */
-/*
- * The nav. One element, two shapes: on a phone it is the sticky, blurred,
- * WRAPPING tab bar (five tabs and their counts are wider than a phone, and a
- * tab that is silently off-screen is a tab that does not exist); from 900px
- * up it becomes the side panel, with the brand at the top.
- */
-.shell { display: flex; align-items: stretch; min-height: 100vh; }
+.shell { display: flex; align-items: stretch; min-height: 100vh; flex-direction: column; }
 .shell > main { flex: 1; min-width: 0; }
-.tabs { display: flex; flex-wrap: wrap; gap: 2px; align-items: center;
-        border-bottom: 1px solid var(--line);
-        position: sticky; top: env(safe-area-inset-top, 0px); z-index: 30;
-        background: rgba(9, 8, 14, .8);
+.tabs { display: flex; align-items: center; z-index: 30;
+        background: rgba(9, 8, 14, .82);
         backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
-.shell { flex-direction: column; }
 .brand { display: flex; align-items: center; gap: 4px; padding: 8px 10px 8px 14px;
          font: 800 16px/1.2 var(--display); letter-spacing: -0.01em; white-space: nowrap; }
-@media (max-width: 520px) {
-  .tab { padding: 10px 11px; font-size: 13.5px; }
-  .tab .count { margin-left: 4px; }
-  .brand-name { display: none; }
-}
-.tab { padding: 10px 16px; cursor: pointer; border: none; background: none;
+/* The header's copy of the wordmark. Shown only when the side panel is not. */
+.phonebrand { display: none; padding: 0 0 2px; font-size: 17px; width: 100%; }
+@media (max-width: 899px) { .phonebrand { display: flex; } }
+.tab { cursor: pointer; border: none; background: none; border-radius: 0;
        font: 500 14px/1.4 var(--sans); color: var(--muted);
-       border-bottom: 2px solid transparent; border-radius: 0;
-       transition: color .12s, border-color .12s, background .12s; }
+       transition: color .12s, background .12s; }
 .tab:hover { color: var(--ink); }
-.tab.on { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
-.tab .count { font-family: var(--mono); font-size: 12px; opacity: .6; margin-left: 6px; }
+.tab .count { font-family: var(--mono); font-size: 12px; opacity: .6; }
+.tab .ico { flex: none; display: block; }
+
+/* ── Phone: the bottom bar ───────────────────────────────────────────────── */
+@media (max-width: 899px) {
+  .tabs { position: fixed; left: 0; right: 0; bottom: 0; top: auto;
+          border-top: 1px solid var(--line); padding-top: 2px;
+          /* The home-indicator strip on an iPhone. Without this the last row
+             of labels sits under it and reads as clipped. */
+          padding-bottom: env(safe-area-inset-bottom, 0px); }
+  /* The brand lives in the header on a phone. A wordmark in a bottom bar is
+     six percent of the width spent saying something the user already knows. */
+  .tabs .brand { display: none; }
+  .tab { position: relative; flex: 1 1 0; min-width: 0;
+         display: flex; flex-direction: column; align-items: center; gap: 3px;
+         padding: 7px 2px 6px; font-size: 10px; letter-spacing: .01em; }
+  .tab .ico { width: 21px; height: 21px; }
+  .tab.on { color: var(--accent); font-weight: 600; }
+  /* A badge on the icon, not a number after the label: at 10px an inline
+     count is indistinguishable from the word it follows. */
+  .tab .count { position: absolute; top: 4px; left: 50%; margin-left: 5px;
+                font-size: 9.5px; line-height: 1; opacity: 1; padding: 2px 4px;
+                border-radius: 6px; background: var(--accent-soft);
+                color: var(--ink); }
+  .tab .count:empty { display: none; }
+  /* Content must clear the bar. 58px is the bar, and the inset is whatever
+     the phone adds under it. */
+  .shell > main { padding-bottom: calc(58px + env(safe-area-inset-bottom, 0px)); }
+}
+
+/* ── Browser: the side panel ─────────────────────────────────────────────── */
 @media (min-width: 900px) {
   .shell { flex-direction: row; }
   .tabs { flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 3px;
-          width: 218px; flex: none; height: 100vh; top: 0; padding: 16px 12px;
-          border-bottom: none; border-right: 1px solid var(--line);
+          width: 218px; flex: none; height: 100vh;
+          position: sticky; top: 0;
+          padding: 16px 12px;
+          border-right: 1px solid var(--line);
           background: rgba(9, 8, 14, .55); }
-  .brand { padding: 6px 8px 18px; font-size: 18px; }
-  .tab { display: flex; align-items: center; text-align: left; width: 100%;
-         padding: 10px 12px; border-bottom: none; border-radius: 10px; }
-  .tab.on { background: var(--accent-soft); border-bottom-color: transparent; }
+  /* 218px minus its padding is 194px of room, and "Phantom by DNA" at 18px
+     next to a 34px mark is wider than that — it used to spill out over the
+     header. The panel gets a smaller mark and a smaller wordmark rather than
+     a truncated name. */
+  .brand { padding: 4px 6px 18px; font-size: 15.5px; overflow: hidden; }
+  .brand .mark { width: 26px; height: 26px; border-radius: 8px; }
+  .tab { display: flex; align-items: center; gap: 10px; text-align: left; width: 100%;
+         padding: 10px 12px; border-radius: 10px; }
+  .tab .ico { width: 17px; height: 17px; }
+  .tab.on { color: var(--ink); background: var(--accent-soft); font-weight: 600; }
   .tab .count { margin-left: auto; }
 }
 
@@ -552,15 +625,19 @@ ${FONTS}<style>${STYLE}</style></head>
 <body><div class="shell">
   <nav class="tabs" aria-label="Sections">
     <div class="brand"><span class="mark"></span><span class="brand-name">Phantom by DNA</span></div>
-    <button class="tab on" data-tab="missions">Missions<span class="count" id="c-missions"></span></button>
-    <button class="tab" data-tab="products">Products<span class="count" id="c-products"></span></button>
-    <button class="tab" data-tab="activity">Activity<span class="count" id="c-activity"></span></button>
-    <button class="tab" data-tab="finds">Finds<span class="count" id="c-finds"></span></button>
-    <button class="tab" data-tab="vault">Vault<span class="count" id="c-vault"></span></button>
-    <button class="tab" data-tab="settings">Settings</button>
+    <button class="tab on" data-tab="missions">${ICONS.missions}<span>Missions</span><span class="count" id="c-missions"></span></button>
+    <button class="tab" data-tab="products">${ICONS.products}<span>Products</span><span class="count" id="c-products"></span></button>
+    <button class="tab" data-tab="activity">${ICONS.activity}<span>Activity</span><span class="count" id="c-activity"></span></button>
+    <button class="tab" data-tab="finds">${ICONS.finds}<span>Finds</span><span class="count" id="c-finds"></span></button>
+    <button class="tab" data-tab="vault">${ICONS.vault}<span>Vault</span><span class="count" id="c-vault"></span></button>
+    <button class="tab" data-tab="settings">${ICONS.settings}<span>Settings</span></button>
   </nav>
 <main>
   <header>
+    <!-- The wordmark on a phone. The side panel carries it on a browser; a
+         bottom bar cannot spare the width, and a nameless app is a worse
+         trade than a header line. -->
+    <div class="brand phonebrand"><span class="mark"></span><span class="brand-name">Phantom by DNA</span></div>
     <div>
       <span class="sub" id="summary">loading…</span> <span class="who" id="who"></span>
     </div>

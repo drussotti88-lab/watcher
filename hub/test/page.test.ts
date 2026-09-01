@@ -1475,13 +1475,60 @@ test('and when it is over it offers another', async () => {
   assert.equal($(h, '#sweep-now').disabled, false);
 });
 
-test('THE TABS WRAP RATHER THAN RUNNING OFF THE EDGE', async () => {
-  // Five tabs and their counts are wider than a phone, and the fifth was
-  // simply gone — no scrollbar, no affordance, just off the right-hand side.
+test('NO TAB CAN RUN OFF THE EDGE OF A PHONE', async () => {
+  // The original bug: six tabs are wider than a phone and the sixth was simply
+  // gone — no scrollbar, no affordance, just off the right-hand side. It used
+  // to be fixed by wrapping onto two rows; it is now fixed by the six of them
+  // sharing the width. Either way the rule is that nothing is off-screen.
   const h = await boot();
   const style = h.doc.querySelector('style').textContent;
-  const tabs = /\.tabs \{([^}]*)\}/.exec(style)?.[1] ?? '';
-  assert.match(tabs, /flex-wrap:\s*wrap/);
+  const phone = /@media \(max-width: 899px\) \{([\s\S]*?)\n\}/.exec(style)?.[1] ?? '';
+  assert.match(phone, /\.tab \{[^}]*flex:\s*1 1 0/, 'every tab takes an equal share');
+  assert.match(phone, /min-width:\s*0/, 'and none of them can refuse to shrink');
+});
+
+test('THE PHONE NAV IS AT THE BOTTOM, WHERE THE THUMB IS', async () => {
+  const h = await boot();
+  const style = h.doc.querySelector('style').textContent;
+  const phone = /@media \(max-width: 899px\) \{([\s\S]*?)\n\}/.exec(style)?.[1] ?? '';
+  assert.match(phone, /\.tabs \{[^}]*position:\s*fixed/);
+  assert.match(phone, /\.tabs \{[^}]*bottom:\s*0/);
+  assert.match(phone, /\.tabs \{[^}]*top:\s*auto/, 'and explicitly not stuck to the top');
+});
+
+test('CONTENT CLEARS THE BOTTOM BAR, INCLUDING THE HOME INDICATOR', async () => {
+  // A fixed bar with nothing reserved for it hides the last card on the page,
+  // and on an iPhone the labels sit under the home indicator and read as
+  // clipped. Both are the same one-line mistake.
+  const h = await boot();
+  const style = h.doc.querySelector('style').textContent;
+  const phone = /@media \(max-width: 899px\) \{([\s\S]*?)\n\}/.exec(style)?.[1] ?? '';
+  assert.match(phone, /padding-bottom:\s*calc\(58px \+ env\(safe-area-inset-bottom/);
+  assert.match(phone, /\.tabs \{[^}]*padding-bottom:\s*env\(safe-area-inset-bottom/);
+});
+
+test('every nav item has an icon and a label, and the icon is not announced', async () => {
+  // A bottom bar is scanned by shape. But the icon is decoration: the label
+  // beside it is the accessible name, and "image, crosshair, Missions" is
+  // worse than silence.
+  const h = await boot();
+  const tabs = [...h.doc.querySelectorAll('.tab')];
+  assert.equal(tabs.length, 6);
+  for (const t of tabs) {
+    const ico = t.querySelector('svg.ico');
+    assert.ok(ico, `${t.dataset.tab} has no icon`);
+    assert.equal(ico.getAttribute('aria-hidden'), 'true');
+    assert.ok(t.textContent.trim().length > 0, `${t.dataset.tab} has no label`);
+  }
+});
+
+test('the wordmark survives on a phone, where the side panel is gone', async () => {
+  const h = await boot();
+  const inHeader = h.doc.querySelector('header .phonebrand .brand-name');
+  assert.equal(inHeader?.textContent, 'Phantom by DNA');
+  const style = h.doc.querySelector('style').textContent;
+  assert.match(style, /\.phonebrand \{[^}]*display:\s*none/, 'hidden by default');
+  assert.match(style, /@media \(max-width: 899px\) \{ \.phonebrand \{ display: flex/);
 });
 
 // ── Pre-order is not in stock ────────────────────────────────────────────────

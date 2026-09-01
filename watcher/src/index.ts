@@ -5,7 +5,7 @@
  * otherwise be guesses: can this machine see these sites at all, and what does
  * a given product page actually contain.
  */
-import { existsSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, rmSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { loadConfig, CONFIG_PATH } from './config.ts';
 import { Browser } from './browser.ts';
 import { probeAll, renderProbe, PROBE_TARGETS } from './probe.ts';
@@ -34,6 +34,7 @@ import { deepPages, interleave, todayLocal, type SweepStep } from './plan.ts';
 import { isQueue } from './challenge.ts';
 import { Activity } from './activity.ts';
 import { runSetup } from './setup.ts';
+import { takeLock, releaseLock, heldMessage, type LockDeps } from './lock.ts';
 
 /**
  * What to sweep when nothing is named.
@@ -76,6 +77,42 @@ const DEFAULT_QUERIES = [
  * A file is the least clever thing that works from anywhere.
  */
 const STOP_FILE = 'logs/.stop';
+
+/** Who is running. See lock.ts for why one at a time is not negotiable. */
+const LOCK_FILE = 'logs/.running';
+
+/** The lock, wired to the real filesystem and the real process table. */
+const lockDeps: LockDeps = {
+  read: () => {
+    try {
+      return existsSync(LOCK_FILE) ? readFileSync(LOCK_FILE, 'utf8') : null;
+    } catch {
+      return null;
+    }
+  },
+  write: (text) => {
+    mkdirSync('logs', { recursive: true });
+    writeFileSync(LOCK_FILE, text);
+  },
+  remove: () => {
+    try {
+      rmSync(LOCK_FILE);
+    } catch {
+      /* already gone is the outcome we wanted */
+    }
+  },
+  // Signal 0 sends nothing. It is the standard "does this pid exist" probe,
+  // and it throws ESRCH when it does not.
+  alive: (pid) => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  },
+  pid: process.pid,
+};
 
 /** How many pages deep to go per query. */
 const MAX_PAGES = 3;
@@ -229,6 +266,15 @@ async function runPasses(once: boolean): Promise<void> {
   Set hub.url and hub.token in ${CONFIG_PATH}.
   The token is the INGEST_TOKEN from your Hub's environment.
 `);
+    process.exitCode = 1;
+    return;
+  }
+
+  // Before anything opens a browser or talks to the Hub. A second instance
+  // that got as far as launching Chrome has already done the damage.
+  const lock = takeLock(lockDeps);
+  if (!lock.ok) {
+    console.error(heldMessage(lock.heldBy, LOCK_FILE));
     process.exitCode = 1;
     return;
   }
@@ -812,6 +858,9 @@ async function runPasses(once: boolean): Promise<void> {
   } finally {
     await activity.flush(true);
     await browser.close();
+    // Only if it is still ours: an instance that lost the race must not
+    // delete the winner's lock on its way out.
+    releaseLock(lockDeps);
   }
 }
 
