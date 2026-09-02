@@ -143,6 +143,22 @@ export function readTargetBodies(
         // it explains the quantity: the promise count is clamped to this, so
         // an "available 20" against a limit of 20 means *at least* 20, while
         // 9 against a limit of 20 means nine.
+        //
+        // Asked and answered, 2 Sep 2026. Other trackers quote exact counts,
+        // so the question was whether some other endpoint carries an unclamped
+        // figure. scripts/atp-probe.ts asked, from inside a real browser page
+        // on a real session:
+        //
+        //   product_fulfillment_v1  → atp 10, the same clamped number the PDP
+        //                             already gave for that tcin
+        //   pdp_fulfillment_v1      → 410 Gone
+        //
+        // So there is no larger number to fetch from Target while an item is
+        // sellable. The big figures this project HAS seen — 30,000 at 11:34pm
+        // for a 3am drop — come from the staged path below, before the listing
+        // opens, which is a different field in a different state and is already
+        // read. Do not go looking for a better endpoint again without new
+        // evidence; go look at staged stock instead.
         const itemFulfil = asRecord(item.fulfillment);
         if (itemFulfil) {
           const lim = Number(itemFulfil.purchase_limit);

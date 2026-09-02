@@ -4318,11 +4318,48 @@ function isStaged(r) {
  * and "9" means nine. Which makes it precise exactly when it matters: as a
  * drop is eaten the number falls under the ceiling and starts telling truth.
  */
+/**
+ * Is this number a count, or a ceiling wearing a number costume?
+ *
+ * Settled by measurement on 2 Sep 2026. Walking every captured Target response
+ * for nodes that state BOTH the promise count and the per-order purchase
+ * limit, there are four, and in all four they are the same number:
+ *
+ *   tcin 1008749492  atp 20  limit 20        tcin 1001539762  atp 10  limit 10
+ *   tcin 1004990536  atp 20  limit 20        tcin 1001539813  atp 10  limit 10
+ *
+ * So the published count is clamped to the limit, and landing exactly on it
+ * means AT LEAST that many. Counts that sit below any ceiling do occur - 8, 9,
+ * 14, 18 all appear - and those are real figures, printed plainly.
+ *
+ * The obvious next thought was that some other endpoint knows the true number,
+ * since other trackers quote precise ones. Probed it: a same-origin fetch from
+ * inside a real page on a real session to product_fulfillment_v1 returned atp
+ * 10 for a listing the page also called 10, and pdp_fulfillment_v1 answered
+ * 410 Gone. There is no less-clamped number to go and get. What we can do is
+ * stop printing a ceiling as though it were a census.
+ *
+ * When no limit came back, fall back to the two values that ceiling has always
+ * worn. A measurement beats a guess, and a guess beats saying nothing.
+ */
+function isCapped(r) {
+  const q = r.availableQuantity;
+  if (q === null || q === undefined || q <= 0) return false;
+  const lim = r.orderLimit;
+  if (lim !== null && lim !== undefined && lim > 0 && q === lim) return true;
+  return q === 10 || q === 20;
+}
+
+/** Said in full on hover, because the plus is doing a lot of work. */
+function stockWhy(r) {
+  if (!isCapped(r)) return 'Counted by the retailer, and below its per-order limit, so this is the actual figure.';
+  return 'A floor, not a count: the retailer publishes this number clamped to its own per-order limit, so there are at least this many and possibly a pallet. Measured 2 Sep 2026 - the fulfillment endpoint returns the same clamped number as the page, so no more precise figure exists to fetch.';
+}
+
 function stockLine(r) {
   const q = r.availableQuantity;
   if (q === null || q === undefined) return '';
-  const capped = q === 10 || q === 20;
-  const n = capped ? q + '+' : String(q);
+  const n = isCapped(r) ? q + '+' : String(q);
   if (isStaged(r)) return n + ' staged \xB7 not sellable yet';
   return n + ' available';
 }
@@ -4500,18 +4537,21 @@ function missionCard(m) {
   //
   // \u2500\u2500 Why the number sometimes wears a plus \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
   //
-  // Target's available_to_promise_quantity is a real figure below a ceiling and
-  // a ceiling above it. Across every reading taken so far the values are 0, 8,
-  // 9, 10, 14, 18 and 20 \u2014 never anything above 20, and 10 and 20 recur far
-  // too often to be coincidence. So "20" means *at least* twenty and possibly
-  // a pallet, while "9" means nine.
+  // Because it is a ceiling. Target clamps available_to_promise_quantity to
+  // the per-order purchase limit \u2014 measured, not guessed: the two fields carry
+  // the same values in every captured response. The plus is put on by
+  // isCapped(), and hovering the line says so in full.
   //
   // Which makes it precise exactly when it matters: as a drop is eaten the
   // number falls under the ceiling and starts telling the truth.
   // Three answers, not two \u2014 see stockLine(). Staged stock is the pre-drop
   // tell and gets said as such rather than being rounded to one of the others.
   const stock = stockLine(m);
-  if (stock) right.appendChild(el('div', isStaged(m) ? 'meta staged' : 'meta', stock));
+  if (stock) {
+    const stockEl = el('div', isStaged(m) ? 'meta staged' : 'meta', stock);
+    stockEl.title = stockWhy(m);
+    right.appendChild(stockEl);
+  }
   // The number you can actually walk away with, which is not the one above.
   // A limit of 2 against 10 available is two, and burying that in the note
   // line while the headline says 10 is the wrong way round.

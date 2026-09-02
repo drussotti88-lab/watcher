@@ -951,11 +951,42 @@ test('ZERO IS SHOWN — it is evidence the count was read', async () => {
 test('a real count is shown when it tells you something', async () => {
   // Target states a genuine number in its fulfillment API. How much runway a
   // restock has is worth knowing.
+  //
+  // 14, not 12: the fixture carries a per-order limit of 12, and a count that
+  // lands exactly on the limit is a ceiling rather than a census (see
+  // isCapped). Using the limit as the "genuine number" tested the opposite of
+  // what this test is named for.
+  const d = JSON.parse(JSON.stringify(DASHBOARD));
+  d.missions[0].state = 'in';
+  d.missions[0].availableQuantity = 14;
+  const h = await boot(d);
+  assert.match($(h, '#missions').textContent, /14 available/);
+});
+
+test('A COUNT THAT LANDS ON THE ORDER LIMIT IS A FLOOR', async () => {
+  // The measured rule. Every captured Target response that states both numbers
+  // states the same number twice: atp 20 against limit 20, atp 10 against
+  // limit 10. So the count is clamped to the limit, and "12 of 12" means at
+  // least twelve. Saying "12 available" there is a claim Target never made.
   const d = JSON.parse(JSON.stringify(DASHBOARD));
   d.missions[0].state = 'in';
   d.missions[0].availableQuantity = 12;
+  d.missions[0].orderLimit = 12;
   const h = await boot(d);
-  assert.match($(h, '#missions').textContent, /12 available/);
+  const text = $(h, '#missions').textContent;
+  assert.match(text, /12\+ available/);
+  assert.doesNotMatch(text, /12 available/);
+});
+
+test('a count above the order limit is not a clamp, so it is printed plainly', async () => {
+  // Clamping can only bring a number down. A count sitting above the limit
+  // therefore cannot be the limit showing through, whatever else it is.
+  const d = JSON.parse(JSON.stringify(DASHBOARD));
+  d.missions[0].state = 'in';
+  d.missions[0].availableQuantity = 31;
+  d.missions[0].orderLimit = 2;
+  const h = await boot(d);
+  assert.match($(h, '#missions').textContent, /31 available/);
 });
 
 test('a retailer that never states a count says nothing at all', async () => {
