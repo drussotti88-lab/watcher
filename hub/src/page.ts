@@ -571,16 +571,26 @@ button.small { padding: 4px 10px; font-size: 12px; border-radius: var(--r-sm); b
  * status colours, and a status colour without a word beside it is a colour
  * somebody has to guess at.
  */
-.stack { display: flex; height: 14px; border-radius: 7px; overflow: hidden;
+/* ── Named for what it is, after it ate every form on the site ──────────────
+   This was called .stack, which is also the class every FORM uses. The rule
+   form.stack set display and gap and won on specificity, so the forms still
+   laid out — but height 14px, overflow hidden and the panel background came
+   through untouched, and every form in the app silently became a 14-pixel
+   strip with its inputs clipped out of existence. The mission Settings dialog
+   rendered as a bar with three labels and nothing else.
+   (No backticks in this comment on purpose: one anywhere in here ends the
+   stylesheet's template literal and takes the whole page with it.)
+   A shared name is not a shared meaning. This one is the money bar. */
+.moneybar { display: flex; height: 14px; border-radius: 7px; overflow: hidden;
          background: var(--panel-2); margin-top: 12px; gap: 2px; }
-.stack > span { display: block; height: 100%;
+.moneybar > span { display: block; height: 100%;
                 /* A real number is never invisible. $1.09 against a $500 budget
                    is a fifth of a per cent — sub-pixel, and a segment that
                    rounds to nothing reads as money that is not there. */
                 min-width: 3px; }
-.stack .settled { background: var(--accent); }
-.stack .committed { background: var(--warn); }
-.stack .open { background: var(--alert); }
+.moneybar .settled { background: var(--accent); }
+.moneybar .committed { background: var(--warn); }
+.moneybar .open { background: var(--alert); }
 .legend { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 10px; font-size: 12.5px; }
 .legend span { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
 .legend i { width: 9px; height: 9px; border-radius: 3px; display: inline-block; }
@@ -737,7 +747,8 @@ button.small { padding: 4px 10px; font-size: 12px; border-radius: var(--r-sm); b
 .thumb.broken { color: var(--warn); border-color: var(--warn); }
 .thumb.lg { width: 104px; height: 104px; }
 
-form.stack { display: grid; gap: 11px; }
+/* Forms and any other vertical run of controls. */
+.stack, form.stack { display: grid; gap: 11px; }
 .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 11px; }
 label.f { display: grid; gap: 4px; font-size: 12px; color: var(--muted);
           font-weight: 500; letter-spacing: .01em; }
@@ -2074,8 +2085,81 @@ function missionCard(m) {
   settingsBtn.addEventListener('click', () => openDetail('mission', m.id));
   const runsBtn = el('button', 'small', 'Run history');
   runsBtn.addEventListener('click', () => openDetail('mission-runs', m.id));
+
+  /*
+   * Pausing on the card, without opening anything.
+   *
+   * This was two clicks and a dialog to change one boolean, and it is the
+   * boolean people change most: a drop is over, an item is a mistake, a shop
+   * is being noisy tonight. Everything else in that dialog is a decision about
+   * money and belongs behind a deliberate step. This is not.
+   *
+   * The POST carries the mission's other fields unchanged because the endpoint
+   * takes a whole mission. Sending only the enabled flag would quietly reset a
+   * ceiling somebody set — which is the kind of helpfulness that costs money.
+   */
+  const toggle = el('button', 'small', m.enabled ? 'Pause' : 'Resume');
+  if (!m.enabled) toggle.className = 'small primary';
+  toggle.title = m.enabled
+    ? 'Stop checking this listing. Nothing else changes.'
+    : 'Start checking this listing again on its schedule.';
+  toggle.addEventListener('click', async () => {
+    const was = toggle.textContent;
+    toggle.disabled = true;
+    toggle.textContent = m.enabled ? 'Pausing…' : 'Resuming…';
+    try {
+      await api('POST', '/api/missions', {
+        listingId: m.listingId,
+        label: m.label,
+        enabled: !m.enabled,
+        armed: m.armed,
+        ceiling: m.ceiling,
+        quantity: m.quantity,
+        sellerPolicy: m.sellerPolicy,
+        preOrderPolicy: m.preOrderPolicy,
+        checkEverySeconds: m.checkEverySeconds,
+      });
+      load();
+    } catch (err) {
+      toggle.textContent = was;
+      toggle.disabled = false;
+    }
+  });
+
   const acts = el('div', 'actions');
   acts.style.marginTop = '12px';
+  acts.append(toggle);
+
+  /*
+   * Disarming is one click. Arming is not, and that asymmetry is deliberate.
+   *
+   * Taking away permission to spend can never be the wrong thing to do by
+   * accident. GRANTING it beside a "Pause" button, on a list you scroll with
+   * your thumb, is a misclick that buys something. Arming stays in Settings
+   * where the ceiling and the quantity are on screen next to the tick.
+   */
+  if (m.armed) {
+    const disarm = el('button', 'small', 'Disarm');
+    disarm.title = 'Keep watching, but stop it buying without asking.';
+    disarm.addEventListener('click', async () => {
+      disarm.disabled = true;
+      disarm.textContent = 'Disarming…';
+      await api('POST', '/api/missions', {
+        listingId: m.listingId,
+        label: m.label,
+        enabled: m.enabled,
+        armed: false,
+        ceiling: m.ceiling,
+        quantity: m.quantity,
+        sellerPolicy: m.sellerPolicy,
+        preOrderPolicy: m.preOrderPolicy,
+        checkEverySeconds: m.checkEverySeconds,
+      }).catch(() => {});
+      load();
+    });
+    acts.append(disarm);
+  }
+
   acts.append(settingsBtn, runsBtn);
   card.appendChild(acts);
   return card;
@@ -4119,7 +4203,7 @@ function renderMoney2(m) {
     budgetNote.textContent = 'budget ' + money(m.budget);
     const used = m.settled + m.committed + m.open;
     const scale = Math.max(m.budget, used);
-    const row = el('div', 'stack');
+    const row = el('div', 'moneybar');
     const seg = (cls, v) => {
       if (v <= 0) return;
       const b = el('span', cls);

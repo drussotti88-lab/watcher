@@ -3365,3 +3365,66 @@ test('the webhook URL never reaches the page', async () => {
   assert.doesNotMatch(h.doc.body.innerHTML, /discord\.com\/api\/webhooks/i);
   assert.doesNotMatch(h.doc.body.innerHTML, /DISCORD_WEBHOOK_URL=/);
 });
+
+// ── Controls on the card itself ──────────────────────────────────────────────
+
+test('A MISSION CAN BE PAUSED FROM THE LIST, WITHOUT OPENING ANYTHING', async () => {
+  // The most-changed boolean in the app was two clicks and a dialog away, and
+  // that dialog is full of decisions about money.
+  const h = await boot(DASHBOARD);
+  const labels = [...h.doc.querySelectorAll('#missions button')].map((b) => b.textContent);
+  assert.ok(labels.includes('Pause'), 'an enabled mission offers Pause');
+
+  const paused = JSON.parse(JSON.stringify(DASHBOARD));
+  paused.missions[0].enabled = false;
+  const h2 = await boot(paused);
+  const labels2 = [...h2.doc.querySelectorAll('#missions button')].map((b) => b.textContent);
+  assert.ok(labels2.includes('Resume'), 'a paused one offers Resume');
+  assert.ok(!labels2.includes('Pause'));
+});
+
+test('pausing sends the whole mission, so nothing else is quietly reset', async () => {
+  // The endpoint takes a whole mission. A partial POST would wipe a ceiling
+  // somebody set, which is the kind of helpfulness that costs money.
+  const d = JSON.parse(JSON.stringify(DASHBOARD));
+  d.missions[0].ceiling = 55.5;
+  d.missions[0].quantity = 2;
+  const h = await boot(d);
+  h.reply('POST /api/missions', { ok: true });
+  const btn = [...h.doc.querySelectorAll('#missions button')].find((b) => b.textContent === 'Pause');
+  (btn as HTMLButtonElement).click();
+  await h.settle();
+  const call = h.calls.find((c) => c.path === '/api/missions' && c.method === 'POST');
+  assert.ok(call, 'it posted');
+  assert.equal(call.body.enabled, false);
+  assert.equal(call.body.ceiling, 55.5, 'the ceiling survived');
+  assert.equal(call.body.quantity, 2);
+});
+
+test('DISARMING IS ONE CLICK; ARMING IS NOT OFFERED HERE', async () => {
+  // Taking away permission to spend can never be wrong by accident. Granting
+  // it beside Pause, on a list you scroll with your thumb, is a misclick that
+  // buys something.
+  const armed = JSON.parse(JSON.stringify(DASHBOARD));
+  armed.missions[0].armed = true;
+  armed.missions[0].ceiling = 60;
+  const h = await boot(armed);
+  const labels = [...h.doc.querySelectorAll('#missions button')].map((b) => b.textContent);
+  assert.ok(labels.includes('Disarm'));
+  assert.ok(!labels.includes('Arm'), 'arming stays where the ceiling is visible');
+
+  const h2 = await boot(DASHBOARD);
+  const labels2 = [...h2.doc.querySelectorAll('#missions button')].map((b) => b.textContent);
+  assert.ok(!labels2.includes('Disarm'), 'nothing to disarm on a watching-only mission');
+});
+
+test('THE MONEY BAR DOES NOT SHARE A CLASS WITH EVERY FORM', async () => {
+  // It did, for one afternoon. `form.stack` won on display and gap, so the
+  // forms still laid out — while height 14px and overflow hidden came through
+  // untouched and clipped every input in the app out of existence.
+  const h = await boot(DASHBOARD);
+  const css = h.doc.querySelector('style').textContent;
+  assert.match(css, /\.moneybar \{[^}]*height: 14px/);
+  assert.doesNotMatch(css, /\n\.stack \{[^}]*height: 14px/, 'never again');
+  assert.match(css, /\.stack, form\.stack \{[^}]*display: grid/);
+});
