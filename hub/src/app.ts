@@ -961,6 +961,31 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
      * It does not clear the flag. Clearing belongs to the observation landing,
      * so a poll that Phantom never acts on cannot swallow the request.
      */
+    /*
+     * The dashboard's numbers.
+     *
+     * Its own endpoint rather than more weight on /api/dashboard: these are
+     * aggregates over the whole activity log and every run ever, and the page
+     * that refreshes every thirty seconds should not be paying for them. This
+     * one is asked for when the tab is opened, and when the range changes.
+     */
+    if (request.method === 'GET' && path === '/api/insights') {
+      const asked = Number(url.searchParams.get('hours') ?? '168');
+      // Clamped rather than trusted. An unbounded interval on the activity log
+      // is a query that gets slower every week it runs.
+      const hours = Number.isFinite(asked) ? Math.min(24 * 90, Math.max(1, asked)) : 168;
+      const [shape, machine, recent] = await Promise.all([
+        store.funnel(db, userId, hours),
+        store.health(db, userId, hours),
+        store.wins(db, userId, 3),
+      ]);
+      return json({ hours, funnel: shape, health: machine, wins: recent });
+    }
+
+    if (request.method === 'GET' && path === '/api/wins') {
+      return json({ wins: await store.wins(db, userId, 200) });
+    }
+
     if (request.method === 'GET' && path === '/api/check-now') {
       return json({ listingIds: await store.urgentListings(db, userId) });
     }

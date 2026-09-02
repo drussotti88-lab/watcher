@@ -3051,3 +3051,248 @@ export async function urgentListings(db: Sql, userId: number): Promise<number[]>
       );
   return rows.map((r) => Number(r.listing_id));
 }
+
+/* ── The dashboard ───────────────────────────────────────────────────────────
+ *
+ * Everything below answers one question — WHERE ARE WE LOSING IT? — and every
+ * number comes out of a table this system already writes. Nothing here is
+ * estimated, and nothing is shown that cannot be traced to a row.
+ *
+ * The honest shape of the funnel is two kinds of thing, and it says so rather
+ * than pretending otherwise: the first stages are STATES (what is being
+ * watched, what is armed, right now) and the last are EVENTS (what happened in
+ * the window). Drawing them as one smooth cone would be a nicer picture and a
+ * worse answer.
+ */
+
+export interface Funnel {
+  /** Enabled missions, right now. */
+  watching: number;
+  /** Of those, how many saw their listing in stock during the window. */
+  sawStock: number;
+  /** Of the ones that saw stock, how many were armed to do anything about it. */
+  sawStockArmed: number;
+  /** Grants issued in the window — the Hub said yes to spending. */
+  authorised: number;
+  /** Orders the retailer confirmed. */
+  bought: number;
+  /** Every run outcome in the window, most common first. The real diagnosis. */
+  outcomes: { outcome: string; n: number }[];
+  /** Why armed missions did not buy, in their own words, most common first. */
+  refusals: { reason: string; n: number }[];
+}
+
+export async function funnel(db: Sql, userId: number, hours: number): Promise<Funnel> {
+  const since = `${Math.max(1, Math.round(hours))} hours`;
+
+  const [state] = await db.query<{ watching: string; armed: string }>(
+    `SELECT count(*) FILTER (WHERE enabled)::text AS watching,
+            count(*) FILTER (WHERE enabled AND armed)::text AS armed
+       FROM missions WHERE user_id = $1`,
+    [userId],
+  );
+
+  // Seen in stock. Joined through THIS user's missions, so a reading written by
+  // somebody else's agent on a shared listing still counts for the person
+  // watching it — which is the whole point of one read serving everyone.
+  const [seen] = await db.query<{ seen: string; armed: string }>(
+    `SELECT count(DISTINCT m.listing_id)::text AS seen,
+            count(DISTINCT m.listing_id) FILTER (WHERE m.armed)::text AS armed
+       FROM missions m
+       JOIN observations o ON o.listing_id = m.listing_id
+      WHERE m.user_id = $1 AND m.enabled
+        AND o.state = 'in'
+        AND o.at > now() - $2::interval`,
+    [userId, since],
+  );
+
+  const [grants] = await db.query<{ n: string }>(
+    `SELECT count(*)::text AS n FROM authorisations
+      WHERE user_id = $1 AND granted_at > now() - $2::interval`,
+    [userId, since],
+  );
+
+  const outcomes = await db.query<{ outcome: string; n: string }>(
+    `SELECT r.outcome, count(*)::text AS n
+       FROM mission_runs r JOIN missions m ON m.id = r.mission_id
+      WHERE m.user_id = $1 AND r.started_at > now() - $2::interval
+      GROUP BY r.outcome ORDER BY count(*) DESC`,
+    [userId, since],
+  );
+
+  /*
+   * Why it did not buy, classified rather than chopped.
+   *
+   * The first version split the reason on its first comma, which for
+   * "sold by Rares Market L.L.C., and this mission is retailer-only" keeps the
+   * SELLER and throws away the reason — so every row had a count of one and
+   * the list said nothing. The useful half is the kind of refusal, and the
+   * kinds are knowable: this system writes them.
+   *
+   * Anything unmatched falls into its own bucket with its opening words
+   * intact, so a refusal nobody anticipated shows up as itself instead of
+   * being quietly folded into "other".
+   */
+  const refusals = await db.query<{ reason: string; n: string }>(
+    `SELECT CASE
+              WHEN r.reason ILIKE '%retailer-only%'       THEN 'Sold by a marketplace seller'
+              WHEN r.reason ILIKE '%pre-order%'           THEN 'It was a pre-order, not stock'
+              WHEN r.reason ILIKE '%no price ceiling%'    THEN 'Armed with no ceiling set'
+              WHEN r.reason ILIKE '%over the%ceiling%'    THEN 'Over the price ceiling'
+              WHEN r.reason ILIKE '%refusing to buy blind%' THEN 'In stock but no price could be read'
+              WHEN r.reason ILIKE '%cap%'                 THEN 'Would have passed the daily spend cap'
+              WHEN r.reason ILIKE '%press%hold%'
+                OR r.reason ILIKE '%challenge%'
+                OR r.reason ILIKE '%waiting room%'
+                OR r.reason ILIKE '%bot wall%'            THEN 'The shop asked for a human'
+              WHEN r.reason ILIKE '%watching only%'       THEN 'Seen, but the mission only watches'
+              WHEN r.outcome = 'failed'                   THEN 'The check or the checkout broke'
+              ELSE left(r.reason, 60)
+            END AS reason,
+            count(*)::text AS n
+       FROM mission_runs r JOIN missions m ON m.id = r.mission_id
+      WHERE m.user_id = $1 AND r.started_at > now() - $2::interval
+        AND r.outcome IN ('declined', 'blocked', 'failed')
+      GROUP BY 1 ORDER BY count(*) DESC LIMIT 8`,
+    [userId, since],
+  );
+
+  const n = (rows: { n: string }[], i = 0): number => Number(rows[i]?.n ?? 0);
+
+  return {
+    watching: Number(state?.watching ?? 0),
+    sawStock: Number(seen?.seen ?? 0),
+    sawStockArmed: Number(seen?.armed ?? 0),
+    authorised: n([grants ?? { n: '0' }]),
+    bought: Number(outcomes.find((o) => o.outcome === 'bought')?.n ?? 0),
+    outcomes: outcomes.map((o) => ({ outcome: String(o.outcome), n: Number(o.n) })),
+    refusals: refusals
+      .map((r) => ({ reason: String(r.reason ?? '').trim(), n: Number(r.n) }))
+      .filter((r) => r.reason),
+  };
+}
+
+export interface Health {
+  /** Page reads in the window. */
+  checks: number;
+  /** Reads that failed outright. */
+  failed: number;
+  /** Times a shop served a wall or a waiting room instead of a page. */
+  challenged: number;
+  /** Median read time per shop, in milliseconds. */
+  speed: { retailer: string; medianMs: number; checks: number }[];
+  /**
+   * The share of five-minute buckets in which the machine said anything.
+   *
+   * Not a uptime guess: Phantom writes an activity line every pass INCLUDING
+   * when it is resting outside watching hours, so a silent bucket means the
+   * process was not running. It is the same signal the silence banner uses,
+   * counted rather than thresholded.
+   */
+  uptime: number;
+  /** How many separate silences, so one long outage is not read as many. */
+  stalls: number;
+}
+
+export async function health(db: Sql, userId: number, hours: number): Promise<Health> {
+  const since = `${Math.max(1, Math.round(hours))} hours`;
+
+  const [totals] = await db.query<{ checks: string; failed: string; challenged: string }>(
+    `SELECT count(*) FILTER (WHERE kind = 'check')::text AS checks,
+            count(*) FILTER (WHERE kind = 'check' AND level = 'error')::text AS failed,
+            count(*) FILTER (WHERE message LIKE 'blocked:%')::text AS challenged
+       FROM activity
+      WHERE user_id = $1 AND at > now() - $2::interval`,
+    [userId, since],
+  );
+
+  const speed = await db.query<{ retailer: string; median: string; n: string }>(
+    `SELECT retailer,
+            percentile_cont(0.5) WITHIN GROUP (ORDER BY ms)::text AS median,
+            count(*)::text AS n
+       FROM activity
+      WHERE user_id = $1 AND at > now() - $2::interval
+        AND kind = 'check' AND ms IS NOT NULL AND ms > 0 AND retailer <> ''
+      GROUP BY retailer ORDER BY count(*) DESC`,
+    [userId, since],
+  );
+
+  // Buckets, not gaps. A gap query needs a window function over every row in
+  // the period; this counts distinct five-minute slots that have something in
+  // them and compares that to how many slots there were.
+  const [buckets] = await db.query<{ seen: string; total: string }>(
+    `SELECT count(DISTINCT date_trunc('hour', at) + interval '5 min' *
+              floor(extract(minute FROM at) / 5))::text AS seen,
+            (extract(epoch FROM $2::interval) / 300)::int::text AS total
+       FROM activity
+      WHERE user_id = $1 AND at > now() - $2::interval`,
+    [userId, since],
+  );
+
+  const seen = Number(buckets?.seen ?? 0);
+  const total = Math.max(1, Number(buckets?.total ?? 1));
+
+  return {
+    checks: Number(totals?.checks ?? 0),
+    failed: Number(totals?.failed ?? 0),
+    challenged: Number(totals?.challenged ?? 0),
+    speed: speed.map((s) => ({
+      retailer: String(s.retailer),
+      medianMs: Math.round(Number(s.median ?? 0)),
+      checks: Number(s.n),
+    })),
+    uptime: Math.min(1, seen / total),
+    stalls: Math.max(0, total - seen),
+  };
+}
+
+/**
+ * The wins. Confirmed orders only.
+ *
+ * A run marked 'bought' is only written after the retailer's own page said an
+ * order exists — the click alone proved nothing on the first live attempt, and
+ * that lesson is why this list can be trusted. Dry runs are not wins and are
+ * not here; a page that pads itself stops being worth opening.
+ */
+export interface Win {
+  runId: number;
+  missionId: number;
+  productName: string;
+  retailer: string;
+  at: string;
+  quantity: number;
+  unitPrice: number | null;
+  total: number | null;
+  msrp: number | null;
+  /** queued | sent | dismissed | null when no vault row exists yet. */
+  vaultStatus: string | null;
+}
+
+export async function wins(db: Sql, userId: number, limit = 100): Promise<Win[]> {
+  const rows = await db.query(
+    `SELECT r.id, r.mission_id, r.started_at, r.quantity, r.price, r.total,
+            p.name AS product_name, p.msrp, l.retailer,
+            a.status AS vault_status
+       FROM mission_runs r
+       JOIN missions m ON m.id = r.mission_id
+       JOIN listings l ON l.id = m.listing_id
+       JOIN products p ON p.key = l.product_key
+       LEFT JOIN acquisitions a ON a.mission_id = m.id AND a.user_id = $1
+      WHERE m.user_id = $1 AND r.outcome = 'bought'
+      ORDER BY r.started_at DESC
+      LIMIT $2`,
+    [userId, Math.min(500, Math.max(1, limit))],
+  );
+  return rows.map((r) => ({
+    runId: Number(r.id),
+    missionId: Number(r.mission_id),
+    productName: String(r.product_name ?? ''),
+    retailer: String(r.retailer ?? ''),
+    at: String(r.started_at),
+    quantity: Number(r.quantity ?? 1),
+    unitPrice: r.price === null || r.price === undefined ? null : Number(r.price),
+    total: r.total === null || r.total === undefined ? null : Number(r.total),
+    msrp: r.msrp === null || r.msrp === undefined ? null : Number(r.msrp),
+    vaultStatus: r.vault_status ? String(r.vault_status) : null,
+  }));
+}

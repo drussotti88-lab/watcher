@@ -84,6 +84,10 @@ const ICONS = {
   // A shield: the vault is where a bought thing is kept.
   vault: svg('<path d="M12 3l7.5 3v6c0 4.5-3.2 7.6-7.5 9-4.3-1.4-7.5-4.5-7.5-9V6z"/>' +
     '<path d="m9 12 2.2 2.2L15.5 10"/>'),
+  // A rising step: the dashboard is where the shape of things is read.
+  home: svg('<path d="M3 19h18"/><path d="M6 19v-5M10.5 19V9M15 19v-7M19.5 19V5"/>'),
+  // A rosette: a win is a thing that happened, not a thing being watched.
+  wins: svg('<circle cx="12" cy="9" r="5.5"/><path d="m8.6 13.6-1.6 7 5-2.6 5 2.6-1.6-7"/>'),
   // A dial.
   settings: svg('<circle cx="12" cy="12" r="3"/>' +
     '<path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3' +
@@ -204,6 +208,11 @@ a { color: var(--accent); text-underline-offset: 2px; }
 .tab:hover { color: var(--ink); }
 .tab .count { font-family: var(--mono); font-size: 12px; opacity: .6; }
 .tab .ico { flex: none; display: block; }
+/* One tab needs two names. "Dashboard" is nine characters in a bar with seven
+   slots, and an ellipsis on the landing tab's own name reads as a bug rather
+   than as tight spacing. */
+.l-narrow { display: none; }
+@media (max-width: 899px) { .l-wide { display: none; } .l-narrow { display: inline; } }
 
 /* ── Phone: the bottom bar ───────────────────────────────────────────────── */
 @media (max-width: 899px) {
@@ -217,7 +226,13 @@ a { color: var(--accent); text-underline-offset: 2px; }
   .tabs .brand { display: none; }
   .tab { position: relative; flex: 1 1 0; min-width: 0;
          display: flex; flex-direction: column; align-items: center; gap: 3px;
-         padding: 7px 2px 6px; font-size: 10px; letter-spacing: .01em; }
+         padding: 7px 1px 6px; font-size: 10px; letter-spacing: .01em; }
+  /* Seven items, and the longest label is nine characters. The label is
+     allowed to shrink rather than to collide: two words touching is how a
+     bottom bar stops reading as a bar. */
+  .tab > span:not(.count) { max-width: 100%; overflow: hidden; text-overflow: ellipsis;
+                            white-space: nowrap; }
+  @media (max-width: 400px) { .tab { font-size: 9px; letter-spacing: 0; } }
   .tab .ico { width: 21px; height: 21px; }
   .tab.on { color: var(--accent); font-weight: 600; }
   /* A badge on the icon, not a number after the label: at 10px an inline
@@ -494,6 +509,59 @@ button.small { padding: 4px 10px; font-size: 12px; border-radius: var(--r-sm); b
 .filters { display: grid; gap: 9px; margin-bottom: 14px; }
 /* One row: the shop lens, the Filters control, and the view switcher. It used
    to be three rows and the switcher had a row to itself. */
+/* ── The dashboard ───────────────────────────────────────────────────────────
+ *
+ * Deliberately almost no colour. The funnel is ONE hue at descending strength,
+ * because its job is magnitude in a fixed order — categorical colours here
+ * would give five stages five identities and bury the only thing that matters,
+ * which is where the number falls off a cliff.
+ *
+ * The status colours stay reserved for status, and never appear without a word
+ * next to them: a red bar that means "this is the problem" and a red bar that
+ * means "series four" cannot live in the same app.
+ */
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        gap: 10px; margin-bottom: 12px; }
+.kpi { border: 1px solid var(--line); border-radius: var(--r-ctl); padding: 12px 14px;
+       background: var(--panel-2); }
+.kpi .k { font: 500 11px/1.3 var(--sans); letter-spacing: .06em; text-transform: uppercase;
+          color: var(--muted); }
+.kpi .v { font: 700 26px/1.15 var(--display); margin-top: 6px;
+          font-variant-numeric: tabular-nums; }
+.kpi .n { font-size: 12px; color: var(--dim); margin-top: 3px; }
+.kpi.good .v { color: var(--in); }
+.kpi.bad .v { color: var(--alert); }
+
+/* One bar per stage. The label sits ABOVE its bar rather than beside it, so a
+   long stage name never squeezes the bar into a stub on a phone. */
+.fstage { margin-top: 14px; }
+.fstage .top { display: flex; align-items: baseline; gap: 8px; }
+.fstage .lbl { font-size: 13px; }
+.fstage .num { margin-left: auto; font: 700 15px/1 var(--mono); }
+.fstage .track { height: 10px; margin-top: 6px; border-radius: 5px;
+                 background: var(--panel-2); overflow: hidden; }
+.fstage .fill { height: 100%; border-radius: 5px; background: var(--accent);
+                transition: width .3s ease; }
+/* The one place a stage is called out, and it is called out in words too. */
+.fstage.cliff .lbl { color: var(--warn); font-weight: 600; }
+.fstage .drop { font-size: 12px; color: var(--muted); margin-top: 4px; }
+
+.verdict { margin-top: 16px; padding: 12px 14px; border-radius: var(--r-ctl);
+           background: var(--warn-bg); border: 1px solid rgba(224, 176, 96, .3);
+           font-size: 13.5px; line-height: 1.5; }
+.verdict.ok { background: var(--in-bg); border-color: rgba(95, 211, 160, .3); }
+
+/* A plain two-column list. Seven-odd reasons with counts is a table's job, not
+   a pie chart's — see the note in the dashboard comment. */
+.rows { margin-top: 10px; }
+.rowline { display: flex; align-items: baseline; gap: 10px; padding: 7px 0;
+           border-bottom: 1px solid var(--line); font-size: 13.5px; }
+.rowline:last-child { border-bottom: none; }
+.rowline .g { flex: 1 1 0; min-width: 0; }
+.rowline .c { font-family: var(--mono); font-size: 13px; color: var(--muted); }
+.rowline .bar { height: 4px; border-radius: 2px; background: var(--accent);
+                opacity: .55; margin-top: 5px; }
+
 .fltrow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
            margin: 0 0 10px; }
 .fltcount { margin: -4px 0 12px; }
@@ -918,11 +986,12 @@ ${FONTS}<style>${STYLE}</style></head>
 <body><div class="shell">
   <nav class="tabs" aria-label="Sections">
     <div class="brand"><span class="mark"></span><span class="brand-name"><b>Phantom</b> <i>by DNA</i></span></div>
-    <button class="tab on" data-tab="missions">${ICONS.missions}<span>Missions</span><span class="count" id="c-missions"></span></button>
+    <button class="tab on" data-tab="home">${ICONS.home}<span class="l-wide">Dashboard</span><span class="l-narrow">Home</span></button>
+    <button class="tab" data-tab="missions">${ICONS.missions}<span>Missions</span><span class="count" id="c-missions"></span></button>
     <button class="tab" data-tab="products">${ICONS.products}<span>Products</span><span class="count" id="c-products"></span></button>
     <button class="tab" data-tab="activity">${ICONS.activity}<span>Activity</span><span class="count" id="c-activity"></span></button>
     <button class="tab" data-tab="finds">${ICONS.finds}<span>Discovery</span><span class="count" id="c-finds"></span></button>
-    <button class="tab" data-tab="vault">${ICONS.vault}<span>Vault</span><span class="count" id="c-vault"></span></button>
+    <button class="tab" data-tab="wins">${ICONS.wins}<span>Wins</span><span class="count" id="c-vault"></span></button>
     <button class="tab" data-tab="settings">${ICONS.settings}<span>Settings</span></button>
   </nav>
 <main>
@@ -1028,7 +1097,51 @@ ${FONTS}<style>${STYLE}</style></head>
     </div>
   </div>
 
-  <section id="tab-missions">
+  <!-- ── The dashboard ────────────────────────────────────────────────────
+       One question: where are we losing it? The funnel leads because the
+       answer is almost never "the machine is slow" — it is a stage where
+       everything stops, and until this existed you had to infer that from a
+       log. Machine health sits underneath because it is the second question,
+       not the first. -->
+  <section id="tab-home">
+    <div class="fltrow">
+      <div class="chips" id="range-chips"></div>
+      <span class="grow"></span>
+      <span class="sub" id="range-note"></span>
+    </div>
+
+    <div class="card" id="funnel-card">
+      <div class="name">Where it goes</div>
+      <div class="sub" id="funnel-sub"></div>
+      <div id="funnel"></div>
+      <div id="funnel-verdict"></div>
+    </div>
+
+    <div class="kpis" id="home-kpis"></div>
+
+    <div class="card">
+      <div class="name">Why it did not buy</div>
+      <div class="sub">Every run that ended in something other than an order, in its own words.</div>
+      <div id="refusals"></div>
+    </div>
+
+    <div class="card">
+      <div class="name">The machine</div>
+      <div class="sub">Is it running, and how fast does it read a page?</div>
+      <div class="kpis" id="health-kpis"></div>
+      <div id="speed"></div>
+    </div>
+
+    <div class="card" id="wins-preview">
+      <div class="wizhead">
+        <div class="name">Latest wins</div>
+        <button type="button" class="small" id="see-wins">See all</button>
+      </div>
+      <div id="wins-preview-list"></div>
+    </div>
+  </section>
+
+  <section id="tab-missions" hidden>
     <!-- Twelve chips in three groups was six rows on a phone, before any
          content and under three rows of buttons. The shop is the lens people
          actually use — which shop am I looking at — so it stays out. Status
@@ -1107,14 +1220,27 @@ ${FONTS}<style>${STYLE}</style></head>
     <div id="finds-list"></div>
   </section>
 
-  <section id="tab-vault" hidden>
-    <h2 style="margin-top:0">On their way to your vault</h2>
+  <!-- Wins and the vault queue are the same list seen twice: everything here
+       is a checkout the retailer's own page confirmed. Splitting them into two
+       tabs would have meant two names for one event and an eighth item in a
+       bottom bar that is already tight at seven. -->
+  <section id="tab-wins" hidden>
+    <h2 style="margin-top:0">Wins</h2>
+    <p class="sub" style="margin:-6px 0 16px">
+      Every order a retailer's own page confirmed. Not a click that seemed to
+      work — the first live attempt recorded "bought" while the item was still
+      sitting in the cart, and nothing has been written here on a guess since.
+    </p>
+    <div id="wins-summary" class="kpis"></div>
+    <div id="wins-list"></div>
+
+    <h2 style="margin-top:26px">On their way to your vault</h2>
     <p class="sub" style="margin:-6px 0 14px">
-      A checkout the page itself confirmed becomes a queued acquisition here.
-      You confirm which vault product it is — once per product, remembered for
-      next time — and <strong>Send</strong> adds it to your DNA Card Vault
-      collection with its real cost basis. A machine's guess never writes to
-      your portfolio; that is what the review is for.
+      A confirmed checkout becomes a queued acquisition. You confirm which vault
+      product it is — once per product, remembered for next time — and
+      <strong>Send</strong> adds it to your DNA Card Vault collection with its
+      real cost basis. A machine's guess never writes to your portfolio; that is
+      what the review is for.
     </p>
     <div id="acq-list"></div>
   </section>
@@ -3591,6 +3717,305 @@ function renderSilence() {
     'Phantom window is still open on the machine that watches.';
 }
 
+/* ── The dashboard ───────────────────────────────────────────────────────────
+ *
+ * Fetched on its own, when the tab is opened and when the range changes. These
+ * are aggregates over every activity row and every run ever written, and the
+ * page that refreshes on a thirty-second timer must not be paying for them.
+ */
+let INSIGHTS = null;
+let RANGE_HOURS = 168;
+const RANGES = [
+  { hours: 24, label: '24 hours' },
+  { hours: 168, label: '7 days' },
+  { hours: 720, label: '30 days' },
+];
+
+async function loadInsights() {
+  const host = document.getElementById('tab-home');
+  if (!host || host.hidden) return;
+  try {
+    INSIGHTS = await api('GET', '/api/insights?hours=' + RANGE_HOURS);
+  } catch (e) {
+    INSIGHTS = null;
+  }
+  renderHome();
+}
+
+function kpi(host, label, value, note, tone) {
+  const box = el('div', 'kpi' + (tone ? ' ' + tone : ''));
+  box.appendChild(el('div', 'k', label));
+  box.appendChild(el('div', 'v', value));
+  if (note) box.appendChild(el('div', 'n', note));
+  host.appendChild(box);
+  return box;
+}
+
+/** A stage of the funnel: label, count, and a bar as wide as its share. */
+function stage(host, label, n, of, note, cliff) {
+  const row = el('div', 'fstage' + (cliff ? ' cliff' : ''));
+  const top = el('div', 'top');
+  top.appendChild(el('span', 'lbl', label));
+  top.appendChild(el('span', 'num', String(n)));
+  row.appendChild(top);
+  const track = el('div', 'track');
+  const fill = el('div', 'fill');
+  fill.style.width = (of > 0 ? Math.max(1.5, (n / of) * 100) : 0) + '%';
+  track.appendChild(fill);
+  row.appendChild(track);
+  if (note) row.appendChild(el('div', 'drop', note));
+  host.appendChild(row);
+}
+
+function renderHome() {
+  const host = document.getElementById('tab-home');
+  if (!host || host.hidden) return;
+
+  const chips = document.getElementById('range-chips');
+  chips.textContent = '';
+  for (const r of RANGES) {
+    chips.appendChild(listChip(r.label, null, RANGE_HOURS === r.hours, () => {
+      RANGE_HOURS = r.hours;
+      loadInsights();
+    }));
+  }
+
+  const funnelHost = document.getElementById('funnel');
+  const verdict = document.getElementById('funnel-verdict');
+  const kpis = document.getElementById('home-kpis');
+  const refusals = document.getElementById('refusals');
+  const health = document.getElementById('health-kpis');
+  const speed = document.getElementById('speed');
+  for (const n of [funnelHost, verdict, kpis, refusals, health, speed]) n.textContent = '';
+
+  // Guarded on the SHAPE, not just on presence. A half-answer — an older
+  // server, a proxy that swallowed a field — must leave the page standing and
+  // say it has nothing, rather than throwing on the first property access and
+  // taking every other tab down with it.
+  if (!INSIGHTS || !INSIGHTS.funnel || !INSIGHTS.health) {
+    document.getElementById('funnel-sub').textContent =
+      INSIGHTS ? 'These numbers could not be read.' : 'Loading…';
+    return;
+  }
+
+  const f = INSIGHTS.funnel;
+  const h = INSIGHTS.health;
+  const label = (RANGES.find((r) => r.hours === INSIGHTS.hours) || {}).label || 'the window';
+  document.getElementById('range-note').textContent = 'over the last ' + label;
+  document.getElementById('funnel-sub').textContent =
+    'The first two are what is true now. The rest is what happened in the last ' + label + '.';
+
+  const top = Math.max(1, f.watching);
+  stage(funnelHost, 'Watching', f.watching, top, 'listings with a mission on them');
+  stage(funnelHost, 'Saw stock', f.sawStock, top,
+    f.watching ? pct(f.sawStock, f.watching) + ' of what is watched came in stock' : '');
+  stage(funnelHost, 'Armed when it did', f.sawStockArmed, top,
+    f.sawStock
+      ? pct(f.sawStockArmed, f.sawStock) + ' of the ones that appeared were armed to act'
+      : '',
+    f.sawStock > 0 && f.sawStockArmed === 0);
+  stage(funnelHost, 'Authorised', f.authorised, top, 'the Hub agreed to spend');
+  stage(funnelHost, 'Bought', f.bought, top, 'the retailer confirmed an order');
+
+  /*
+   * The verdict, in a sentence.
+   *
+   * A dashboard that shows five numbers and leaves the reader to find the
+   * cliff has done the easy half of the job. This names the steepest drop —
+   * and it does so EVEN WHEN SOMETHING WAS BOUGHT, because "one order" and
+   * "seven per cent of the stock we saw was armed for" are both true at once,
+   * and only the second one tells you what to do next.
+   */
+  const say = el('div', 'verdict');
+  const win = f.bought > 0
+    ? f.bought + ' order' + (f.bought === 1 ? '' : 's') + ' confirmed. '
+    : '';
+
+  if (f.watching === 0) {
+    say.textContent = 'Nothing is being watched yet. Add a listing and this fills in.';
+  } else if (f.sawStock === 0) {
+    say.textContent =
+      'Nothing you watch has come in stock in the last ' + label + '. That is not a ' +
+      'fault — it is what watching mostly looks like.';
+  } else if (f.sawStockArmed === 0) {
+    say.textContent = win +
+      'Stock appeared on ' + f.sawStock + ' listing' + (f.sawStock === 1 ? '' : 's') +
+      ' and none of them were armed, so nothing could be bought. Arming is the ' +
+      'step that is missing, not speed.';
+  } else if (f.sawStockArmed < f.sawStock / 2) {
+    // The common case, and the one the old wording hid behind a win: it did
+    // buy, and it was only ever in a position to buy a fraction of what it saw.
+    if (win) say.className = 'verdict ok';
+    say.textContent = win +
+      'Stock appeared on ' + f.sawStock + ' listings and ' + f.sawStockArmed +
+      ' of them ' + (f.sawStockArmed === 1 ? 'was' : 'were') + ' armed — ' +
+      pct(f.sawStockArmed, f.sawStock) + '. The other ' +
+      (f.sawStock - f.sawStockArmed) + ' were never in play.';
+  } else if (f.bought === 0 && f.authorised > 0) {
+    say.textContent =
+      'Money was authorised ' + f.authorised + ' time' + (f.authorised === 1 ? '' : 's') +
+      ' and no order came of it. The reasons are below — that is the list worth reading.';
+  } else if (f.bought > 0) {
+    say.className = 'verdict ok';
+    say.textContent = win + 'Everything armed that came in stock was acted on.';
+  } else {
+    say.textContent =
+      'Stock appeared and nothing was armed far enough to authorise a purchase.';
+  }
+  verdict.appendChild(say);
+
+  // ── the headline numbers ────────────────────────────────────────────────
+  const bought = f.outcomes.find((o) => o.outcome === 'bought');
+  const runs = f.outcomes.reduce((a, o) => a + o.n, 0);
+  kpi(kpis, 'Orders', String(f.bought), 'confirmed in ' + label, f.bought ? 'good' : '');
+  kpi(kpis, 'Runs', String(runs), 'times a mission acted, or could not');
+  kpi(kpis, 'Stock seen', String(f.sawStock), 'listings that came in stock');
+  kpi(kpis, 'Armed now', String(f.sawStockArmed) + ' / ' + f.sawStock,
+    'of those, armed to buy', f.sawStock && !f.sawStockArmed ? 'bad' : '');
+
+  // ── why not ─────────────────────────────────────────────────────────────
+  if (f.refusals.length === 0) {
+    refusals.appendChild(el('div', 'meta',
+      runs === 0
+        ? 'No mission has acted in this window, so there is nothing to explain.'
+        : 'Nothing was refused in this window.'));
+  } else {
+    const box = el('div', 'rows');
+    const most = Math.max.apply(null, f.refusals.map((r) => r.n));
+    for (const r of f.refusals) {
+      const line = el('div', 'rowline');
+      const g = el('div', 'g');
+      g.appendChild(document.createTextNode(r.reason));
+      const bar = el('div', 'bar');
+      bar.style.width = Math.max(2, (r.n / most) * 100) + '%';
+      g.appendChild(bar);
+      line.appendChild(g);
+      line.appendChild(el('span', 'c', String(r.n)));
+      box.appendChild(line);
+    }
+    refusals.appendChild(box);
+  }
+
+  // ── the machine ─────────────────────────────────────────────────────────
+  const up = Math.round(h.uptime * 100);
+  kpi(health, 'Reporting', up + '%', h.stalls ? h.stalls + ' quiet five-minute gaps' : 'no gaps',
+    up >= 95 ? 'good' : up >= 80 ? '' : 'bad');
+  kpi(health, 'Page reads', String(h.checks), 'in ' + label);
+  kpi(health, 'Failed', String(h.failed),
+    h.checks ? pct(h.failed, h.checks) + ' of reads' : '', h.failed ? 'bad' : '');
+  kpi(health, 'Challenged', String(h.challenged), 'walls and waiting rooms',
+    h.challenged ? 'bad' : '');
+
+  if (h.speed.length === 0) {
+    speed.appendChild(el('div', 'meta', 'No reads recorded in this window.'));
+  } else {
+    const box = el('div', 'rows');
+    const slowest = Math.max.apply(null, h.speed.map((x) => x.medianMs));
+    for (const x of h.speed) {
+      const line = el('div', 'rowline');
+      const g = el('div', 'g');
+      g.appendChild(document.createTextNode(x.retailer));
+      const bar = el('div', 'bar');
+      bar.style.width = Math.max(2, (x.medianMs / slowest) * 100) + '%';
+      g.appendChild(bar);
+      line.appendChild(g);
+      line.appendChild(el('span', 'c', (x.medianMs / 1000).toFixed(1) + 's · ' + x.checks));
+      box.appendChild(line);
+    }
+    speed.appendChild(box);
+    speed.appendChild(el('div', 'meta',
+      'Median time to read one page, and how many were read. Lower is how much ' +
+      'of a drop you are still in when the answer arrives.'));
+  }
+
+  renderWinsInto('wins-preview-list', INSIGHTS.wins || [], true);
+}
+
+function pct(n, of) {
+  if (!of) return '0%';
+  const p = (n / of) * 100;
+  return (p < 10 && p > 0 ? p.toFixed(1) : Math.round(p)) + '%';
+}
+
+/**
+ * The wins list, in both the places it appears.
+ *
+ * The preview flag trims it to what fits on a dashboard card and drops the
+ * vault status, which belongs next to the button that acts on it.
+ *
+ * (No backticks in this comment. It lives inside a template literal, and one
+ * of them ends the whole page.)
+ */
+function renderWinsInto(id, rows, preview) {
+  const host = document.getElementById(id);
+  if (!host) return;
+  host.textContent = '';
+
+  if (rows.length === 0) {
+    const empty = el('div', 'meta');
+    empty.style.marginTop = preview ? '8px' : '0';
+    empty.textContent = preview
+      ? 'No confirmed orders yet. The first one lands here on its own.'
+      : 'No confirmed orders yet. This page fills itself in — a run is only ' +
+        'written as a win once the retailer says, on its own page, that the ' +
+        'order exists.';
+    host.appendChild(empty);
+    return;
+  }
+
+  for (const w of rows) {
+    const row = el('div', 'rowline');
+    const g = el('div', 'g');
+    g.appendChild(el('div', null, w.productName || 'a product'));
+    const bits = [w.retailer, ago(w.at)];
+    if (w.quantity > 1) bits.push('×' + w.quantity);
+    if (!preview && w.vaultStatus) bits.push('vault: ' + w.vaultStatus);
+    g.appendChild(el('div', 'meta', bits.filter(Boolean).join(' · ')));
+    row.appendChild(g);
+
+    const right = el('div');
+    right.style.textAlign = 'right';
+    right.appendChild(el('div', 'c', money(w.total !== null ? w.total : w.unitPrice)));
+    // Against MSRP, a price is either a good buy or a bad one. Say which — but
+    // only when there is an MSRP to say it against.
+    if (w.msrp !== null && w.unitPrice !== null) {
+      const d = w.unitPrice - w.msrp;
+      const under = d <= 0;
+      const note = el('div', 'meta', (under ? '' : '+') + d.toFixed(2) + ' vs MSRP');
+      note.style.color = under ? 'var(--in)' : 'var(--warn)';
+      right.appendChild(note);
+    }
+    row.appendChild(right);
+    host.appendChild(row);
+  }
+}
+
+function renderWins() {
+  const host = document.getElementById('tab-wins');
+  if (!host || host.hidden) return;
+  const rows = WINS || [];
+  const box = document.getElementById('wins-summary');
+  box.textContent = '';
+  const spent = rows.reduce((a, w) => a + (w.total !== null ? w.total : 0), 0);
+  const units = rows.reduce((a, w) => a + (w.quantity || 1), 0);
+  kpi(box, 'Orders', String(rows.length), 'confirmed, all time', rows.length ? 'good' : '');
+  kpi(box, 'Items', String(units), 'across those orders');
+  kpi(box, 'Spent', money(spent), 'all-in, as the cart stated it');
+  renderWinsInto('wins-list', rows, false);
+}
+
+let WINS = null;
+async function loadWins() {
+  const host = document.getElementById('tab-wins');
+  if (!host || host.hidden) return;
+  try {
+    WINS = (await api('GET', '/api/wins')).wins || [];
+  } catch (e) {
+    WINS = [];
+  }
+  renderWins();
+}
+
 function renderRequests() {
   const card = document.getElementById('requests-card');
   if (!card) return;
@@ -4011,14 +4436,25 @@ document.getElementById('product-form').addEventListener('submit', async (e) => 
   });
 });
 
-for (const tab of document.querySelectorAll('.tab')) {
-  tab.addEventListener('click', () => {
-    for (const t of document.querySelectorAll('.tab')) t.classList.toggle('on', t === tab);
-    for (const name of ['missions', 'products', 'activity', 'finds', 'vault', 'settings']) {
-      document.getElementById('tab-' + name).hidden = name !== tab.dataset.tab;
-    }
-  });
+function showTab(name) {
+  for (const t of document.querySelectorAll('.tab')) {
+    t.classList.toggle('on', t.dataset.tab === name);
+  }
+  for (const n of ['home', 'missions', 'products', 'activity', 'finds', 'wins', 'settings']) {
+    document.getElementById('tab-' + n).hidden = n !== name;
+  }
+  // The two pages that pay for their own data, asked for only when looked at.
+  // Both are aggregates over every row ever written; neither belongs on the
+  // thirty-second refresh that keeps the watchlist current.
+  if (name === 'home') loadInsights();
+  if (name === 'wins') loadWins();
 }
+
+for (const tab of document.querySelectorAll('.tab')) {
+  tab.addEventListener('click', () => showTab(tab.dataset.tab));
+}
+
+document.getElementById('see-wins').addEventListener('click', () => showTab('wins'));
 
 const addDialog = document.getElementById('add-dialog');
 
@@ -4399,6 +4835,10 @@ document.getElementById('quick-form').addEventListener('submit', async (e) => {
 });
 
 if (location.pathname === '/add' || sharedUrl()) openQuickAdd(sharedUrl());
+
+// The dashboard is the landing tab, so its numbers are asked for once on the
+// way in — not on the refresh timer, which is for the watchlist.
+loadInsights();
 
 let timer = setInterval(load, 30000);
 document.getElementById('auto').addEventListener('change', (e) => {

@@ -13,7 +13,7 @@
  * real DOM, fill the real fields, click the real buttons, and assert on what
  * actually reaches the network.
  */
-import { test } from 'node:test';
+import { test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
 
@@ -127,6 +127,7 @@ async function boot(
     url,
     beforeParse: stub,
   });
+  OPEN.push(dom);
   const win = dom.window as any;
 
   const settle = async () => {
@@ -143,6 +144,26 @@ async function boot(
     fail: (path, error) => failures.set(path, error),
   };
 }
+
+/*
+ * Close the windows.
+ *
+ * Every boot() builds a whole JSDOM — document, timers, an event loop's worth
+ * of listeners — and none of them were ever torn down. At a hundred tests that
+ * is untidy; at two hundred and forty it is a suite that gets OOM-killed the
+ * moment it shares a machine with three others, and reports "fail 2" with no
+ * failing assertion anywhere in it.
+ *
+ * A test run that dies of its own weight is indistinguishable from a bug, and
+ * the wrong one is much easier to chase.
+ */
+const OPEN: { window: { close(): void } }[] = [];
+afterEach(() => {
+  for (const d of OPEN) {
+    try { d.window.close(); } catch { /* already gone */ }
+  }
+  OPEN.length = 0;
+});
 
 const $ = (h: Harness, sel: string): any => h.doc.querySelector(sel);
 const submit = (form: any, win: any): void => {
@@ -287,8 +308,15 @@ test('the refresh button refetches', async () => {
 
 test('tabs switch what is shown, and only one at a time', async () => {
   const h = await boot();
-  assert.equal($(h, '#tab-missions').hidden, false);
+  // The dashboard is the landing tab now — it answers "where are we losing
+  // it", which is the question you have before you have a specific mission.
+  assert.equal($(h, '#tab-home').hidden, false);
+  assert.equal($(h, '#tab-missions').hidden, true);
   assert.equal($(h, '#tab-products').hidden, true);
+
+  (h.doc.querySelector('[data-tab=missions]') as any).click();
+  assert.equal($(h, '#tab-home').hidden, true);
+  assert.equal($(h, '#tab-missions').hidden, false);
 
   (h.doc.querySelector('[data-tab=products]') as any).click();
   assert.equal($(h, '#tab-missions').hidden, true);
@@ -1557,7 +1585,7 @@ test('every nav item has an icon and a label, and the icon is not announced', as
   // worse than silence.
   const h = await boot();
   const tabs = [...h.doc.querySelectorAll('.tab')];
-  assert.equal(tabs.length, 6);
+  assert.equal(tabs.length, 7);
   for (const t of tabs) {
     const ico = t.querySelector('svg.ico');
     assert.ok(ico, `${t.dataset.tab} has no icon`);
@@ -2696,9 +2724,12 @@ const ACQ = {
   createdAt: new Date().toISOString(), imageUrl: '',
 };
 
-test('THE VAULT TAB EXISTS AND BADGES THE QUEUE', async () => {
+test('THE WINS TAB EXISTS AND BADGES THE VAULT QUEUE', async () => {
+  // Wins and the vault queue are one list seen twice — everything in both is a
+  // checkout the retailer confirmed. Two tabs would have been two names for
+  // one event, and an eighth item in a bottom bar already tight at seven.
   const h = await boot({ ...DASHBOARD, acquisitions: [ACQ, { ...ACQ, id: 6, status: 'sent', sentAt: new Date().toISOString() }] });
-  assert.ok(h.doc.querySelector('[data-tab="vault"]'), 'the tab is in the nav');
+  assert.ok(h.doc.querySelector('[data-tab="wins"]'), 'the tab is in the nav');
   assert.equal($(h, '#c-vault').textContent, '1', 'only QUEUED rows count — sent is done');
   const cards = h.doc.querySelectorAll('#acq-list .card');
   assert.equal(cards.length, 2, 'sent history stays visible under the queue');

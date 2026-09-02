@@ -92,7 +92,45 @@ const DASHBOARD = {
 const html = dashboardPage();
 const server = createServer((req, res) => {
   const path = String(req.url ?? '/').split('?')[0]!;
-  if (path === '/api/dashboard') {
+  if (path.startsWith('/api/insights')) {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({
+      hours: 168,
+      funnel: {
+        watching: 39, sawStock: 15, sawStockArmed: 1, authorised: 2, bought: 1,
+        outcomes: [
+          { outcome: 'in_stock', n: 41 }, { outcome: 'declined', n: 6 },
+          { outcome: 'blocked', n: 2 }, { outcome: 'failed', n: 2 }, { outcome: 'bought', n: 1 },
+        ],
+        refusals: [
+          { reason: 'Sold by a marketplace seller', n: 4 },
+          { reason: 'The shop asked for a human', n: 2 },
+          { reason: 'Armed with no ceiling set', n: 1 },
+          { reason: 'The check or the checkout broke', n: 1 },
+        ],
+      },
+      health: {
+        checks: 3128, failed: 4, challenged: 2, uptime: 0.71, stalls: 24,
+        speed: [
+          { retailer: 'Target', medianMs: 2510, checks: 1804 },
+          { retailer: 'Walmart', medianMs: 1327, checks: 892 },
+          { retailer: 'Pokemon Center', medianMs: 425, checks: 432 },
+        ],
+      },
+      wins: [
+        { runId: 1, missionId: 63, productName: 'Test pens', retailer: 'Target',
+          at: ago(60 * 30), quantity: 1, unitPrice: 0.99, total: 1.09, msrp: 1.29,
+          vaultStatus: 'queued' },
+      ],
+    }));
+  } else if (path === '/api/wins') {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ wins: [
+      { runId: 1, missionId: 63, productName: 'Test pens', retailer: 'Target',
+        at: ago(60 * 30), quantity: 1, unitPrice: 0.99, total: 1.09, msrp: 1.29,
+        vaultStatus: 'queued' },
+    ] }));
+  } else if (path === '/api/dashboard') {
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify(DASHBOARD));
   } else if (path === '/') {
@@ -111,6 +149,12 @@ for (const [w, h, label] of [[390, 844, 'phone'], [1280, 900, 'desktop']] as con
   const page = await browser.newPage({ viewport: { width: w, height: h } });
   await page.goto('http://localhost:4173/');
   await page.waitForTimeout(2500);
+  await page.screenshot({ path: `/home/claude/scratch/hubshots/${tag}-${label}-home.png` });
+  await page.click('[data-tab=wins]');
+  await page.waitForTimeout(500);
+  await page.screenshot({ path: `/home/claude/scratch/hubshots/${tag}-${label}-wins.png` });
+  await page.click('[data-tab=missions]');
+  await page.waitForTimeout(400);
   await page.screenshot({ path: `/home/claude/scratch/hubshots/${tag}-${label}-missions.png` });
   await page.evaluate(() => document.getElementById('flt-missions-more')?.click());
   await page.waitForTimeout(250);
