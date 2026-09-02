@@ -170,12 +170,25 @@ const submit = (form: any, win: any): void => {
   form.dispatchEvent(new win.Event('submit', { bubbles: true, cancelable: true }));
 };
 
-/** Open a card's detail pop-up the way a person does: by pressing its button. */
+/**
+ * Open a mission's pop-up the way a person does: by pressing the card.
+ *
+ * It used to be a Settings button. The card itself is the control now, which
+ * is why every test that used to click that button goes through here.
+ */
 const openMission = (h: Harness, idx = 0): void => {
-  const btns = [...h.doc.querySelectorAll('#missions button')]
-    .filter((b) => b.textContent === 'Settings');
-  assert.ok(btns[idx], 'a mission card should offer its pop-up');
-  (btns[idx] as HTMLButtonElement).click();
+  const cards = [...h.doc.querySelectorAll('#missions .card')];
+  assert.ok(cards[idx], 'a mission card should open its pop-up');
+  (cards[idx] as HTMLElement).click();
+};
+
+/** The same pop-up, showing the other tab. */
+const openMissionRuns = (h: Harness, idx = 0): void => {
+  openMission(h, idx);
+  const tab = [...h.doc.querySelectorAll('#detail-body .dlgtabs button')]
+    .find((b) => b.textContent === 'Run history');
+  assert.ok(tab, 'the pop-up should offer the history');
+  (tab as HTMLButtonElement).click();
 };
 const openProduct = (h: Harness, idx = 0): void => {
   const btns = [...h.doc.querySelectorAll('#products button')]
@@ -2666,23 +2679,57 @@ test('a hand in the pop-up form is not interrupted by the refresh', async () => 
 
 // ── Two buttons, two questions; and the pop-up knows when it is done ─────────
 
-test('RUN HISTORY IS ITS OWN BUTTON AND FETCHES ON OPEN', async () => {
+test('RUN HISTORY IS A TAB IN THE SAME POP-UP, AND FETCHES WHEN OPENED', async () => {
   const h = await boot();
   h.reply('GET /api/missions/1/runs', { runs: [
     { startedAt: new Date().toISOString(), productName: 'Pitch Black ETB',
       outcome: 'in_stock', reason: 'in stock at $49.99', price: 49.99, ms: 800 },
   ]});
-  const btn = [...h.doc.querySelectorAll('#missions button')]
-    .find((b) => b.textContent === 'Run history');
-  assert.ok(btn, 'the card offers the history directly');
-  (btn as HTMLButtonElement).click();
+  openMissionRuns(h);
   await h.settle();
   assert.equal(($(h, '#detail-dialog') as any).open, true);
-  assert.match($(h, '#detail-title').textContent ?? '', /runs/);
   assert.match($(h, '#detail-body').textContent ?? '', /in stock at \$49\.99/,
-    'no second load click — pressing the button already said what you wanted');
+    'no second load click — choosing the tab already said what you wanted');
   assert.ok(!$(h, '#detail-body').querySelector('[name=ceiling]'),
     'and the spending controls are not along for the ride');
+});
+
+test('THE CARD IS THE CONTROL, AND PAUSE IS NOT A WAY INTO IT', async () => {
+  // Pressing the tile opens it; pressing a real control on the tile does that
+  // control's job and nothing else. Getting this wrong means every attempt to
+  // pause something also opens a dialog over the list.
+  const h = await boot();
+  const labels = [...h.doc.querySelectorAll('#missions button')].map((b) => b.textContent);
+  assert.ok(!labels.includes('Settings'), 'the two buttons are gone from the row');
+  assert.ok(!labels.includes('Run history'));
+  assert.ok(labels.includes('Pause'), 'the one that changes something stays');
+
+  const card = $(h, '#missions .card') as any;
+  assert.equal(card.getAttribute('role'), 'button', 'and it says it is pressable');
+  assert.equal(card.tabIndex, 0, 'reachable by keyboard');
+
+  h.reply('POST /api/missions', { ok: true });
+  const pause = [...h.doc.querySelectorAll('#missions button')]
+    .find((b) => b.textContent === 'Pause');
+  (pause as HTMLButtonElement).click();
+  await h.settle();
+  assert.equal(($(h, '#detail-dialog') as any).open, false, 'pausing opened nothing');
+
+  card.click();
+  assert.equal(($(h, '#detail-dialog') as any).open, true, 'the card itself did');
+});
+
+test('the two tabs show two different things', async () => {
+  const h = await boot();
+  h.reply('GET /api/missions/1/runs', { runs: [] });
+  openMission(h);
+  assert.ok($(h, '#detail-body').querySelector('[name=ceiling]'), 'settings first');
+  const tabs = [...h.doc.querySelectorAll('#detail-body .dlgtabs button')]
+    .map((b) => b.textContent);
+  assert.deepEqual(tabs, ['Settings', 'Run history']);
+  openMissionRuns(h);
+  await h.settle();
+  assert.ok(!$(h, '#detail-body').querySelector('[name=ceiling]'), 'and then the other one');
 });
 
 test('saving mission settings closes the pop-up', async () => {

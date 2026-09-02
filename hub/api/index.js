@@ -3340,6 +3340,22 @@ button.small { padding: 4px 10px; font-size: 12px; border-radius: var(--r-sm); b
    SAME cards CSS-only: image on top, facts under it, actions at the foot \u2014
    nothing about what a card says changes with how it is laid out. */
 .listtools { display: flex; justify-content: flex-end; margin: 0 0 10px; }
+/* The two halves of the mission pop-up. */
+.dlgtabs { display: flex; gap: 6px; margin: 2px 0 12px; border-bottom: 1px solid var(--line);
+           padding-bottom: 10px; }
+.dlgtabs button.on { background: var(--accent-soft); border-color: var(--accent);
+                     color: var(--accent); }
+
+/* \u2500\u2500 A card you can press \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+   The whole tile opens the pop-up now, so it has to LOOK pressable and behave
+   like a control: a pointer, a lift on hover, and a focus ring for anyone
+   arriving by keyboard. The buttons that stay on the card sit above it and
+   stop their own clicks, so Pause never opens anything. */
+.card.opens { cursor: pointer; }
+.card.opens:hover { border-color: var(--line-strong); transform: translateY(-1px); }
+.card.opens:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { .card.opens:hover { transform: none; } }
+
 .vt { display: flex; gap: 4px; }
 .vt button { font-size: 15px; line-height: 1; padding: 6px 10px; border-radius: var(--r-sm);
              border: 1px solid var(--line); background: var(--panel-2); color: var(--muted);
@@ -4490,7 +4506,18 @@ function thumb(url, alt, big) {
  */
 let DETAIL = null;
 
-function openDetail(kind, key) {
+/*
+ * Which half of the mission pop-up is showing. Kept outside DETAIL so the
+ * thirty-second refresh, which rebuilds the panel, does not throw you back to
+ * the first tab while you are reading the second.
+ */
+let DETAIL_TAB = 'settings';
+
+function openDetail(kind, key, tab) {
+  // Both halves of a mission live in one pop-up now, so the old two entry
+  // points become one plus a starting tab.
+  if (kind === 'mission-runs') { kind = 'mission'; tab = 'runs'; }
+  if (kind === 'mission') DETAIL_TAB = tab || 'settings';
   DETAIL = { kind: kind, key: key };
   renderDetail(true);
   const d = document.getElementById('detail-dialog');
@@ -4511,23 +4538,42 @@ function renderDetail(force) {
   if (!force && d.contains(document.activeElement)) return;
   // The run history is a snapshot: it fetches once when opened, and the
   // thirty-second refresh leaves it be. Everything else refills from DATA.
-  if (!force && DETAIL.kind === 'mission-runs') return;
+  if (!force && DETAIL.kind === 'mission' && DETAIL_TAB === 'runs') return;
   const title = document.getElementById('detail-title');
   const body = document.getElementById('detail-body');
-  if (DETAIL.kind === 'mission-runs') {
-    const m = DATA.missions.find((x) => x.id === DETAIL.key);
-    if (!m) { closeDetail(); return; }
-    title.textContent = shortName(m.productName) + ' \u2014 runs';
-    body.textContent = '';
-    body.appendChild(missionRunsPanel(m));
-  } else if (DETAIL.kind === 'mission') {
+  if (DETAIL.kind === 'mission') {
     const m = DATA.missions.find((x) => x.id === DETAIL.key);
     // The thing this pop-up was about can vanish under it \u2014 deleted from
     // another device, say. A dialog about nothing closes rather than lying.
     if (!m) { closeDetail(); return; }
     title.textContent = shortName(m.productName);
     body.textContent = '';
-    body.appendChild(missionPanel(m));
+
+    /*
+     * Two tabs, one pop-up.
+     *
+     * They were two buttons on every card, which is two controls per row for
+     * two questions asked at different times \u2014 "change how this is watched"
+     * and "what has it done". The card itself is now the way in, so the
+     * choice moves inside, where it costs nothing and neither answer has to
+     * be walked past to reach the other.
+     */
+    const tabs = el('div', 'dlgtabs');
+    const bodyIn = el('div');
+    const pick = (name, label) => {
+      const b = el('button', 'small' + (DETAIL_TAB === name ? ' on' : ''), label);
+      b.type = 'button';
+      b.setAttribute('aria-selected', String(DETAIL_TAB === name));
+      b.addEventListener('click', () => {
+        if (DETAIL_TAB === name) return;
+        DETAIL_TAB = name;
+        renderDetail(true);
+      });
+      return b;
+    };
+    tabs.append(pick('settings', 'Settings'), pick('runs', 'Run history'));
+    bodyIn.appendChild(DETAIL_TAB === 'runs' ? missionRunsPanel(m) : missionPanel(m));
+    body.append(tabs, bodyIn);
   } else {
     const p = DATA.products.find((x) => x.key === DETAIL.key);
     if (!p) { closeDetail(); return; }
@@ -4824,10 +4870,33 @@ function missionCard(m) {
   // Two buttons, two questions: "change how this is watched" and "what has
   // it done". Bundled they made every look at the history walk past the
   // spending controls.
-  const settingsBtn = el('button', 'small', 'Settings');
-  settingsBtn.addEventListener('click', () => openDetail('mission', m.id));
-  const runsBtn = el('button', 'small', 'Run history');
-  runsBtn.addEventListener('click', () => openDetail('mission-runs', m.id));
+  /*
+   * The card is the way in.
+   *
+   * It carried a Settings button and a Run history button \u2014 two controls on
+   * every row for two questions asked at different moments. Pressing the thing
+   * itself is what people try first, and it leaves the row with only the
+   * control that changes something without opening anything.
+   *
+   * Clicks from real controls are ignored: a press on Pause, on a link, or on
+   * anything inside the actions row must do its own job and nothing else.
+   */
+  card.classList.add('opens');
+  card.tabIndex = 0;
+  card.setAttribute('role', 'button');
+  card.setAttribute('aria-label', 'Open ' + shortName(m.productName));
+  const opens = (e) => {
+    if (e.target.closest('button, a, input, select, textarea, label')) return;
+    openDetail('mission', m.id);
+  };
+  card.addEventListener('click', opens);
+  card.addEventListener('keydown', (e) => {
+    // Enter and Space, because that is what a role=button promises.
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    if (e.target !== card) return;
+    e.preventDefault();
+    openDetail('mission', m.id);
+  });
 
   /*
    * Pausing on the card, without opening anything.
@@ -4905,7 +4974,6 @@ function missionCard(m) {
     acts.append(disarm);
   }
 
-  acts.append(settingsBtn, runsBtn);
   card.appendChild(acts);
   return card;
 }
