@@ -9,6 +9,7 @@ import type { Discovered, SweepResult } from './types.ts';
 const COLOR_NEW = 0x1f6b4f;
 const COLOR_OPS = 0x8a6410;
 const COLOR_STAGED = 0xc0392b;
+const COLOR_IN = 0x1f8b4c;
 
 /** Discord caps embeds at 10 per message and 25 fields per embed. */
 const MAX_FIELDS = 20;
@@ -124,6 +125,92 @@ export function buildStagedEmbed(
     footer: { text: 'not buyable yet — this is the warning, not the drop' },
     timestamp: now,
   };
+}
+
+/**
+ * Something a mission is watching just became buyable.
+ *
+ * This used to reuse the DISCOVERY embed, and the result was close to
+ * unreadable: the title said "1 new product —" with nothing after the dash,
+ * the field name was the raw reader note ("shipping IN_STOCK; atp 10; limit
+ * 2") and its value was a bare listing id. All three of the things a person
+ * needs at 3am — what it is, what it costs, where to click — were missing,
+ * and the one thing shown was debug output.
+ *
+ * A discovery is "we found a product that exists". This is "the thing you
+ * asked us to watch is on sale right now". They are not the same message and
+ * they should never have shared a template.
+ */
+export function buildStockEmbed(
+  items: {
+    name: string;
+    retailer: string;
+    price: number | null;
+    msrp: number | null;
+    url: string;
+    armed: boolean;
+    seller: string;
+  }[],
+  now: string,
+): Embed | null {
+  if (items.length === 0) return null;
+  const one = items.length === 1;
+  return {
+    title: one ? `🟢 IN STOCK — ${clip(items[0]!.name, 200)}` : `🟢 ${items.length} items came in stock`,
+    description: one ? undefined : 'Everything below became buyable in the last check.',
+    color: COLOR_IN,
+    fields: items.slice(0, MAX_FIELDS).map((i) => {
+      const bits: string[] = [];
+      if (i.price !== null) {
+        const over = i.msrp !== null && i.msrp > 0 ? i.price - i.msrp : null;
+        bits.push(
+          `**$${i.price.toFixed(2)}**` +
+            (over !== null && over > 0.005 ? ` (${'$' + over.toFixed(2)} over MSRP)` : ''),
+        );
+      }
+      if (i.retailer) bits.push(i.retailer);
+      // The seller is the difference between a drop and a reseller at 3x, and
+      // it is the one fact a person cannot infer from the price alone.
+      if (i.seller && i.seller !== 'retailer') bits.push(`sold by a ${i.seller} seller`);
+      bits.push(i.armed ? '**ARMED** — Phantom will act' : 'watching only — you have to act');
+      return {
+        name: clip(i.name, 240),
+        value: clip(bits.join(' · ') + (i.url ? `\n[open the listing](${i.url})` : ''), 1000),
+      };
+    }),
+    timestamp: now,
+  };
+}
+
+export async function announceStock(
+  webhookUrl: string,
+  items: Parameters<typeof buildStockEmbed>[0],
+  now: string,
+): Promise<void> {
+  const embed = buildStockEmbed(items, now);
+  if (embed) await post(webhookUrl, [embed]);
+}
+
+/**
+ * Proof the wiring works, sent on demand.
+ *
+ * Setting up a webhook is the one moment where silence is ambiguous: nothing
+ * arriving could mean the URL is wrong, the channel is wrong, the deploy has
+ * not picked up the variable, or simply that nothing has happened yet. A
+ * button that makes a message appear collapses all four into one answer.
+ */
+export async function announceTest(webhookUrl: string, now: string): Promise<void> {
+  await post(webhookUrl, [
+    {
+      title: '✅ Phantom is connected',
+      description:
+        'This is a test message. Real alerts look like this one: in-stock on a ' +
+        'watched listing, stock staged before a drop, and sources that stopped working.',
+      color: COLOR_IN,
+      footer: { text: 'sent from Settings' },
+      timestamp: now,
+    },
+  ]);
 }
 
 export async function announceStaged(

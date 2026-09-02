@@ -390,3 +390,21 @@ test('seeing something again does not announce it a second time', async () => {
   assert.deepEqual(again.body.names, [], 'and not again');
   assert.equal(again.body.new, 0);
 });
+
+// ── The Discord test message ─────────────────────────────────────────────────
+
+test('THE TEST ENDPOINT SAYS "NOT CONFIGURED" RATHER THAN PRETENDING', async () => {
+  // The failure this whole feature exists to kill is an ambiguous silence:
+  // nothing arriving in Discord can mean the URL is wrong, the channel is
+  // wrong, the deploy has not picked up the variable, or that nothing has
+  // happened yet. With no webhook set, the honest answer is neither an error
+  // nor a success — it is "there is nowhere to send it".
+  //
+  // The harness env deliberately carries an empty DISCORD_WEBHOOK_URL, so this
+  // is the real path a fresh Hub takes.
+  const db = await TestDb.create();
+  const res = await call(db, 'POST', '/api/notify/test', { token: TOKEN });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.sent, false);
+  assert.equal(res.body.configured, false);
+});

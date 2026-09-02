@@ -2228,6 +2228,7 @@ async function sweepAll(db2, userId, fetchText2 = fetchText) {
 var COLOR_NEW = 2059087;
 var COLOR_OPS = 9069584;
 var COLOR_STAGED = 12597547;
+var COLOR_IN = 2067276;
 var MAX_FIELDS = 20;
 function clip(s, n) {
   return s.length <= n ? s : `${s.slice(0, n - 1)}\u2026`;
@@ -2295,6 +2296,48 @@ function buildStagedEmbed(items, now) {
     footer: { text: "not buyable yet \u2014 this is the warning, not the drop" },
     timestamp: now
   };
+}
+function buildStockEmbed(items, now) {
+  if (items.length === 0) return null;
+  const one = items.length === 1;
+  return {
+    title: one ? `\u{1F7E2} IN STOCK \u2014 ${clip(items[0].name, 200)}` : `\u{1F7E2} ${items.length} items came in stock`,
+    description: one ? void 0 : "Everything below became buyable in the last check.",
+    color: COLOR_IN,
+    fields: items.slice(0, MAX_FIELDS).map((i) => {
+      const bits = [];
+      if (i.price !== null) {
+        const over = i.msrp !== null && i.msrp > 0 ? i.price - i.msrp : null;
+        bits.push(
+          `**$${i.price.toFixed(2)}**` + (over !== null && over > 5e-3 ? ` (${"$" + over.toFixed(2)} over MSRP)` : "")
+        );
+      }
+      if (i.retailer) bits.push(i.retailer);
+      if (i.seller && i.seller !== "retailer") bits.push(`sold by a ${i.seller} seller`);
+      bits.push(i.armed ? "**ARMED** \u2014 Phantom will act" : "watching only \u2014 you have to act");
+      return {
+        name: clip(i.name, 240),
+        value: clip(bits.join(" \xB7 ") + (i.url ? `
+[open the listing](${i.url})` : ""), 1e3)
+      };
+    }),
+    timestamp: now
+  };
+}
+async function announceStock(webhookUrl, items, now) {
+  const embed = buildStockEmbed(items, now);
+  if (embed) await post(webhookUrl, [embed]);
+}
+async function announceTest(webhookUrl, now) {
+  await post(webhookUrl, [
+    {
+      title: "\u2705 Phantom is connected",
+      description: "This is a test message. Real alerts look like this one: in-stock on a watched listing, stock staged before a drop, and sources that stopped working.",
+      color: COLOR_IN,
+      footer: { text: "sent from Settings" },
+      timestamp: now
+    }
+  ]);
 }
 async function announceStaged(webhookUrl, items, now) {
   const embed = buildStagedEmbed(items, now);
@@ -3859,6 +3902,23 @@ ${FONTS}<style>${STYLE}</style></head>
     <div class="card">
       <label class="check"><input type="checkbox" id="material-toggle"> Liquid glass</label>
       <div class="meta" style="margin-top:8px" id="material-note"></div>
+    </div>
+
+    <h2>Alerts</h2>
+    <p class="sub" style="margin:-6px 0 14px">
+      The page is the primary surface, and it only helps when you are looking at
+      it. A drop loads at eleven at night and opens at three in the morning, so
+      the alerts that matter are the ones that reach you somewhere else.
+    </p>
+    <div class="card">
+      <div class="row">
+        <div class="grow">
+          <div class="name">Discord</div>
+          <div class="meta" id="discord-state">Checking\u2026</div>
+        </div>
+        <button id="discord-test" type="button">Send a test message</button>
+      </div>
+      <div class="meta" id="discord-result" style="margin-top:8px" hidden></div>
     </div>
 
     <h2>What is true of every mission</h2>
@@ -5518,6 +5578,23 @@ function render() {
   document.getElementById('summary').textContent =
     parts.length ? parts.join(' \xB7 ') : 'nothing in stock';
   document.getElementById('who').textContent = DATA.you || '';
+
+  /*
+   * Whether alerts have anywhere to go.
+   *
+   * The Hub sends a boolean and never the webhook URL: it is a credential \u2014
+   * anyone holding it can post as Phantom \u2014 and a settings page is a thing
+   * people screenshot. Configured or not is the whole of what this screen
+   * needs to know.
+   */
+  const dstate = document.getElementById('discord-state');
+  if (dstate) {
+    const on = DATA.discord === true;
+    dstate.textContent = on
+      ? 'Connected. In-stock, staged stock and source failures are posted here.'
+      : 'Not connected. Add DISCORD_WEBHOOK_URL to the Hub and redeploy, then test.';
+    document.getElementById('discord-test').disabled = !on;
+  }
 
   const st = DATA.settings || { taxRate: 0, shippingAllowance: 0 };
   const sf = document.getElementById('settings-form');
@@ -7302,6 +7379,31 @@ detailDialog.addEventListener('close', () => { DETAIL = null; });
 // Clicking the backdrop is the other way people expect to dismiss this.
 addDialog.addEventListener('click', (e) => { if (e.target === addDialog) closeAdd(); });
 
+/*
+ * Prove the wiring, rather than waiting for a drop to prove it.
+ *
+ * The button reports what happened in words: sent, not configured, or the
+ * error. "Nothing appeared in Discord" is the one outcome this exists to make
+ * impossible to misread.
+ */
+document.getElementById('discord-test').addEventListener('click', async () => {
+  const btn = document.getElementById('discord-test');
+  const out = document.getElementById('discord-result');
+  btn.disabled = true;
+  out.hidden = false;
+  out.textContent = 'Sending\u2026';
+  try {
+    const res = await fetch('/api/notify/test', { method: 'POST' });
+    const body = await res.json();
+    if (body.sent) out.textContent = 'Sent. It should be in your channel now.';
+    else if (!body.configured) out.textContent = 'No webhook is configured on the Hub.';
+    else out.textContent = 'The Hub accepted it but reported nothing sent.';
+  } catch (err) {
+    out.textContent = 'Could not reach the Hub: ' + err.message;
+  }
+  btn.disabled = false;
+});
+
 document.getElementById('settings-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const form = e.target;
@@ -8093,7 +8195,9 @@ function createHandler(db2, env2) {
         requests,
         canCurate,
         capabilities: shopStatus,
-        agentSeenAt
+        agentSeenAt,
+        // Whether alerts have anywhere to go. A boolean, never the URL.
+        discord: Boolean(env2.DISCORD_WEBHOOK_URL)
       });
     }
     if (request.method === "GET" && path.startsWith("/api/missions/") && path.endsWith("/runs")) {
@@ -8424,6 +8528,13 @@ function createHandler(db2, env2) {
       if (!done) return json({ error: "no such discovery, or it was already decided" }, 404);
       return json({ forgotten: id });
     }
+    if (request.method === "POST" && path === "/api/notify/test") {
+      if (!env2.DISCORD_WEBHOOK_URL) {
+        return json({ sent: false, configured: false }, 200);
+      }
+      await announceTest(env2.DISCORD_WEBHOOK_URL, now);
+      return json({ sent: true, configured: true });
+    }
     if (request.method === "POST" && path === "/api/activity") {
       const b = await body();
       if (!b || !Array.isArray(b.lines)) return json({ error: "need lines[]" }, 400);
@@ -8571,27 +8682,31 @@ function createHandler(db2, env2) {
         }
       }
       const cameIntoStock = changes.filter((c) => c.obs.state === "in" && c.was !== "in");
+      const willAlert = env2.DISCORD_WEBHOOK_URL && (cameIntoStock.length > 0 || loaded.length > 0);
+      const byListing = willAlert ? new Map((await listMissions(db2, userId).catch(() => [])).map((m) => [m.listingId, m])) : /* @__PURE__ */ new Map();
       if (cameIntoStock.length > 0 && env2.DISCORD_WEBHOOK_URL) {
-        await announce(
+        await announceStock(
           env2.DISCORD_WEBHOOK_URL,
-          "In stock",
-          "",
-          cameIntoStock.map((c) => ({
-            externalId: String(c.obs.listingId),
-            name: c.obs.note || `listing ${c.obs.listingId}`,
-            url: "",
-            price: c.obs.price ?? null
-          })),
+          cameIntoStock.map((c) => {
+            const m = byListing.get(c.obs.listingId);
+            return {
+              name: m ? m.productName : `listing ${c.obs.listingId}`,
+              retailer: m ? m.retailer : "",
+              price: c.obs.price ?? null,
+              msrp: m ? m.msrp : null,
+              url: m ? m.url : "",
+              armed: m ? m.armed : false,
+              seller: c.obs.sellerKind ?? ""
+            };
+          }),
           now
         );
       }
       if (loaded.length > 0 && env2.DISCORD_WEBHOOK_URL) {
-        const rows = await listMissions(db2, userId).catch(() => []);
-        const by = new Map(rows.map((m) => [m.listingId, m]));
         await announceStaged(
           env2.DISCORD_WEBHOOK_URL,
           loaded.map((l) => {
-            const m = by.get(l.listingId);
+            const m = byListing.get(l.listingId);
             return {
               name: m ? m.productName : `listing ${l.listingId}`,
               retailer: m ? m.retailer : "",

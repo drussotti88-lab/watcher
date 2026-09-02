@@ -3342,3 +3342,26 @@ test('a find from a retailer that states no count says nothing about one', async
   assert.doesNotMatch(text, /available/);
   assert.doesNotMatch(text, /staged/);
 });
+
+// ── Alerts ───────────────────────────────────────────────────────────────────
+
+test('SETTINGS SAYS WHETHER ALERTS HAVE ANYWHERE TO GO', async () => {
+  // "Nothing appeared in Discord" has four causes and a person cannot tell them
+  // apart. The page states the one it knows.
+  const off = await boot({ ...DASHBOARD, discord: false });
+  assert.match($(off, '#discord-state').textContent, /Not connected/);
+  assert.equal(($(off, '#discord-test') as any).disabled, true, 'no point testing a webhook that is not there');
+
+  const on = await boot({ ...DASHBOARD, discord: true });
+  assert.match($(on, '#discord-state').textContent, /Connected/);
+  assert.equal(($(on, '#discord-test') as any).disabled, false);
+});
+
+test('the webhook URL never reaches the page', async () => {
+  // A Discord webhook is a credential: anyone holding it can post as Phantom,
+  // and a settings screen is a thing people screenshot. Configured or not is
+  // the whole of what this screen needs.
+  const h = await boot({ ...DASHBOARD, discord: true });
+  assert.doesNotMatch(h.doc.body.innerHTML, /discord\.com\/api\/webhooks/i);
+  assert.doesNotMatch(h.doc.body.innerHTML, /DISCORD_WEBHOOK_URL=/);
+});

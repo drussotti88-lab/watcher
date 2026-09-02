@@ -1293,6 +1293,23 @@ ${FONTS}<style>${STYLE}</style></head>
       <div class="meta" style="margin-top:8px" id="material-note"></div>
     </div>
 
+    <h2>Alerts</h2>
+    <p class="sub" style="margin:-6px 0 14px">
+      The page is the primary surface, and it only helps when you are looking at
+      it. A drop loads at eleven at night and opens at three in the morning, so
+      the alerts that matter are the ones that reach you somewhere else.
+    </p>
+    <div class="card">
+      <div class="row">
+        <div class="grow">
+          <div class="name">Discord</div>
+          <div class="meta" id="discord-state">Checking…</div>
+        </div>
+        <button id="discord-test" type="button">Send a test message</button>
+      </div>
+      <div class="meta" id="discord-result" style="margin-top:8px" hidden></div>
+    </div>
+
     <h2>What is true of every mission</h2>
     <p class="sub" style="margin:-6px 0 14px">
       A price ceiling is per unit and covers the item and the tax on it.
@@ -2950,6 +2967,23 @@ function render() {
   document.getElementById('summary').textContent =
     parts.length ? parts.join(' · ') : 'nothing in stock';
   document.getElementById('who').textContent = DATA.you || '';
+
+  /*
+   * Whether alerts have anywhere to go.
+   *
+   * The Hub sends a boolean and never the webhook URL: it is a credential —
+   * anyone holding it can post as Phantom — and a settings page is a thing
+   * people screenshot. Configured or not is the whole of what this screen
+   * needs to know.
+   */
+  const dstate = document.getElementById('discord-state');
+  if (dstate) {
+    const on = DATA.discord === true;
+    dstate.textContent = on
+      ? 'Connected. In-stock, staged stock and source failures are posted here.'
+      : 'Not connected. Add DISCORD_WEBHOOK_URL to the Hub and redeploy, then test.';
+    document.getElementById('discord-test').disabled = !on;
+  }
 
   const st = DATA.settings || { taxRate: 0, shippingAllowance: 0 };
   const sf = document.getElementById('settings-form');
@@ -4733,6 +4767,31 @@ detailDialog.addEventListener('click', (e) => { if (e.target === detailDialog) c
 detailDialog.addEventListener('close', () => { DETAIL = null; });
 // Clicking the backdrop is the other way people expect to dismiss this.
 addDialog.addEventListener('click', (e) => { if (e.target === addDialog) closeAdd(); });
+
+/*
+ * Prove the wiring, rather than waiting for a drop to prove it.
+ *
+ * The button reports what happened in words: sent, not configured, or the
+ * error. "Nothing appeared in Discord" is the one outcome this exists to make
+ * impossible to misread.
+ */
+document.getElementById('discord-test').addEventListener('click', async () => {
+  const btn = document.getElementById('discord-test');
+  const out = document.getElementById('discord-result');
+  btn.disabled = true;
+  out.hidden = false;
+  out.textContent = 'Sending…';
+  try {
+    const res = await fetch('/api/notify/test', { method: 'POST' });
+    const body = await res.json();
+    if (body.sent) out.textContent = 'Sent. It should be in your channel now.';
+    else if (!body.configured) out.textContent = 'No webhook is configured on the Hub.';
+    else out.textContent = 'The Hub accepted it but reported nothing sent.';
+  } catch (err) {
+    out.textContent = 'Could not reach the Hub: ' + err.message;
+  }
+  btn.disabled = false;
+});
 
 document.getElementById('settings-form').addEventListener('submit', async (e) => {
   e.preventDefault();

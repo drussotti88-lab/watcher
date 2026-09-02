@@ -24,7 +24,7 @@ import type { Env, Discovered, SweepResult } from './types.ts';
 import type { Sql } from './db.ts';
 import { sweepAll, sweepSource } from './discover.ts';
 import * as store from './store.ts';
-import { announce, announceStaged, reportOps } from './notify.ts';
+import { announce, announceStaged, announceStock, announceTest, reportOps } from './notify.ts';
 import { applyFilters, dedupe } from './filter.ts';
 import { probeUrl } from './fetcher.ts';
 import {
@@ -345,6 +345,8 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
         missions, runs, changes, products, listings, settings, discoveries, sweep, now, you,
         authorisations, committed, queues, stockLoads, acquisitions, requests, canCurate,
         capabilities: shopStatus, agentSeenAt,
+        // Whether alerts have anywhere to go. A boolean, never the URL.
+        discord: Boolean(env.DISCORD_WEBHOOK_URL),
       });
     }
 
@@ -862,6 +864,26 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
      * — see the note at the top of this file — so the only reliable moment to
      * enforce retention is when somebody is writing.
      */
+    /**
+     * Send a test message to Discord, on demand.
+     *
+     * The one moment where silence is ambiguous is setup: nothing arriving can
+     * mean the URL is wrong, the channel is wrong, the deploy has not picked up
+     * the variable, or simply that nothing has happened yet. This collapses all
+     * four into one answer.
+     *
+     * It reports whether a webhook is CONFIGURED. It never returns the URL — a
+     * Discord webhook is a credential, anyone holding it can post as Phantom,
+     * and a page that can be screenshotted is not where it belongs.
+     */
+    if (request.method === 'POST' && path === '/api/notify/test') {
+      if (!env.DISCORD_WEBHOOK_URL) {
+        return json({ sent: false, configured: false }, 200);
+      }
+      await announceTest(env.DISCORD_WEBHOOK_URL, now);
+      return json({ sent: true, configured: true });
+    }
+
     if (request.method === 'POST' && path === '/api/activity') {
       const b = await body<{ lines?: store.ActivityIn[] }>();
       if (!b || !Array.isArray(b.lines)) return json({ error: 'need lines[]' }, 400);
@@ -1115,31 +1137,45 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       // Discord is optional and always has been — notify.ts posts nothing when
       // no webhook is configured. The page is the primary surface now.
       const cameIntoStock = changes.filter((c) => c.obs.state === 'in' && c.was !== 'in');
+
+      // ── Named from the watchlist, not from the reading ──────────────────────
+      //
+      // An observation knows a listing id and a reader note. Both alerts below
+      // used to be built from those, and "listing 36" with a field called
+      // "shipping IN_STOCK; atp 10" is a message that gets ignored at 3am. The
+      // watchlist is where the product name, the shop, the MSRP, the link and
+      // whether the mission is armed actually live.
+      //
+      // One lookup serves both alerts, and only when at least one will be sent.
+      const willAlert = env.DISCORD_WEBHOOK_URL && (cameIntoStock.length > 0 || loaded.length > 0);
+      const byListing = willAlert
+        ? new Map((await store.listMissions(db, userId).catch(() => [])).map((m) => [m.listingId, m]))
+        : new Map();
+
       if (cameIntoStock.length > 0 && env.DISCORD_WEBHOOK_URL) {
-        await announce(
+        await announceStock(
           env.DISCORD_WEBHOOK_URL,
-          'In stock',
-          '',
-          cameIntoStock.map((c) => ({
-            externalId: String(c.obs.listingId),
-            name: c.obs.note || `listing ${c.obs.listingId}`,
-            url: '',
-            price: c.obs.price ?? null,
-          })),
+          cameIntoStock.map((c) => {
+            const m = byListing.get(c.obs.listingId);
+            return {
+              name: m ? m.productName : `listing ${c.obs.listingId}`,
+              retailer: m ? m.retailer : '',
+              price: c.obs.price ?? null,
+              msrp: m ? m.msrp : null,
+              url: m ? m.url : '',
+              armed: m ? m.armed : false,
+              seller: c.obs.sellerKind ?? '',
+            };
+          }),
           now,
         );
       }
 
-      // Named from the watchlist rather than from the reading: the observation
-      // knows a listing id, and a message that says "listing 36" at midnight is
-      // a message that gets ignored.
       if (loaded.length > 0 && env.DISCORD_WEBHOOK_URL) {
-        const rows = await store.listMissions(db, userId).catch(() => []);
-        const by = new Map(rows.map((m) => [m.listingId, m]));
         await announceStaged(
           env.DISCORD_WEBHOOK_URL,
           loaded.map((l) => {
-            const m = by.get(l.listingId);
+            const m = byListing.get(l.listingId);
             return {
               name: m ? m.productName : `listing ${l.listingId}`,
               retailer: m ? m.retailer : '',
