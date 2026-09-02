@@ -498,3 +498,70 @@ test('the repeat interval refuses to become a stream', async () => {
   assert.equal(store.validateSettings({ stagedRepeatMinutes: 0 }), null, 'off is always allowed');
   assert.equal(store.validateSettings({ stagedRepeatMinutes: 30 }), null);
 });
+
+// ── Repeating the in-stock alert ─────────────────────────────────────────────
+
+async function inStock(db: any, listingId: number) {
+  await store.recordObservation(db, A, {
+    listingId, state: 'out', availableQuantity: 0, sellerKind: 'retailer',
+  });
+  await store.recordObservation(db, A, {
+    listingId, state: 'in', availableQuantity: 10, price: 59.99, sellerKind: 'retailer',
+  });
+}
+
+test('THE FIRST IN-STOCK ALERT ALWAYS FIRES, AND THE SECOND WAITS', async () => {
+  const { db, listing } = await seeded();
+  await inStock(db, listing.id);
+  assert.equal(await store.claimStockAnnounce(db, A, listing.id, 0, 0), true, 'the edge');
+  assert.equal(await store.claimStockAnnounce(db, A, listing.id, 60, 6), false, 'not an hour later yet');
+});
+
+test('A LISTING THAT HAS SAT IN STOCK ALL DAY STOPS POSTING BY ITSELF', async () => {
+  // Measured on one ordinary day: three watched listings had been continuously
+  // in stock for 8.8, 14.9 and 16.9 hours. At hourly repeats that is 41 posts
+  // about three things nobody needed reminding of.
+  const { db, listing } = await seeded();
+  await inStock(db, listing.id);
+  // Pretend it came in stock nine hours ago and we have said nothing since.
+  await db.query(
+    `UPDATE watch_state SET last_changed_at = now() - interval '9 hours', stock_notified_at = NULL
+      WHERE listing_id = $1`,
+    [listing.id],
+  );
+  assert.equal(
+    await store.claimStockAnnounce(db, A, listing.id, 60, 6),
+    false,
+    'past the window: a listing, not an alert',
+  );
+  assert.equal(
+    await store.claimStockAnnounce(db, A, listing.id, 60, 0),
+    true,
+    'and 0 hours means no window at all, for someone who wants that',
+  );
+});
+
+test('going out of stock makes coming back news again', async () => {
+  const { db, listing } = await seeded();
+  await inStock(db, listing.id);
+  assert.equal(await store.claimStockAnnounce(db, A, listing.id, 0, 0), true);
+  assert.equal(await store.claimStockAnnounce(db, A, listing.id, 0, 0), false);
+  await store.clearStockAnnounce(db, A, listing.id);
+  assert.equal(await store.claimStockAnnounce(db, A, listing.id, 0, 0), true);
+});
+
+test('a listing that is not in stock is never claimed', async () => {
+  const { db, listing } = await seeded();
+  await store.recordObservation(db, A, { listingId: listing.id, state: 'out', availableQuantity: 0 });
+  assert.equal(await store.claimStockAnnounce(db, A, listing.id, 0, 0), false);
+});
+
+test('THE EMPTY-SYSTEM DEFAULTS ARE SILENCE, NOT A STREAM', async () => {
+  // Nobody gets a new class of message because they upgraded. Both repeats are
+  // off out of the box; the window only matters once one is switched on.
+  const db = await TestDb.create();
+  const cfg = await store.getSettings(db, A);
+  assert.equal(cfg.stagedRepeatMinutes, 0);
+  assert.equal(cfg.inStockRepeatMinutes, 0);
+  assert.equal(cfg.inStockRepeatHours, 6, 'a sensible window, waiting for an interval to use it');
+});

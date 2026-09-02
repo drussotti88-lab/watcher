@@ -1133,6 +1133,8 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       const changes: { obs: store.ObservationIn; was: string | null }[] = [];
       // Load-ins worth announcing. See the claim below for when that is.
       const loaded: { listingId: number; quantity: number }[] = [];
+      // Listings that were already in stock and have earned a reminder.
+      const stillIn: store.ObservationIn[] = [];
       // Read once for the batch: the repeat interval is a setting, and this
       // endpoint runs on every pass.
       const cfg = await store.getSettings(db, userId).catch(() => null);
@@ -1170,6 +1172,48 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
            * shop is already selling is not a warning, it is a restock, and the
            * in-stock announcement below is the message for that.
            */
+          /*
+           * Still here — the follow-up, for people who were not looking.
+           *
+           * The edge alert is the news and always fires. This is the reminder,
+           * and it is deliberately hard to turn into noise:
+           *
+           *   · off by default;
+           *   · never faster than the owner's interval;
+           *   · never past the window measured from when it came in stock, so
+           *     a listing that sits in stock all day stops posting by itself;
+           *   · and NEVER for a marketplace seller. Seventeen of this account's
+           *     watched listings are Walmart resellers that are in stock
+           *     permanently at two to four times MSRP. One alert for those is
+           *     arguably fair warning. An hourly one forever is the thing that
+           *     makes a channel get muted, and a muted channel misses the drop.
+           */
+          if (
+            obs.state === 'in' &&
+            outcome.previousState === 'in' &&
+            (obs.sellerKind ?? '') !== 'marketplace' &&
+            Number(cfg?.inStockRepeatMinutes ?? 0) > 0
+          ) {
+            const again = await store.claimStockAnnounce(
+              db,
+              userId,
+              obs.listingId,
+              Number(cfg?.inStockRepeatMinutes ?? 0),
+              Number(cfg?.inStockRepeatHours ?? 0),
+            );
+            if (again) stillIn.push(obs);
+          }
+
+          // Came in stock, or left it. Either way the repeat clock resets: a
+          // listing that goes out and comes back is news again.
+          if (obs.state === 'in' && outcome.previousState !== 'in') {
+            await store
+              .claimStockAnnounce(db, userId, obs.listingId, 0, 0)
+              .catch(() => false);
+          } else if (obs.state !== 'in') {
+            await store.clearStockAnnounce(db, userId, obs.listingId).catch(() => {});
+          }
+
           const stagedNow =
             obs.state !== 'in' && (obs.availableQuantity ?? 0) >= store.STOCK_LOADED_MIN;
 
@@ -1216,7 +1260,9 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       // whether the mission is armed actually live.
       //
       // One lookup serves both alerts, and only when at least one will be sent.
-      const willAlert = env.DISCORD_WEBHOOK_URL && (cameIntoStock.length > 0 || loaded.length > 0);
+      const willAlert =
+        env.DISCORD_WEBHOOK_URL &&
+        (cameIntoStock.length > 0 || loaded.length > 0 || stillIn.length > 0);
       const byListing = willAlert
         ? new Map((await store.listMissions(db, userId).catch(() => [])).map((m) => [m.listingId, m]))
         : new Map();
@@ -1243,6 +1289,32 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
             };
           }),
           now,
+        );
+      }
+
+      // Same card, with a footer that says which kind of message it is. Without
+      // it a reminder reads as a fresh drop and sends people running at
+      // something they already missed or already bought.
+      if (stillIn.length > 0 && env.DISCORD_WEBHOOK_URL) {
+        await announceStock(
+          env.DISCORD_WEBHOOK_URL,
+          stillIn.map((o) => {
+            const m = byListing.get(o.listingId);
+            return {
+              name: m ? m.productName : `listing ${o.listingId}`,
+              retailer: m ? m.retailer : '',
+              price: o.price ?? null,
+              msrp: m ? m.msrp : null,
+              url: m ? m.url : '',
+              imageUrl: m ? m.imageUrl : '',
+              seller: o.sellerKind ?? '',
+              sellerName: o.sellerName ?? (m ? m.sellerName : '') ?? '',
+              quantity: o.availableQuantity ?? null,
+              orderLimit: o.orderLimit ?? (m ? m.orderLimit : null),
+            };
+          }),
+          now,
+          'still in stock',
         );
       }
 

@@ -716,6 +716,8 @@ var DEFAULT_SETTINGS = {
   paused: false,
   sweepEveryHours: 24,
   stagedRepeatMinutes: 0,
+  inStockRepeatMinutes: 0,
+  inStockRepeatHours: 6,
   spendCapDay: null,
   budgetTotal: 0,
   pausedRetailers: [],
@@ -795,6 +797,17 @@ function validateSettings(s) {
     if (n > 0 && n < 5) return "repeat the load-in alert no more often than every 5 minutes";
     if (n > 24 * 60) return "a repeat interval longer than a day is the same as off";
   }
+  if (s.inStockRepeatMinutes !== void 0) {
+    const n = Number(s.inStockRepeatMinutes);
+    if (!Number.isFinite(n) || n < 0) return "a repeat interval cannot be negative";
+    if (n > 0 && n < 5) return "repeat the in-stock alert no more often than every 5 minutes";
+    if (n > 24 * 60) return "a repeat interval longer than a day is the same as off";
+  }
+  if (s.inStockRepeatHours !== void 0) {
+    const n = Number(s.inStockRepeatHours);
+    if (!Number.isFinite(n) || n < 0) return "that has to be a number of hours";
+    if (n > 168) return "repeating for more than a week is not an alert";
+  }
   if (s.sweepEveryHours !== void 0) {
     if (!Number.isFinite(s.sweepEveryHours) || s.sweepEveryHours < 0) {
       return "a sweep interval cannot be negative \u2014 use 0 to stop sweeping";
@@ -835,6 +848,8 @@ async function getSettings(db2, userId) {
     paused: text("paused", "") === "true",
     sweepEveryHours: num2("sweepEveryHours", DEFAULT_SETTINGS.sweepEveryHours),
     stagedRepeatMinutes: num2("stagedRepeatMinutes", DEFAULT_SETTINGS.stagedRepeatMinutes),
+    inStockRepeatMinutes: num2("inStockRepeatMinutes", DEFAULT_SETTINGS.inStockRepeatMinutes),
+    inStockRepeatHours: num2("inStockRepeatHours", DEFAULT_SETTINGS.inStockRepeatHours),
     budgetTotal: num2("budgetTotal", DEFAULT_SETTINGS.budgetTotal),
     spendCapDay: map.has("spendCapDay") && Number.isFinite(Number(map.get("spendCapDay"))) && Number(map.get("spendCapDay")) > 0 ? Number(map.get("spendCapDay")) : null,
     // Stored as one comma-separated string: the set is three names, and a
@@ -857,6 +872,8 @@ async function setSettings(db2, userId, patch) {
     "paused",
     "sweepEveryHours",
     "stagedRepeatMinutes",
+    "inStockRepeatMinutes",
+    "inStockRepeatHours",
     "budgetTotal",
     "spendCapDay",
     "pausedRetailers",
@@ -1420,6 +1437,26 @@ async function claimStagedAnnounce(db2, userId, listingId, repeatMinutes) {
     [userId, listingId, Math.max(0, Math.round(repeatMinutes))]
   );
   return rows.length > 0;
+}
+async function claimStockAnnounce(db2, userId, listingId, repeatMinutes, withinHours) {
+  const rows = await db2.query(
+    `UPDATE watch_state SET stock_notified_at = now()
+      WHERE user_id = $1 AND listing_id = $2
+        AND state = 'in'
+        AND (stock_notified_at IS NULL
+             OR ($3 > 0 AND stock_notified_at < now() - ($3 || ' minutes')::interval))
+        AND ($4 <= 0 OR last_changed_at > now() - ($4 || ' hours')::interval)
+      RETURNING listing_id`,
+    [userId, listingId, Math.max(0, Math.round(repeatMinutes)), Math.max(0, Math.round(withinHours))]
+  );
+  return rows.length > 0;
+}
+async function clearStockAnnounce(db2, userId, listingId) {
+  await db2.query(
+    `UPDATE watch_state SET stock_notified_at = NULL
+      WHERE user_id = $1 AND listing_id = $2 AND stock_notified_at IS NOT NULL`,
+    [userId, listingId]
+  );
 }
 async function clearStagedAnnounce(db2, userId, listingId) {
   await db2.query(
@@ -4102,6 +4139,14 @@ ${FONTS}<style>${STYLE}</style></head>
             <span class="hint">minutes between reminders while stock sits staged \u2014 0 says it once</span>
             <input type="number" name="stagedRepeatMinutes" step="5" min="0" max="1440" placeholder="0">
           </label>
+          <label class="f">Repeat the in-stock alert
+            <span class="hint">minutes between "still there" posts \u2014 0 says it once</span>
+            <input type="number" name="inStockRepeatMinutes" step="5" min="0" max="1440" placeholder="0">
+          </label>
+          <label class="f">Stop repeating after
+            <span class="hint">hours from when it came in stock \u2014 after that it is a listing, not an alert</span>
+            <input type="number" name="inStockRepeatHours" step="1" min="0" max="168" placeholder="6">
+          </label>
           <label class="f">Open a drop window for
             <span class="hint">it closes itself when the time is up</span>
             <select id="drop-minutes">
@@ -5940,6 +5985,12 @@ function renderShops(st) {
   if (document.activeElement !== burst) burst.value = st.burstSpacingSeconds || '';
   const repeat = sform.querySelector('[name=stagedRepeatMinutes]');
   if (repeat && document.activeElement !== repeat) repeat.value = st.stagedRepeatMinutes || '';
+  const inRep = sform.querySelector('[name=inStockRepeatMinutes]');
+  if (inRep && document.activeElement !== inRep) inRep.value = st.inStockRepeatMinutes || '';
+  const inHrs = sform.querySelector('[name=inStockRepeatHours]');
+  if (inHrs && document.activeElement !== inHrs) {
+    inHrs.value = st.inStockRepeatHours === 0 ? '0' : st.inStockRepeatHours || '';
+  }
 
   // Is a window open, and how long is left? Said in words, because "true" is
   // not an answer to "am I about to be checking Target every 8 seconds".
@@ -7618,6 +7669,8 @@ document.getElementById('shops-form').addEventListener('submit', async (e) => {
     await api('POST', '/api/settings', {
       burstSpacingSeconds: f.burstSpacingSeconds === '' ? 0 : Number(f.burstSpacingSeconds),
       stagedRepeatMinutes: f.stagedRepeatMinutes === '' ? 0 : Number(f.stagedRepeatMinutes),
+      inStockRepeatMinutes: f.inStockRepeatMinutes === '' ? 0 : Number(f.inStockRepeatMinutes),
+      inStockRepeatHours: f.inStockRepeatHours === '' ? 6 : Number(f.inStockRepeatHours),
     });
     load();
     return 'saved';
@@ -8871,6 +8924,7 @@ function createHandler(db2, env2) {
       const results = [];
       const changes = [];
       const loaded = [];
+      const stillIn = [];
       const cfg = await getSettings(db2, userId).catch(() => null);
       for (const obs of body2.observations) {
         if (!obs?.listingId || !obs?.state) {
@@ -8885,6 +8939,22 @@ function createHandler(db2, env2) {
           const outcome = await recordObservation(db2, userId, obs);
           results.push({ listingId: obs.listingId, changed: outcome.changed });
           if (outcome.changed) changes.push({ obs, was: outcome.previousState });
+          if (obs.state === "in" && outcome.previousState === "in" && (obs.sellerKind ?? "") !== "marketplace" && Number(cfg?.inStockRepeatMinutes ?? 0) > 0) {
+            const again = await claimStockAnnounce(
+              db2,
+              userId,
+              obs.listingId,
+              Number(cfg?.inStockRepeatMinutes ?? 0),
+              Number(cfg?.inStockRepeatHours ?? 0)
+            );
+            if (again) stillIn.push(obs);
+          }
+          if (obs.state === "in" && outcome.previousState !== "in") {
+            await claimStockAnnounce(db2, userId, obs.listingId, 0, 0).catch(() => false);
+          } else if (obs.state !== "in") {
+            await clearStockAnnounce(db2, userId, obs.listingId).catch(() => {
+            });
+          }
           const stagedNow = obs.state !== "in" && (obs.availableQuantity ?? 0) >= STOCK_LOADED_MIN;
           if (stagedNow) {
             const repeat = Number(cfg?.stagedRepeatMinutes ?? 0);
@@ -8900,7 +8970,7 @@ function createHandler(db2, env2) {
         }
       }
       const cameIntoStock = changes.filter((c) => c.obs.state === "in" && c.was !== "in");
-      const willAlert = env2.DISCORD_WEBHOOK_URL && (cameIntoStock.length > 0 || loaded.length > 0);
+      const willAlert = env2.DISCORD_WEBHOOK_URL && (cameIntoStock.length > 0 || loaded.length > 0 || stillIn.length > 0);
       const byListing = willAlert ? new Map((await listMissions(db2, userId).catch(() => [])).map((m) => [m.listingId, m])) : /* @__PURE__ */ new Map();
       if (cameIntoStock.length > 0 && env2.DISCORD_WEBHOOK_URL) {
         await announceStock(
@@ -8921,6 +8991,28 @@ function createHandler(db2, env2) {
             };
           }),
           now
+        );
+      }
+      if (stillIn.length > 0 && env2.DISCORD_WEBHOOK_URL) {
+        await announceStock(
+          env2.DISCORD_WEBHOOK_URL,
+          stillIn.map((o) => {
+            const m = byListing.get(o.listingId);
+            return {
+              name: m ? m.productName : `listing ${o.listingId}`,
+              retailer: m ? m.retailer : "",
+              price: o.price ?? null,
+              msrp: m ? m.msrp : null,
+              url: m ? m.url : "",
+              imageUrl: m ? m.imageUrl : "",
+              seller: o.sellerKind ?? "",
+              sellerName: o.sellerName ?? (m ? m.sellerName : "") ?? "",
+              quantity: o.availableQuantity ?? null,
+              orderLimit: o.orderLimit ?? (m ? m.orderLimit : null)
+            };
+          }),
+          now,
+          "still in stock"
         );
       }
       if (loaded.length > 0 && env2.DISCORD_WEBHOOK_URL) {

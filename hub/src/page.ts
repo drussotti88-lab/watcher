@@ -1454,6 +1454,14 @@ ${FONTS}<style>${STYLE}</style></head>
             <span class="hint">minutes between reminders while stock sits staged — 0 says it once</span>
             <input type="number" name="stagedRepeatMinutes" step="5" min="0" max="1440" placeholder="0">
           </label>
+          <label class="f">Repeat the in-stock alert
+            <span class="hint">minutes between "still there" posts — 0 says it once</span>
+            <input type="number" name="inStockRepeatMinutes" step="5" min="0" max="1440" placeholder="0">
+          </label>
+          <label class="f">Stop repeating after
+            <span class="hint">hours from when it came in stock — after that it is a listing, not an alert</span>
+            <input type="number" name="inStockRepeatHours" step="1" min="0" max="168" placeholder="6">
+          </label>
           <label class="f">Open a drop window for
             <span class="hint">it closes itself when the time is up</span>
             <select id="drop-minutes">
@@ -3292,6 +3300,12 @@ function renderShops(st) {
   if (document.activeElement !== burst) burst.value = st.burstSpacingSeconds || '';
   const repeat = sform.querySelector('[name=stagedRepeatMinutes]');
   if (repeat && document.activeElement !== repeat) repeat.value = st.stagedRepeatMinutes || '';
+  const inRep = sform.querySelector('[name=inStockRepeatMinutes]');
+  if (inRep && document.activeElement !== inRep) inRep.value = st.inStockRepeatMinutes || '';
+  const inHrs = sform.querySelector('[name=inStockRepeatHours]');
+  if (inHrs && document.activeElement !== inHrs) {
+    inHrs.value = st.inStockRepeatHours === 0 ? '0' : st.inStockRepeatHours || '';
+  }
 
   // Is a window open, and how long is left? Said in words, because "true" is
   // not an answer to "am I about to be checking Target every 8 seconds".
@@ -4970,6 +4984,8 @@ document.getElementById('shops-form').addEventListener('submit', async (e) => {
     await api('POST', '/api/settings', {
       burstSpacingSeconds: f.burstSpacingSeconds === '' ? 0 : Number(f.burstSpacingSeconds),
       stagedRepeatMinutes: f.stagedRepeatMinutes === '' ? 0 : Number(f.stagedRepeatMinutes),
+      inStockRepeatMinutes: f.inStockRepeatMinutes === '' ? 0 : Number(f.inStockRepeatMinutes),
+      inStockRepeatHours: f.inStockRepeatHours === '' ? 6 : Number(f.inStockRepeatHours),
     });
     load();
     return 'saved';

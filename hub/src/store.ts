@@ -934,6 +934,26 @@ export interface Settings {
    */
   stagedRepeatMinutes: number;
   /**
+   * How often to say a listing is STILL in stock, in minutes. 0 says it once.
+   *
+   * The first alert always fires on the edge — nothing counted, then buyable —
+   * because that is the news. This is the follow-up for the people who were
+   * not looking at their phone in the first minute.
+   */
+  inStockRepeatMinutes: number;
+  /**
+   * How long to keep repeating, in hours from the moment it came in stock.
+   *
+   * Without this the repeat is a slow leak rather than an alert. Measured on
+   * one ordinary day: three watched listings had been continuously in stock
+   * for 8.8, 14.9 and 16.9 hours, which at hourly repeats is forty-one posts
+   * about three things nobody needed reminding of.
+   *
+   * An hour after a drop opens, a repeat is useful — people are still arriving.
+   * Nine hours after, it is not an alert any more, it is a listing.
+   */
+  inStockRepeatHours: number;
+  /**
    * The most that may be authorised in any rolling 24 hours, in dollars.
    *
    * Null means unset, and unset means nothing can be armed. The cap is checked
@@ -999,6 +1019,8 @@ export const DEFAULT_SETTINGS: Settings = {
   paused: false,
   sweepEveryHours: 24,
   stagedRepeatMinutes: 0,
+  inStockRepeatMinutes: 0,
+  inStockRepeatHours: 6,
   spendCapDay: null,
   budgetTotal: 0,
   pausedRetailers: [],
@@ -1095,6 +1117,17 @@ export function validateSettings(s: Partial<Settings>): string | null {
     if (n > 0 && n < 5) return 'repeat the load-in alert no more often than every 5 minutes';
     if (n > 24 * 60) return 'a repeat interval longer than a day is the same as off';
   }
+  if (s.inStockRepeatMinutes !== undefined) {
+    const n = Number(s.inStockRepeatMinutes);
+    if (!Number.isFinite(n) || n < 0) return 'a repeat interval cannot be negative';
+    if (n > 0 && n < 5) return 'repeat the in-stock alert no more often than every 5 minutes';
+    if (n > 24 * 60) return 'a repeat interval longer than a day is the same as off';
+  }
+  if (s.inStockRepeatHours !== undefined) {
+    const n = Number(s.inStockRepeatHours);
+    if (!Number.isFinite(n) || n < 0) return 'that has to be a number of hours';
+    if (n > 168) return 'repeating for more than a week is not an alert';
+  }
   if (s.sweepEveryHours !== undefined) {
     if (!Number.isFinite(s.sweepEveryHours) || s.sweepEveryHours < 0) {
       return 'a sweep interval cannot be negative — use 0 to stop sweeping';
@@ -1140,6 +1173,8 @@ export async function getSettings(db: Sql, userId: number): Promise<Settings> {
     paused: text('paused', '') === 'true',
     sweepEveryHours: num('sweepEveryHours', DEFAULT_SETTINGS.sweepEveryHours),
     stagedRepeatMinutes: num('stagedRepeatMinutes', DEFAULT_SETTINGS.stagedRepeatMinutes),
+    inStockRepeatMinutes: num('inStockRepeatMinutes', DEFAULT_SETTINGS.inStockRepeatMinutes),
+    inStockRepeatHours: num('inStockRepeatHours', DEFAULT_SETTINGS.inStockRepeatHours),
     budgetTotal: num('budgetTotal', DEFAULT_SETTINGS.budgetTotal),
     spendCapDay: map.has('spendCapDay') && Number.isFinite(Number(map.get('spendCapDay'))) && Number(map.get('spendCapDay')) > 0
       ? Number(map.get('spendCapDay'))
@@ -1173,6 +1208,8 @@ export async function setSettings(
     'paused',
     'sweepEveryHours',
     'stagedRepeatMinutes',
+    'inStockRepeatMinutes',
+    'inStockRepeatHours',
     'budgetTotal',
     'spendCapDay',
     'pausedRetailers',
@@ -2177,6 +2214,54 @@ export async function claimStagedAnnounce(
     [userId, listingId, Math.max(0, Math.round(repeatMinutes))],
   );
   return rows.length > 0;
+}
+
+/**
+ * Claim the right to say a listing is still in stock.
+ *
+ * Three rules live in the one statement, for the same reason the staged claim
+ * does — a pass reports a batch, and read-then-write would let two readings
+ * both walk through the gap:
+ *
+ *   · it must still BE in stock;
+ *   · the interval since the last thing we said must have elapsed;
+ *   · and it must have come in stock recently enough to still be news.
+ *
+ * `last_changed_at` is when it became buyable, so the third rule is a window
+ * that closes on its own. A listing that has sat in stock all day stops
+ * generating posts without anyone having to mute it.
+ */
+export async function claimStockAnnounce(
+  db: Sql,
+  userId: number,
+  listingId: number,
+  repeatMinutes: number,
+  withinHours: number,
+): Promise<boolean> {
+  const rows = await db.query<{ listing_id: number }>(
+    `UPDATE watch_state SET stock_notified_at = now()
+      WHERE user_id = $1 AND listing_id = $2
+        AND state = 'in'
+        AND (stock_notified_at IS NULL
+             OR ($3 > 0 AND stock_notified_at < now() - ($3 || ' minutes')::interval))
+        AND ($4 <= 0 OR last_changed_at > now() - ($4 || ' hours')::interval)
+      RETURNING listing_id`,
+    [userId, listingId, Math.max(0, Math.round(repeatMinutes)), Math.max(0, Math.round(withinHours))],
+  );
+  return rows.length > 0;
+}
+
+/** Out of stock: forget it, so coming back is news again. */
+export async function clearStockAnnounce(
+  db: Sql,
+  userId: number,
+  listingId: number,
+): Promise<void> {
+  await db.query(
+    `UPDATE watch_state SET stock_notified_at = NULL
+      WHERE user_id = $1 AND listing_id = $2 AND stock_notified_at IS NOT NULL`,
+    [userId, listingId],
+  );
 }
 
 /**

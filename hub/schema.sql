@@ -923,3 +923,8 @@ ALTER TABLE discoveries ADD COLUMN IF NOT EXISTS available_quantity INTEGER;
 -- a first sighting always announces. It is cleared the moment a listing stops
 -- being staged, so the next load-in is judged fresh.
 ALTER TABLE watch_state ADD COLUMN IF NOT EXISTS staged_notified_at TIMESTAMPTZ;
+
+-- Repeating the in-stock alert. Same shape as staged_notified_at: when we last
+-- said it, per listing, so an interval has something to measure against. NULL
+-- means nothing said, which is why the first sighting always announces.
+ALTER TABLE watch_state ADD COLUMN IF NOT EXISTS stock_notified_at TIMESTAMPTZ;
