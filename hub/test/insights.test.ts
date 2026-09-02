@@ -508,52 +508,103 @@ async function inStock(db: any, listingId: number) {
   await store.recordObservation(db, A, {
     listingId, state: 'in', availableQuantity: 10, price: 59.99, sellerKind: 'retailer',
   });
+  await store.beginStockAlerts(db, A, listingId);
 }
 
-test('THE FIRST IN-STOCK ALERT ALWAYS FIRES, AND THE SECOND WAITS', async () => {
-  const { db, listing } = await seeded();
-  await inStock(db, listing.id);
-  assert.equal(await store.claimStockAnnounce(db, A, listing.id, 0, 0), true, 'the edge');
-  assert.equal(await store.claimStockAnnounce(db, A, listing.id, 60, 6), false, 'not an hour later yet');
-});
-
-test('A LISTING THAT HAS SAT IN STOCK ALL DAY STOPS POSTING BY ITSELF', async () => {
-  // Measured on one ordinary day: three watched listings had been continuously
-  // in stock for 8.8, 14.9 and 16.9 hours. At hourly repeats that is 41 posts
-  // about three things nobody needed reminding of.
-  const { db, listing } = await seeded();
-  await inStock(db, listing.id);
-  // Pretend it came in stock nine hours ago and we have said nothing since.
+/** Pretend the first alert went out this many minutes ago. */
+async function firstAlertWas(db: any, listingId: number, minutesAgo: number) {
   await db.query(
-    `UPDATE watch_state SET last_changed_at = now() - interval '9 hours', stock_notified_at = NULL
+    `UPDATE watch_state SET stock_notified_at = now() - ($2 || ' minutes')::interval
       WHERE listing_id = $1`,
-    [listing.id],
+    [listingId, minutesAgo],
   );
-  assert.equal(
-    await store.claimStockAnnounce(db, A, listing.id, 60, 6),
-    false,
-    'past the window: a listing, not an alert',
-  );
-  assert.equal(
-    await store.claimStockAnnounce(db, A, listing.id, 60, 0),
-    true,
-    'and 0 hours means no window at all, for someone who wants that',
-  );
-});
+}
 
-test('going out of stock makes coming back news again', async () => {
+test('THE SCHEDULE SENDS EXACTLY WHAT IT SAYS, THEN STOPS', async () => {
+  // "One at stock, one at 30 minutes." Two posts, and the second is the last
+  // one — which is the whole reason this is a list and not an interval.
   const { db, listing } = await seeded();
   await inStock(db, listing.id);
-  assert.equal(await store.claimStockAnnounce(db, A, listing.id, 0, 0), true);
-  assert.equal(await store.claimStockAnnounce(db, A, listing.id, 0, 0), false);
+  const after = [30];
+
+  assert.equal(await store.claimStockFollowUp(db, A, listing.id, after), false, 'not yet');
+  await firstAlertWas(db, A === A ? listing.id : listing.id, 31);
+  assert.equal(await store.claimStockFollowUp(db, A, listing.id, after), true, 'the follow-up');
+  assert.equal(await store.claimStockFollowUp(db, A, listing.id, after), false, 'and that is all');
+  await firstAlertWas(db, listing.id, 600);
+  assert.equal(await store.claimStockFollowUp(db, A, listing.id, after), false, 'still all, hours later');
+});
+
+test('a two-step schedule fires in order and no faster', async () => {
+  const { db, listing } = await seeded();
+  await inStock(db, listing.id);
+  const after = [30, 60];
+
+  await firstAlertWas(db, listing.id, 31);
+  assert.equal(await store.claimStockFollowUp(db, A, listing.id, after), true, 'the 30');
+  assert.equal(await store.claimStockFollowUp(db, A, listing.id, after), false, 'not the 60 yet');
+  await firstAlertWas(db, listing.id, 61);
+  assert.equal(await store.claimStockFollowUp(db, A, listing.id, after), true, 'the 60');
+  assert.equal(await store.claimStockFollowUp(db, A, listing.id, after), false, 'schedule spent');
+});
+
+test('an empty schedule says it once and never again', async () => {
+  const { db, listing } = await seeded();
+  await inStock(db, listing.id);
+  await firstAlertWas(db, listing.id, 600);
+  assert.equal(await store.claimStockFollowUp(db, A, listing.id, []), false);
+});
+
+test('GOING OUT OF STOCK MAKES COMING BACK NEWS AGAIN', async () => {
+  const { db, listing } = await seeded();
+  await inStock(db, listing.id);
+  await firstAlertWas(db, listing.id, 31);
+  assert.equal(await store.claimStockFollowUp(db, A, listing.id, [30]), true);
+  assert.equal(await store.claimStockFollowUp(db, A, listing.id, [30]), false, 'spent');
+
   await store.clearStockAnnounce(db, A, listing.id);
-  assert.equal(await store.claimStockAnnounce(db, A, listing.id, 0, 0), true);
+  await inStock(db, listing.id);
+  await firstAlertWas(db, listing.id, 31);
+  assert.equal(await store.claimStockFollowUp(db, A, listing.id, [30]), true, 'a new visit, a new schedule');
 });
 
 test('a listing that is not in stock is never claimed', async () => {
   const { db, listing } = await seeded();
+  await inStock(db, listing.id);
+  await firstAlertWas(db, listing.id, 60);
   await store.recordObservation(db, A, { listingId: listing.id, state: 'out', availableQuantity: 0 });
-  assert.equal(await store.claimStockAnnounce(db, A, listing.id, 0, 0), false);
+  assert.equal(await store.claimStockFollowUp(db, A, listing.id, [30]), false);
+});
+
+test('THE FOLLOW-UP TIMES MUST READ AS A TIMELINE', async () => {
+  assert.equal(store.validateSettings({ inStockRepeatAfter: [30] }), null);
+  assert.equal(store.validateSettings({ inStockRepeatAfter: [30, 60] }), null);
+  assert.equal(store.validateSettings({ inStockRepeatAfter: [] }), null, 'off is allowed');
+  assert.match(String(store.validateSettings({ inStockRepeatAfter: [60, 30] })), /go up/);
+  assert.match(String(store.validateSettings({ inStockRepeatAfter: [30, 30] })), /go up/);
+  assert.match(String(store.validateSettings({ inStockRepeatAfter: [1] })), /sooner than 5/);
+});
+
+// ── Muting one product ───────────────────────────────────────────────────────
+
+test('A MISSION CAN BE MUTED WITHOUT BEING PAUSED', async () => {
+  // Two different questions. Pausing stops Phantom looking; muting stops it
+  // telling people, while the checking, the buying and the page carry on.
+  const { db, listing } = await seeded();
+  const m = await store.upsertMission(db, A, { listingId: listing.id, alerts: false });
+  assert.equal(m.alerts, false);
+  assert.equal(m.enabled, true, 'still watched');
+
+  const back = await store.upsertMission(db, A, { listingId: listing.id, alerts: true });
+  assert.equal(back.alerts, true);
+});
+
+test('a mission written without saying anything about alerts still announces', async () => {
+  // Silence on upgrade is the failure to avoid: a mission that predates this
+  // switch was posting, and must keep posting until somebody says otherwise.
+  const { db, listing } = await seeded();
+  const m = await store.upsertMission(db, A, { listingId: listing.id });
+  assert.equal(m.alerts, true);
 });
 
 test('THE EMPTY-SYSTEM DEFAULTS ARE SILENCE, NOT A STREAM', async () => {
@@ -562,6 +613,5 @@ test('THE EMPTY-SYSTEM DEFAULTS ARE SILENCE, NOT A STREAM', async () => {
   const db = await TestDb.create();
   const cfg = await store.getSettings(db, A);
   assert.equal(cfg.stagedRepeatMinutes, 0);
-  assert.equal(cfg.inStockRepeatMinutes, 0);
-  assert.equal(cfg.inStockRepeatHours, 6, 'a sensible window, waiting for an interval to use it');
+  assert.deepEqual(cfg.inStockRepeatAfter, [], 'no follow-ups until somebody schedules them');
 });

@@ -928,3 +928,11 @@ ALTER TABLE watch_state ADD COLUMN IF NOT EXISTS staged_notified_at TIMESTAMPTZ;
 -- said it, per listing, so an interval has something to measure against. NULL
 -- means nothing said, which is why the first sighting always announces.
 ALTER TABLE watch_state ADD COLUMN IF NOT EXISTS stock_notified_at TIMESTAMPTZ;
+-- How many follow-ups have gone out since that first alert. Doubles as the
+-- index into the schedule, which is what keeps the decision one comparison.
+ALTER TABLE watch_state ADD COLUMN IF NOT EXISTS stock_alerts_sent INTEGER NOT NULL DEFAULT 0;
+
+-- Per-mission mute. A watched listing whose alerts are off is still checked,
+-- still bought if armed, and still on the page - it simply stops posting to a
+-- room of people who did not ask about that one.
+ALTER TABLE missions ADD COLUMN IF NOT EXISTS alerts BOOLEAN NOT NULL DEFAULT true;

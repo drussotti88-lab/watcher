@@ -3455,3 +3455,27 @@ test('MOVING REFRESH OUT OF THE TOOLBAR KEEPS IT WORKING', async () => {
   assert.ok(h.doc.getElementById('tab-settings').contains(refresh));
   assert.ok(!h.doc.querySelector('.bar').contains(refresh), 'and not in the toolbar');
 });
+
+test('A MISSION CAN BE MUTED FROM ITS SETTINGS, WITHOUT PAUSING IT', async () => {
+  // Muting is a question about the channel, not about the machine. The two
+  // switches sit next to each other and mean different things.
+  const d = JSON.parse(JSON.stringify(DASHBOARD));
+  d.missions[0].alerts = false;
+  const h = await boot(d);
+  openMission(h);
+  const box = h.doc.querySelector('#detail-body [name=alerts]') as any;
+  assert.ok(box, 'the switch exists');
+  assert.equal(box.checked, false, 'and reflects the muted mission');
+  assert.equal((h.doc.querySelector('#detail-body [name=enabled]') as any).checked, true,
+    'still being watched');
+});
+
+test('a mission from an older Hub shows as announcing, not silenced', async () => {
+  // An unticked box on a mission that has been posting all along would mute it
+  // on the next save, silently, because somebody opened the dialog.
+  const d = JSON.parse(JSON.stringify(DASHBOARD));
+  delete d.missions[0].alerts;
+  const h = await boot(d);
+  openMission(h);
+  assert.equal((h.doc.querySelector('#detail-body [name=alerts]') as any).checked, true);
+});

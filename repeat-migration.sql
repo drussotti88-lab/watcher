@@ -20,6 +20,16 @@
 ALTER TABLE watch_state ADD COLUMN IF NOT EXISTS staged_notified_at TIMESTAMPTZ;
 ALTER TABLE watch_state ADD COLUMN IF NOT EXISTS stock_notified_at  TIMESTAMPTZ;
 
+-- How many follow-ups have gone out since that first in-stock post. It doubles
+-- as the index into the schedule, which is what keeps the decision to send one
+-- comparison rather than a pile of timestamps.
+ALTER TABLE watch_state ADD COLUMN IF NOT EXISTS stock_alerts_sent INTEGER NOT NULL DEFAULT 0;
+
+-- Per-mission mute. A muted mission is still checked, still bought if armed,
+-- and still on the page - it simply stops posting to a room of people who did
+-- not ask about that one. Defaults to true so nothing goes quiet on upgrade.
+ALTER TABLE missions ADD COLUMN IF NOT EXISTS alerts BOOLEAN NOT NULL DEFAULT true;
+
 SELECT count(*) AS listings,
        count(*) FILTER (WHERE state = 'in') AS in_stock_now
   FROM watch_state;

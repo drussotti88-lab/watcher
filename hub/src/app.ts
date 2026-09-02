@@ -1175,41 +1175,32 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
           /*
            * Still here — the follow-up, for people who were not looking.
            *
-           * The edge alert is the news and always fires. This is the reminder,
-           * and it is deliberately hard to turn into noise:
-           *
-           *   · off by default;
-           *   · never faster than the owner's interval;
-           *   · never past the window measured from when it came in stock, so
-           *     a listing that sits in stock all day stops posting by itself;
-           *   · and NEVER for a marketplace seller. Seventeen of this account's
-           *     watched listings are Walmart resellers that are in stock
-           *     permanently at two to four times MSRP. One alert for those is
-           *     arguably fair warning. An hourly one forever is the thing that
-           *     makes a channel get muted, and a muted channel misses the drop.
+           * A SCHEDULE, not a tap: minutes after the first post, and when the
+           * list runs out the alerts are over. Off by default, and never for a
+           * marketplace seller — seventeen of this account's watched listings
+           * are Walmart resellers that sit in stock permanently at two to four
+           * times MSRP. One alert for those is fair warning. A recurring one is
+           * how a channel gets muted, and a muted channel misses the drop.
            */
           if (
             obs.state === 'in' &&
             outcome.previousState === 'in' &&
             (obs.sellerKind ?? '') !== 'marketplace' &&
-            Number(cfg?.inStockRepeatMinutes ?? 0) > 0
+            (cfg?.inStockRepeatAfter?.length ?? 0) > 0
           ) {
-            const again = await store.claimStockAnnounce(
+            const again = await store.claimStockFollowUp(
               db,
               userId,
               obs.listingId,
-              Number(cfg?.inStockRepeatMinutes ?? 0),
-              Number(cfg?.inStockRepeatHours ?? 0),
+              cfg?.inStockRepeatAfter ?? [],
             );
             if (again) stillIn.push(obs);
           }
 
-          // Came in stock, or left it. Either way the repeat clock resets: a
-          // listing that goes out and comes back is news again.
+          // Came in stock: the first post always goes, and the schedule starts
+          // from here. Left it: forget everything, so coming back is news.
           if (obs.state === 'in' && outcome.previousState !== 'in') {
-            await store
-              .claimStockAnnounce(db, userId, obs.listingId, 0, 0)
-              .catch(() => false);
+            await store.beginStockAlerts(db, userId, obs.listingId).catch(() => {});
           } else if (obs.state !== 'in') {
             await store.clearStockAnnounce(db, userId, obs.listingId).catch(() => {});
           }
@@ -1267,10 +1258,30 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
         ? new Map((await store.listMissions(db, userId).catch(() => [])).map((m) => [m.listingId, m]))
         : new Map();
 
-      if (cameIntoStock.length > 0 && env.DISCORD_WEBHOOK_URL) {
+      /*
+       * The per-mission mute, applied to everything on the way out.
+       *
+       * Deliberately here rather than at each decision above: the alerts are a
+       * layer over what Phantom already does, and muting one product must not
+       * change the checking, the buying, the history or the page. It is a
+       * question about the CHANNEL — a 99-cent test pen and a reseller's tin at
+       * three times MSRP are both worth watching and neither is worth telling a
+       * room about — so it belongs at the one point where things leave.
+       *
+       * A listing with no mission of ours (a reading arriving for somebody
+       * else's) is not announced either, which was already true and is now
+       * true on purpose.
+       */
+      const speaks = (listingId: number): boolean => {
+        const m = byListing.get(listingId);
+        return m ? m.alerts !== false : false;
+      };
+
+      const freshAlerts = cameIntoStock.filter((c) => speaks(c.obs.listingId));
+      if (freshAlerts.length > 0 && env.DISCORD_WEBHOOK_URL) {
         await announceStock(
           env.DISCORD_WEBHOOK_URL,
-          cameIntoStock.map((c) => {
+          freshAlerts.map((c) => {
             const m = byListing.get(c.obs.listingId);
             // The reading is fresher than the watchlist for price, count and
             // seller; the watchlist is the only place the name, photo, MSRP,
@@ -1295,10 +1306,11 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       // Same card, with a footer that says which kind of message it is. Without
       // it a reminder reads as a fresh drop and sends people running at
       // something they already missed or already bought.
-      if (stillIn.length > 0 && env.DISCORD_WEBHOOK_URL) {
+      const againAlerts = stillIn.filter((o) => speaks(o.listingId));
+      if (againAlerts.length > 0 && env.DISCORD_WEBHOOK_URL) {
         await announceStock(
           env.DISCORD_WEBHOOK_URL,
-          stillIn.map((o) => {
+          againAlerts.map((o) => {
             const m = byListing.get(o.listingId);
             return {
               name: m ? m.productName : `listing ${o.listingId}`,
@@ -1318,10 +1330,11 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
         );
       }
 
-      if (loaded.length > 0 && env.DISCORD_WEBHOOK_URL) {
+      const loadedAlerts = loaded.filter((l) => speaks(l.listingId));
+      if (loadedAlerts.length > 0 && env.DISCORD_WEBHOOK_URL) {
         await announceStaged(
           env.DISCORD_WEBHOOK_URL,
-          loaded.map((l) => {
+          loadedAlerts.map((l) => {
             const m = byListing.get(l.listingId);
             return {
               name: m ? m.productName : `listing ${l.listingId}`,

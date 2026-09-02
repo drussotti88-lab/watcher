@@ -1454,13 +1454,10 @@ ${FONTS}<style>${STYLE}</style></head>
             <span class="hint">minutes between reminders while stock sits staged — 0 says it once</span>
             <input type="number" name="stagedRepeatMinutes" step="5" min="0" max="1440" placeholder="0">
           </label>
-          <label class="f">Repeat the in-stock alert
-            <span class="hint">minutes between "still there" posts — 0 says it once</span>
-            <input type="number" name="inStockRepeatMinutes" step="5" min="0" max="1440" placeholder="0">
-          </label>
-          <label class="f">Stop repeating after
-            <span class="hint">hours from when it came in stock — after that it is a listing, not an alert</span>
-            <input type="number" name="inStockRepeatHours" step="1" min="0" max="168" placeholder="6">
+          <label class="f">Follow up on in-stock after
+            <span class="hint">minutes after the first post, comma separated — "30" sends two posts in all, "30, 60" sends three. Blank says it once.</span>
+            <input type="text" name="inStockRepeatAfter" placeholder="30" autocomplete="off"
+                   spellcheck="false" maxlength="60">
           </label>
           <label class="f">Open a drop window for
             <span class="hint">it closes itself when the time is up</span>
@@ -2148,6 +2145,7 @@ function missionCard(m) {
         label: m.label,
         enabled: !m.enabled,
         armed: m.armed,
+        alerts: m.alerts,
         ceiling: m.ceiling,
         quantity: m.quantity,
         sellerPolicy: m.sellerPolicy,
@@ -2184,6 +2182,7 @@ function missionCard(m) {
         label: m.label,
         enabled: m.enabled,
         armed: false,
+        alerts: m.alerts,
         ceiling: m.ceiling,
         quantity: m.quantity,
         sellerPolicy: m.sellerPolicy,
@@ -2239,6 +2238,7 @@ function missionPanel(m) {
       </label>
     </div>
     <label class="check"><input type="checkbox" name="enabled"> Watching — check this listing on schedule</label>
+    <label class="check"><input type="checkbox" name="alerts"> Post this one to Discord</label>
     <label class="check"><input type="checkbox" name="armed"> Armed — may buy without asking me</label>
     <div class="actions">
       <button type="submit" class="primary">Save changes</button>
@@ -2271,6 +2271,9 @@ function missionPanel(m) {
   q('preOrderPolicy').value = m.preOrderPolicy || 'skip';
   q('enabled').checked = m.enabled;
   q('armed').checked = m.armed;
+  // Absent on an older Hub means it was announcing, so default it on rather
+  // than presenting an unticked box that silently mutes on the next save.
+  q('alerts').checked = m.alerts !== false;
   const msg = form.querySelector('.msg');
 
   // Say what arming means before it is saved, not after.
@@ -2301,6 +2304,7 @@ function missionPanel(m) {
           label: m.label,
           enabled: f.enabled,
           armed: f.armed,
+          alerts: f.alerts,
           ceiling: num(f.ceiling),
           quantity: Number(f.quantity),
           sellerPolicy: f.sellerPolicy,
@@ -3300,11 +3304,9 @@ function renderShops(st) {
   if (document.activeElement !== burst) burst.value = st.burstSpacingSeconds || '';
   const repeat = sform.querySelector('[name=stagedRepeatMinutes]');
   if (repeat && document.activeElement !== repeat) repeat.value = st.stagedRepeatMinutes || '';
-  const inRep = sform.querySelector('[name=inStockRepeatMinutes]');
-  if (inRep && document.activeElement !== inRep) inRep.value = st.inStockRepeatMinutes || '';
-  const inHrs = sform.querySelector('[name=inStockRepeatHours]');
-  if (inHrs && document.activeElement !== inHrs) {
-    inHrs.value = st.inStockRepeatHours === 0 ? '0' : st.inStockRepeatHours || '';
+  const inRep = sform.querySelector('[name=inStockRepeatAfter]');
+  if (inRep && document.activeElement !== inRep) {
+    inRep.value = (st.inStockRepeatAfter || []).join(', ');
   }
 
   // Is a window open, and how long is left? Said in words, because "true" is
@@ -4984,8 +4986,13 @@ document.getElementById('shops-form').addEventListener('submit', async (e) => {
     await api('POST', '/api/settings', {
       burstSpacingSeconds: f.burstSpacingSeconds === '' ? 0 : Number(f.burstSpacingSeconds),
       stagedRepeatMinutes: f.stagedRepeatMinutes === '' ? 0 : Number(f.stagedRepeatMinutes),
-      inStockRepeatMinutes: f.inStockRepeatMinutes === '' ? 0 : Number(f.inStockRepeatMinutes),
-      inStockRepeatHours: f.inStockRepeatHours === '' ? 6 : Number(f.inStockRepeatHours),
+      // "30, 60" on the page; a list of numbers on the wire. Anything that is
+      // not a number is dropped rather than sent as NaN — a schedule that half
+      // parses should send fewer posts, never one at an unknown time.
+      inStockRepeatAfter: String(f.inStockRepeatAfter || '')
+        .split(',')
+        .map((v) => Number(v.trim()))
+        .filter((n) => Number.isFinite(n) && n > 0),
     });
     load();
     return 'saved';

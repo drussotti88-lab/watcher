@@ -659,6 +659,8 @@ export interface MissionInput {
   label?: string;
   enabled?: boolean;
   armed?: boolean;
+  /** Post this one to Discord. Defaults to true; see MissionRow.alerts. */
+  alerts?: boolean;
   ceiling?: number | null;
   quantity?: number;
   sellerPolicy?: SellerPolicy;
@@ -934,25 +936,23 @@ export interface Settings {
    */
   stagedRepeatMinutes: number;
   /**
-   * How often to say a listing is STILL in stock, in minutes. 0 says it once.
+   * When to say a listing is STILL in stock: minutes after the first alert.
    *
-   * The first alert always fires on the edge — nothing counted, then buyable —
-   * because that is the news. This is the follow-up for the people who were
-   * not looking at their phone in the first minute.
+   * A SCHEDULE, not an interval, and the difference is the point. "Every 30
+   * minutes for up to an hour" is ambiguous at the boundary and reads as an
+   * open tap; `[30, 60]` says exactly what will happen — three posts, then
+   * silence — and you can count them before switching it on.
+   *
+   * The first alert always fires on the edge, whatever is in here. This is the
+   * follow-up for people who were not looking at their phone in that minute.
+   *
+   * Empty is the default and means once only. It matters that the end is
+   * built in: measured on one ordinary day, three watched listings had been
+   * continuously in stock for 8.8, 14.9 and 16.9 hours. An open-ended hourly
+   * repeat is forty-one posts about three things nobody needed reminding of,
+   * in a channel people joined to be told when something drops.
    */
-  inStockRepeatMinutes: number;
-  /**
-   * How long to keep repeating, in hours from the moment it came in stock.
-   *
-   * Without this the repeat is a slow leak rather than an alert. Measured on
-   * one ordinary day: three watched listings had been continuously in stock
-   * for 8.8, 14.9 and 16.9 hours, which at hourly repeats is forty-one posts
-   * about three things nobody needed reminding of.
-   *
-   * An hour after a drop opens, a repeat is useful — people are still arriving.
-   * Nine hours after, it is not an alert any more, it is a listing.
-   */
-  inStockRepeatHours: number;
+  inStockRepeatAfter: number[];
   /**
    * The most that may be authorised in any rolling 24 hours, in dollars.
    *
@@ -1019,8 +1019,7 @@ export const DEFAULT_SETTINGS: Settings = {
   paused: false,
   sweepEveryHours: 24,
   stagedRepeatMinutes: 0,
-  inStockRepeatMinutes: 0,
-  inStockRepeatHours: 6,
+  inStockRepeatAfter: [],
   spendCapDay: null,
   budgetTotal: 0,
   pausedRetailers: [],
@@ -1117,16 +1116,21 @@ export function validateSettings(s: Partial<Settings>): string | null {
     if (n > 0 && n < 5) return 'repeat the load-in alert no more often than every 5 minutes';
     if (n > 24 * 60) return 'a repeat interval longer than a day is the same as off';
   }
-  if (s.inStockRepeatMinutes !== undefined) {
-    const n = Number(s.inStockRepeatMinutes);
-    if (!Number.isFinite(n) || n < 0) return 'a repeat interval cannot be negative';
-    if (n > 0 && n < 5) return 'repeat the in-stock alert no more often than every 5 minutes';
-    if (n > 24 * 60) return 'a repeat interval longer than a day is the same as off';
-  }
-  if (s.inStockRepeatHours !== undefined) {
-    const n = Number(s.inStockRepeatHours);
-    if (!Number.isFinite(n) || n < 0) return 'that has to be a number of hours';
-    if (n > 168) return 'repeating for more than a week is not an alert';
+  if (s.inStockRepeatAfter !== undefined) {
+    const list = s.inStockRepeatAfter;
+    if (!Array.isArray(list)) return 'the follow-up times must be a list of minutes';
+    if (list.length > 6) return 'six follow-ups is already more than anybody reads';
+    let last = 0;
+    for (const raw of list) {
+      const n = Number(raw);
+      if (!Number.isFinite(n) || n <= 0) return 'each follow-up is a number of minutes after the first post';
+      if (n < 5) return 'no follow-up sooner than 5 minutes after the first post';
+      if (n > 24 * 60) return 'a follow-up more than a day later is not a follow-up';
+      // Ascending and distinct, because they are read as a timeline and two
+      // the same would fire together and look like a duplicate.
+      if (n <= last) return 'the follow-up times must go up: 30, 60';
+      last = n;
+    }
   }
   if (s.sweepEveryHours !== undefined) {
     if (!Number.isFinite(s.sweepEveryHours) || s.sweepEveryHours < 0) {
@@ -1173,8 +1177,14 @@ export async function getSettings(db: Sql, userId: number): Promise<Settings> {
     paused: text('paused', '') === 'true',
     sweepEveryHours: num('sweepEveryHours', DEFAULT_SETTINGS.sweepEveryHours),
     stagedRepeatMinutes: num('stagedRepeatMinutes', DEFAULT_SETTINGS.stagedRepeatMinutes),
-    inStockRepeatMinutes: num('inStockRepeatMinutes', DEFAULT_SETTINGS.inStockRepeatMinutes),
-    inStockRepeatHours: num('inStockRepeatHours', DEFAULT_SETTINGS.inStockRepeatHours),
+    // Same comma-separated storage as pausedRetailers. A malformed entry is
+    // dropped rather than made NaN: a schedule that half-parses should send
+    // fewer messages, never a message at an unknown time.
+    inStockRepeatAfter: text('inStockRepeatAfter', '')
+      .split(',')
+      .map((v) => Number(v.trim()))
+      .filter((n) => Number.isFinite(n) && n > 0)
+      .sort((a, b) => a - b),
     budgetTotal: num('budgetTotal', DEFAULT_SETTINGS.budgetTotal),
     spendCapDay: map.has('spendCapDay') && Number.isFinite(Number(map.get('spendCapDay'))) && Number(map.get('spendCapDay')) > 0
       ? Number(map.get('spendCapDay'))
@@ -1208,8 +1218,7 @@ export async function setSettings(
     'paused',
     'sweepEveryHours',
     'stagedRepeatMinutes',
-    'inStockRepeatMinutes',
-    'inStockRepeatHours',
+    'inStockRepeatAfter',
     'budgetTotal',
     'spendCapDay',
     'pausedRetailers',
@@ -1247,6 +1256,15 @@ export interface MissionRow {
   label: string;
   enabled: boolean;
   armed: boolean;
+  /**
+   * Does this mission post to Discord?
+   *
+   * Separate from `enabled` on purpose. Pausing stops Phantom looking; this
+   * stops it TELLING PEOPLE, while the checking, the buying and the page all
+   * carry on. A test pen at 99 cents and a marketplace tin at three times MSRP
+   * are both worth watching and neither is worth a room full of notifications.
+   */
+  alerts: boolean;
   ceiling: number | null;
   quantity: number;
   sellerPolicy: SellerPolicy;
@@ -1293,6 +1311,9 @@ function toMission(r: Record<string, unknown>): MissionRow {
     label: String(r.label ?? ''),
     enabled: r.enabled === true,
     armed: r.armed === true,
+    // Default ON when the column is absent or null: a mission that predates
+    // this setting was announcing, and an upgrade must not silence it.
+    alerts: r.alerts === undefined || r.alerts === null ? true : r.alerts === true,
     ceiling: toPrice(r.ceiling),
     quantity: Number(r.quantity ?? 1),
     sellerPolicy: (String(r.seller_policy ?? 'retailer_only') as SellerPolicy),
@@ -1535,8 +1556,8 @@ export async function upsertMission(
 
   const rows = await db.query(
     `INSERT INTO missions (user_id, listing_id, label, enabled, armed, ceiling, quantity,
-                           seller_policy, preorder_policy, check_every_s, notes)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+                           seller_policy, preorder_policy, check_every_s, notes, alerts)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
      -- Per person per listing. One shared listing now carries a mission for
      -- every member watching it; the rule that matters is that no ONE person
      -- ends up with two, because two armed missions is two purchases.
@@ -1549,7 +1570,8 @@ export async function upsertMission(
        seller_policy = EXCLUDED.seller_policy,
        preorder_policy = EXCLUDED.preorder_policy,
        check_every_s = EXCLUDED.check_every_s,
-       notes = EXCLUDED.notes
+       notes = EXCLUDED.notes,
+       alerts = EXCLUDED.alerts
      RETURNING id`,
     [
       userId,
@@ -1563,6 +1585,7 @@ export async function upsertMission(
       m.preOrderPolicy ?? 'skip',
       m.checkEverySeconds ?? 60,
       m.notes ?? '',
+      m.alerts ?? true,
     ],
   );
   const mission = await getMission(db, userId, Number(rows[0]!.id));
@@ -2217,38 +2240,68 @@ export async function claimStagedAnnounce(
 }
 
 /**
- * Claim the right to say a listing is still in stock.
+ * Has this listing earned its next follow-up post, and which one is it?
  *
- * Three rules live in the one statement, for the same reason the staged claim
- * does — a pass reports a batch, and read-then-write would let two readings
- * both walk through the gap:
+ * The schedule is minutes after the FIRST alert, so the state we keep is that
+ * first moment and how many follow-ups have gone out. `stock_alerts_sent` is
+ * both the counter and the index into the schedule, which is what makes the
+ * whole thing one comparison rather than a pile of timestamps.
  *
- *   · it must still BE in stock;
- *   · the interval since the last thing we said must have elapsed;
- *   · and it must have come in stock recently enough to still be news.
- *
- * `last_changed_at` is when it became buyable, so the third rule is a window
- * that closes on its own. A listing that has sat in stock all day stops
- * generating posts without anyone having to mute it.
+ * The write is a compare-and-set: it only increments if the counter is still
+ * what we read. A pass reports a batch and two readings can arrive together;
+ * without the guard both would see "one sent" and both would send the second.
+ * With it, the loser's UPDATE matches nothing and it stays quiet.
  */
-export async function claimStockAnnounce(
+export async function claimStockFollowUp(
   db: Sql,
   userId: number,
   listingId: number,
-  repeatMinutes: number,
-  withinHours: number,
+  afterMinutes: readonly number[],
 ): Promise<boolean> {
+  if (afterMinutes.length === 0) return false;
+  const [row] = await db.query<{ sent: number; due: boolean; live: boolean }>(
+    `SELECT COALESCE(stock_alerts_sent, 0)::int AS sent,
+            (state = 'in') AS live,
+            (stock_notified_at IS NOT NULL) AS due
+       FROM watch_state WHERE user_id = $1 AND listing_id = $2`,
+    [userId, listingId],
+  );
+  if (!row || !row.live || !row.due) return false;
+
+  const sent = Number(row.sent);
+  // Ran out of schedule: the alert is over, and the listing is now just a
+  // listing. Nothing here starts it again except going out of stock.
+  if (sent >= afterMinutes.length) return false;
+
+  const wait = afterMinutes[sent]!;
   const rows = await db.query<{ listing_id: number }>(
-    `UPDATE watch_state SET stock_notified_at = now()
+    `UPDATE watch_state SET stock_alerts_sent = $4 + 1
       WHERE user_id = $1 AND listing_id = $2
         AND state = 'in'
-        AND (stock_notified_at IS NULL
-             OR ($3 > 0 AND stock_notified_at < now() - ($3 || ' minutes')::interval))
-        AND ($4 <= 0 OR last_changed_at > now() - ($4 || ' hours')::interval)
+        AND COALESCE(stock_alerts_sent, 0) = $4
+        AND stock_notified_at <= now() - ($3 || ' minutes')::interval
       RETURNING listing_id`,
-    [userId, listingId, Math.max(0, Math.round(repeatMinutes)), Math.max(0, Math.round(withinHours))],
+    [userId, listingId, Math.round(wait), sent],
   );
   return rows.length > 0;
+}
+
+/**
+ * Mark the first alert, and start the schedule from now.
+ *
+ * Called on the edge — out of stock to in — where the post always goes out
+ * whatever the schedule says. Everything after it is measured from this.
+ */
+export async function beginStockAlerts(
+  db: Sql,
+  userId: number,
+  listingId: number,
+): Promise<void> {
+  await db.query(
+    `UPDATE watch_state SET stock_notified_at = now(), stock_alerts_sent = 0
+      WHERE user_id = $1 AND listing_id = $2`,
+    [userId, listingId],
+  );
 }
 
 /** Out of stock: forget it, so coming back is news again. */
@@ -2258,7 +2311,7 @@ export async function clearStockAnnounce(
   listingId: number,
 ): Promise<void> {
   await db.query(
-    `UPDATE watch_state SET stock_notified_at = NULL
+    `UPDATE watch_state SET stock_notified_at = NULL, stock_alerts_sent = 0
       WHERE user_id = $1 AND listing_id = $2 AND stock_notified_at IS NOT NULL`,
     [userId, listingId],
   );

@@ -716,8 +716,7 @@ var DEFAULT_SETTINGS = {
   paused: false,
   sweepEveryHours: 24,
   stagedRepeatMinutes: 0,
-  inStockRepeatMinutes: 0,
-  inStockRepeatHours: 6,
+  inStockRepeatAfter: [],
   spendCapDay: null,
   budgetTotal: 0,
   pausedRetailers: [],
@@ -797,16 +796,19 @@ function validateSettings(s) {
     if (n > 0 && n < 5) return "repeat the load-in alert no more often than every 5 minutes";
     if (n > 24 * 60) return "a repeat interval longer than a day is the same as off";
   }
-  if (s.inStockRepeatMinutes !== void 0) {
-    const n = Number(s.inStockRepeatMinutes);
-    if (!Number.isFinite(n) || n < 0) return "a repeat interval cannot be negative";
-    if (n > 0 && n < 5) return "repeat the in-stock alert no more often than every 5 minutes";
-    if (n > 24 * 60) return "a repeat interval longer than a day is the same as off";
-  }
-  if (s.inStockRepeatHours !== void 0) {
-    const n = Number(s.inStockRepeatHours);
-    if (!Number.isFinite(n) || n < 0) return "that has to be a number of hours";
-    if (n > 168) return "repeating for more than a week is not an alert";
+  if (s.inStockRepeatAfter !== void 0) {
+    const list = s.inStockRepeatAfter;
+    if (!Array.isArray(list)) return "the follow-up times must be a list of minutes";
+    if (list.length > 6) return "six follow-ups is already more than anybody reads";
+    let last = 0;
+    for (const raw of list) {
+      const n = Number(raw);
+      if (!Number.isFinite(n) || n <= 0) return "each follow-up is a number of minutes after the first post";
+      if (n < 5) return "no follow-up sooner than 5 minutes after the first post";
+      if (n > 24 * 60) return "a follow-up more than a day later is not a follow-up";
+      if (n <= last) return "the follow-up times must go up: 30, 60";
+      last = n;
+    }
   }
   if (s.sweepEveryHours !== void 0) {
     if (!Number.isFinite(s.sweepEveryHours) || s.sweepEveryHours < 0) {
@@ -848,8 +850,10 @@ async function getSettings(db2, userId) {
     paused: text("paused", "") === "true",
     sweepEveryHours: num2("sweepEveryHours", DEFAULT_SETTINGS.sweepEveryHours),
     stagedRepeatMinutes: num2("stagedRepeatMinutes", DEFAULT_SETTINGS.stagedRepeatMinutes),
-    inStockRepeatMinutes: num2("inStockRepeatMinutes", DEFAULT_SETTINGS.inStockRepeatMinutes),
-    inStockRepeatHours: num2("inStockRepeatHours", DEFAULT_SETTINGS.inStockRepeatHours),
+    // Same comma-separated storage as pausedRetailers. A malformed entry is
+    // dropped rather than made NaN: a schedule that half-parses should send
+    // fewer messages, never a message at an unknown time.
+    inStockRepeatAfter: text("inStockRepeatAfter", "").split(",").map((v) => Number(v.trim())).filter((n) => Number.isFinite(n) && n > 0).sort((a, b) => a - b),
     budgetTotal: num2("budgetTotal", DEFAULT_SETTINGS.budgetTotal),
     spendCapDay: map.has("spendCapDay") && Number.isFinite(Number(map.get("spendCapDay"))) && Number(map.get("spendCapDay")) > 0 ? Number(map.get("spendCapDay")) : null,
     // Stored as one comma-separated string: the set is three names, and a
@@ -872,8 +876,7 @@ async function setSettings(db2, userId, patch) {
     "paused",
     "sweepEveryHours",
     "stagedRepeatMinutes",
-    "inStockRepeatMinutes",
-    "inStockRepeatHours",
+    "inStockRepeatAfter",
     "budgetTotal",
     "spendCapDay",
     "pausedRetailers",
@@ -912,6 +915,9 @@ function toMission(r) {
     label: String(r.label ?? ""),
     enabled: r.enabled === true,
     armed: r.armed === true,
+    // Default ON when the column is absent or null: a mission that predates
+    // this setting was announcing, and an upgrade must not silence it.
+    alerts: r.alerts === void 0 || r.alerts === null ? true : r.alerts === true,
     ceiling: toPrice(r.ceiling),
     quantity: Number(r.quantity ?? 1),
     sellerPolicy: String(r.seller_policy ?? "retailer_only"),
@@ -1057,8 +1063,8 @@ async function upsertMission(db2, userId, m) {
   }
   const rows = await db2.query(
     `INSERT INTO missions (user_id, listing_id, label, enabled, armed, ceiling, quantity,
-                           seller_policy, preorder_policy, check_every_s, notes)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+                           seller_policy, preorder_policy, check_every_s, notes, alerts)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
      -- Per person per listing. One shared listing now carries a mission for
      -- every member watching it; the rule that matters is that no ONE person
      -- ends up with two, because two armed missions is two purchases.
@@ -1071,7 +1077,8 @@ async function upsertMission(db2, userId, m) {
        seller_policy = EXCLUDED.seller_policy,
        preorder_policy = EXCLUDED.preorder_policy,
        check_every_s = EXCLUDED.check_every_s,
-       notes = EXCLUDED.notes
+       notes = EXCLUDED.notes,
+       alerts = EXCLUDED.alerts
      RETURNING id`,
     [
       userId,
@@ -1084,7 +1091,8 @@ async function upsertMission(db2, userId, m) {
       m.sellerPolicy ?? "retailer_only",
       m.preOrderPolicy ?? "skip",
       m.checkEverySeconds ?? 60,
-      m.notes ?? ""
+      m.notes ?? "",
+      m.alerts ?? true
     ]
   );
   const mission = await getMission(db2, userId, Number(rows[0].id));
@@ -1438,22 +1446,40 @@ async function claimStagedAnnounce(db2, userId, listingId, repeatMinutes) {
   );
   return rows.length > 0;
 }
-async function claimStockAnnounce(db2, userId, listingId, repeatMinutes, withinHours) {
+async function claimStockFollowUp(db2, userId, listingId, afterMinutes) {
+  if (afterMinutes.length === 0) return false;
+  const [row] = await db2.query(
+    `SELECT COALESCE(stock_alerts_sent, 0)::int AS sent,
+            (state = 'in') AS live,
+            (stock_notified_at IS NOT NULL) AS due
+       FROM watch_state WHERE user_id = $1 AND listing_id = $2`,
+    [userId, listingId]
+  );
+  if (!row || !row.live || !row.due) return false;
+  const sent = Number(row.sent);
+  if (sent >= afterMinutes.length) return false;
+  const wait = afterMinutes[sent];
   const rows = await db2.query(
-    `UPDATE watch_state SET stock_notified_at = now()
+    `UPDATE watch_state SET stock_alerts_sent = $4 + 1
       WHERE user_id = $1 AND listing_id = $2
         AND state = 'in'
-        AND (stock_notified_at IS NULL
-             OR ($3 > 0 AND stock_notified_at < now() - ($3 || ' minutes')::interval))
-        AND ($4 <= 0 OR last_changed_at > now() - ($4 || ' hours')::interval)
+        AND COALESCE(stock_alerts_sent, 0) = $4
+        AND stock_notified_at <= now() - ($3 || ' minutes')::interval
       RETURNING listing_id`,
-    [userId, listingId, Math.max(0, Math.round(repeatMinutes)), Math.max(0, Math.round(withinHours))]
+    [userId, listingId, Math.round(wait), sent]
   );
   return rows.length > 0;
 }
+async function beginStockAlerts(db2, userId, listingId) {
+  await db2.query(
+    `UPDATE watch_state SET stock_notified_at = now(), stock_alerts_sent = 0
+      WHERE user_id = $1 AND listing_id = $2`,
+    [userId, listingId]
+  );
+}
 async function clearStockAnnounce(db2, userId, listingId) {
   await db2.query(
-    `UPDATE watch_state SET stock_notified_at = NULL
+    `UPDATE watch_state SET stock_notified_at = NULL, stock_alerts_sent = 0
       WHERE user_id = $1 AND listing_id = $2 AND stock_notified_at IS NOT NULL`,
     [userId, listingId]
   );
@@ -4139,13 +4165,10 @@ ${FONTS}<style>${STYLE}</style></head>
             <span class="hint">minutes between reminders while stock sits staged \u2014 0 says it once</span>
             <input type="number" name="stagedRepeatMinutes" step="5" min="0" max="1440" placeholder="0">
           </label>
-          <label class="f">Repeat the in-stock alert
-            <span class="hint">minutes between "still there" posts \u2014 0 says it once</span>
-            <input type="number" name="inStockRepeatMinutes" step="5" min="0" max="1440" placeholder="0">
-          </label>
-          <label class="f">Stop repeating after
-            <span class="hint">hours from when it came in stock \u2014 after that it is a listing, not an alert</span>
-            <input type="number" name="inStockRepeatHours" step="1" min="0" max="168" placeholder="6">
+          <label class="f">Follow up on in-stock after
+            <span class="hint">minutes after the first post, comma separated \u2014 "30" sends two posts in all, "30, 60" sends three. Blank says it once.</span>
+            <input type="text" name="inStockRepeatAfter" placeholder="30" autocomplete="off"
+                   spellcheck="false" maxlength="60">
           </label>
           <label class="f">Open a drop window for
             <span class="hint">it closes itself when the time is up</span>
@@ -4833,6 +4856,7 @@ function missionCard(m) {
         label: m.label,
         enabled: !m.enabled,
         armed: m.armed,
+        alerts: m.alerts,
         ceiling: m.ceiling,
         quantity: m.quantity,
         sellerPolicy: m.sellerPolicy,
@@ -4869,6 +4893,7 @@ function missionCard(m) {
         label: m.label,
         enabled: m.enabled,
         armed: false,
+        alerts: m.alerts,
         ceiling: m.ceiling,
         quantity: m.quantity,
         sellerPolicy: m.sellerPolicy,
@@ -4924,6 +4949,7 @@ function missionPanel(m) {
       </label>
     </div>
     <label class="check"><input type="checkbox" name="enabled"> Watching \u2014 check this listing on schedule</label>
+    <label class="check"><input type="checkbox" name="alerts"> Post this one to Discord</label>
     <label class="check"><input type="checkbox" name="armed"> Armed \u2014 may buy without asking me</label>
     <div class="actions">
       <button type="submit" class="primary">Save changes</button>
@@ -4956,6 +4982,9 @@ function missionPanel(m) {
   q('preOrderPolicy').value = m.preOrderPolicy || 'skip';
   q('enabled').checked = m.enabled;
   q('armed').checked = m.armed;
+  // Absent on an older Hub means it was announcing, so default it on rather
+  // than presenting an unticked box that silently mutes on the next save.
+  q('alerts').checked = m.alerts !== false;
   const msg = form.querySelector('.msg');
 
   // Say what arming means before it is saved, not after.
@@ -4986,6 +5015,7 @@ function missionPanel(m) {
           label: m.label,
           enabled: f.enabled,
           armed: f.armed,
+          alerts: f.alerts,
           ceiling: num(f.ceiling),
           quantity: Number(f.quantity),
           sellerPolicy: f.sellerPolicy,
@@ -5985,11 +6015,9 @@ function renderShops(st) {
   if (document.activeElement !== burst) burst.value = st.burstSpacingSeconds || '';
   const repeat = sform.querySelector('[name=stagedRepeatMinutes]');
   if (repeat && document.activeElement !== repeat) repeat.value = st.stagedRepeatMinutes || '';
-  const inRep = sform.querySelector('[name=inStockRepeatMinutes]');
-  if (inRep && document.activeElement !== inRep) inRep.value = st.inStockRepeatMinutes || '';
-  const inHrs = sform.querySelector('[name=inStockRepeatHours]');
-  if (inHrs && document.activeElement !== inHrs) {
-    inHrs.value = st.inStockRepeatHours === 0 ? '0' : st.inStockRepeatHours || '';
+  const inRep = sform.querySelector('[name=inStockRepeatAfter]');
+  if (inRep && document.activeElement !== inRep) {
+    inRep.value = (st.inStockRepeatAfter || []).join(', ');
   }
 
   // Is a window open, and how long is left? Said in words, because "true" is
@@ -7669,8 +7697,13 @@ document.getElementById('shops-form').addEventListener('submit', async (e) => {
     await api('POST', '/api/settings', {
       burstSpacingSeconds: f.burstSpacingSeconds === '' ? 0 : Number(f.burstSpacingSeconds),
       stagedRepeatMinutes: f.stagedRepeatMinutes === '' ? 0 : Number(f.stagedRepeatMinutes),
-      inStockRepeatMinutes: f.inStockRepeatMinutes === '' ? 0 : Number(f.inStockRepeatMinutes),
-      inStockRepeatHours: f.inStockRepeatHours === '' ? 6 : Number(f.inStockRepeatHours),
+      // "30, 60" on the page; a list of numbers on the wire. Anything that is
+      // not a number is dropped rather than sent as NaN \u2014 a schedule that half
+      // parses should send fewer posts, never one at an unknown time.
+      inStockRepeatAfter: String(f.inStockRepeatAfter || '')
+        .split(',')
+        .map((v) => Number(v.trim()))
+        .filter((n) => Number.isFinite(n) && n > 0),
     });
     load();
     return 'saved';
@@ -8939,18 +8972,18 @@ function createHandler(db2, env2) {
           const outcome = await recordObservation(db2, userId, obs);
           results.push({ listingId: obs.listingId, changed: outcome.changed });
           if (outcome.changed) changes.push({ obs, was: outcome.previousState });
-          if (obs.state === "in" && outcome.previousState === "in" && (obs.sellerKind ?? "") !== "marketplace" && Number(cfg?.inStockRepeatMinutes ?? 0) > 0) {
-            const again = await claimStockAnnounce(
+          if (obs.state === "in" && outcome.previousState === "in" && (obs.sellerKind ?? "") !== "marketplace" && (cfg?.inStockRepeatAfter?.length ?? 0) > 0) {
+            const again = await claimStockFollowUp(
               db2,
               userId,
               obs.listingId,
-              Number(cfg?.inStockRepeatMinutes ?? 0),
-              Number(cfg?.inStockRepeatHours ?? 0)
+              cfg?.inStockRepeatAfter ?? []
             );
             if (again) stillIn.push(obs);
           }
           if (obs.state === "in" && outcome.previousState !== "in") {
-            await claimStockAnnounce(db2, userId, obs.listingId, 0, 0).catch(() => false);
+            await beginStockAlerts(db2, userId, obs.listingId).catch(() => {
+            });
           } else if (obs.state !== "in") {
             await clearStockAnnounce(db2, userId, obs.listingId).catch(() => {
             });
@@ -8972,10 +9005,15 @@ function createHandler(db2, env2) {
       const cameIntoStock = changes.filter((c) => c.obs.state === "in" && c.was !== "in");
       const willAlert = env2.DISCORD_WEBHOOK_URL && (cameIntoStock.length > 0 || loaded.length > 0 || stillIn.length > 0);
       const byListing = willAlert ? new Map((await listMissions(db2, userId).catch(() => [])).map((m) => [m.listingId, m])) : /* @__PURE__ */ new Map();
-      if (cameIntoStock.length > 0 && env2.DISCORD_WEBHOOK_URL) {
+      const speaks = (listingId) => {
+        const m = byListing.get(listingId);
+        return m ? m.alerts !== false : false;
+      };
+      const freshAlerts = cameIntoStock.filter((c) => speaks(c.obs.listingId));
+      if (freshAlerts.length > 0 && env2.DISCORD_WEBHOOK_URL) {
         await announceStock(
           env2.DISCORD_WEBHOOK_URL,
-          cameIntoStock.map((c) => {
+          freshAlerts.map((c) => {
             const m = byListing.get(c.obs.listingId);
             return {
               name: m ? m.productName : `listing ${c.obs.listingId}`,
@@ -8993,10 +9031,11 @@ function createHandler(db2, env2) {
           now
         );
       }
-      if (stillIn.length > 0 && env2.DISCORD_WEBHOOK_URL) {
+      const againAlerts = stillIn.filter((o) => speaks(o.listingId));
+      if (againAlerts.length > 0 && env2.DISCORD_WEBHOOK_URL) {
         await announceStock(
           env2.DISCORD_WEBHOOK_URL,
-          stillIn.map((o) => {
+          againAlerts.map((o) => {
             const m = byListing.get(o.listingId);
             return {
               name: m ? m.productName : `listing ${o.listingId}`,
@@ -9015,10 +9054,11 @@ function createHandler(db2, env2) {
           "still in stock"
         );
       }
-      if (loaded.length > 0 && env2.DISCORD_WEBHOOK_URL) {
+      const loadedAlerts = loaded.filter((l) => speaks(l.listingId));
+      if (loadedAlerts.length > 0 && env2.DISCORD_WEBHOOK_URL) {
         await announceStaged(
           env2.DISCORD_WEBHOOK_URL,
-          loaded.map((l) => {
+          loadedAlerts.map((l) => {
             const m = byListing.get(l.listingId);
             return {
               name: m ? m.productName : `listing ${l.listingId}`,
