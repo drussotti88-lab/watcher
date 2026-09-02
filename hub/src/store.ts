@@ -780,6 +780,83 @@ export async function userHandle(db: Sql, userId: number): Promise<string> {
   return String(rows[0]?.handle ?? '');
 }
 
+export interface Profile {
+  handle: string;
+  /** When the account was made. The one date that is about the person. */
+  since: string;
+  canCurate: boolean;
+  canArm: boolean;
+  /** Linked to a DNA Card Vault account, so wins can be sent to a collection. */
+  vaultLinked: boolean;
+  vaultCheckedAt: string;
+  /** What this account is actually doing, rather than what it may do. */
+  missions: number;
+  armed: number;
+  bought: number;
+  spent: number;
+}
+
+/**
+ * Who you are, and what you have done here.
+ *
+ * Every number is this user's own, scoped by user_id, and every one is
+ * counted rather than estimated. Nothing about anybody else appears: a profile
+ * that quietly showed the owner's totals to a member would be a leak wearing a
+ * friendly face.
+ *
+ * No token, no hash, no vault id. The vault link is reported as a BOOLEAN —
+ * that an account is connected is the useful fact; which account it is
+ * connected to is not, and it is somebody's identifier in another system.
+ */
+export async function profile(db: Sql, userId: number): Promise<Profile> {
+  const [who] = await db.query<{
+    handle: string;
+    created_at: string;
+    can_write_catalogue: boolean;
+    can_arm: boolean;
+    vault_user_id: string | null;
+    entitlement_checked_at: string | null;
+  }>(
+    `SELECT handle, created_at, can_write_catalogue, can_arm,
+            vault_user_id, entitlement_checked_at
+       FROM users WHERE id = $1`,
+    [userId],
+  );
+
+  const [counts] = await db.query<{ missions: string; armed: string }>(
+    `SELECT count(*)::text AS missions,
+            count(*) FILTER (WHERE armed)::text AS armed
+       FROM missions WHERE user_id = $1 AND enabled`,
+    [userId],
+  );
+
+  // Bought and spent come from the runs, not from the acquisitions, because a
+  // run is what the retailer confirmed. Same source the Wins page uses, so the
+  // two can never disagree about how many there were.
+  const [spend] = await db.query<{ bought: string; spent: string }>(
+    `SELECT count(*)::text AS bought,
+            COALESCE(sum(r.total), 0)::text AS spent
+       FROM mission_runs r JOIN missions m ON m.id = r.mission_id
+      WHERE m.user_id = $1 AND r.outcome = 'bought'`,
+    [userId],
+  );
+
+  return {
+    handle: String(who?.handle ?? ''),
+    since: who?.created_at ? new Date(String(who.created_at)).toISOString() : '',
+    canCurate: who?.can_write_catalogue === true,
+    canArm: who?.can_arm === true,
+    vaultLinked: Boolean(who?.vault_user_id),
+    vaultCheckedAt: who?.entitlement_checked_at
+      ? new Date(String(who.entitlement_checked_at)).toISOString()
+      : '',
+    missions: Number(counts?.missions ?? 0),
+    armed: Number(counts?.armed ?? 0),
+    bought: Number(spend?.bought ?? 0),
+    spent: Number(spend?.spent ?? 0),
+  };
+}
+
 /** Everyone with an account, for the admin CLI. No secrets in the result. */
 export async function listUsers(db: Sql): Promise<UserRow[]> {
   const rows = await db.query<{

@@ -3693,28 +3693,68 @@ test('WHAT IS COMING STAYS ON SCREEN FOR EVERYONE', async () => {
 test('NOTHING IN THE RIBBON IS DECORATION', async () => {
   // Each control is hidden until it has somewhere real to point. An icon that
   // does nothing is the same lie as a lever attached to nothing.
-  const bare = await boot({ ...DASHBOARD, feedback: false });
-  assert.equal(($(bare, '#fb-open') as any).hidden, true, 'no webhook, no feedback button');
+  const bare = await boot({ ...DASHBOARD });
   assert.equal(($(bare, '#discord-link') as any).hidden, true, 'no invite, no link');
 
   const wired = await boot({
     ...DASHBOARD,
-    feedback: true,
     settings: { ...DASHBOARD.settings, discordInvite: 'https://discord.gg/abc' },
   });
-  assert.equal(($(wired, '#fb-open') as any).hidden, false);
   assert.equal(($(wired, '#discord-link') as any).hidden, false);
   assert.equal(($(wired, '#discord-link') as any).getAttribute('href'), 'https://discord.gg/abc');
 });
 
-test('the profile menu says who you are and what that lets you do', async () => {
-  const owner = await boot({ ...DASHBOARD, you: 'OWNER', canArm: true, canCurate: true });
+test('THE PROFILE SAYS WHO YOU ARE, WHAT YOU MAY DO, AND WHAT YOU HAVE DONE', async () => {
+  // The rights are named ONE BY ONE rather than collapsed into a role word:
+  // curating the catalogue and instructing a machine to spend are two separate
+  // permissions the store keeps deliberately apart, and they will come apart
+  // in practice too.
+  const owner = await boot({
+    ...DASHBOARD,
+    me: {
+      handle: 'OWNER', since: '2026-08-01T00:00:00.000Z', canCurate: true, canArm: true,
+      vaultLinked: true, vaultCheckedAt: '', missions: 39, armed: 2, bought: 1, spent: 59.99,
+    },
+  });
   assert.equal($(owner, '#me-initial').textContent, 'O', 'the avatar is your own initial');
-  assert.match($(owner, '#me-role').textContent, /may arm/);
+  assert.equal($(owner, '#me-handle').textContent, 'OWNER');
+  assert.match($(owner, '#me-since').textContent, /2026/);
+  const rights = $(owner, '#me-rights').textContent;
+  assert.match(rights, /MAY BUY/);
+  assert.match(rights, /CURATES/);
+  const stats = $(owner, '#me-stats').textContent;
+  assert.match(stats, /39/, 'what it is watching');
+  assert.match(stats, /\$59\.99/, 'and what it has spent');
+  assert.match($(owner, '#me-vault').textContent, /Linked/);
 
-  const member = await boot({ ...DASHBOARD, you: 'dan', canArm: false, canCurate: false });
+  const member = await boot({
+    ...DASHBOARD,
+    me: {
+      handle: 'dan', since: '', canCurate: false, canArm: false,
+      vaultLinked: false, vaultCheckedAt: '', missions: 4, armed: 0, bought: 0, spent: 0,
+    },
+  });
   assert.equal($(member, '#me-initial').textContent, 'D');
-  assert.match($(member, '#me-role').textContent, /Watching only/);
+  const mRights = $(member, '#me-rights').textContent;
+  assert.match(mRights, /WATCHING ONLY/);
+  assert.doesNotMatch(mRights, /CURATES/);
+  assert.match($(member, '#me-vault').textContent, /Not linked/);
+});
+
+test('the numbers in the profile are the account’s own, not the owner’s', async () => {
+  // A profile that quietly showed somebody else's totals would be a leak
+  // wearing a friendly face. The panel renders exactly what the server sent
+  // for this account and computes nothing from the shared lists on the page.
+  const h = await boot({
+    ...DASHBOARD,
+    me: {
+      handle: 'dan', since: '', canCurate: false, canArm: false, vaultLinked: false,
+      vaultCheckedAt: '', missions: 0, armed: 0, bought: 0, spent: 0,
+    },
+  });
+  const stats = $(h, '#me-stats').textContent;
+  assert.match(stats, /0/);
+  assert.doesNotMatch(stats, /39/, 'the dashboard has missions; this account has none');
 });
 
 test('THE BELL IS THINGS THAT WANT A PERSON, NOT A FEED', async () => {

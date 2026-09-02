@@ -24,7 +24,7 @@ import type { Env, Discovered, SweepResult } from './types.ts';
 import type { Sql } from './db.ts';
 import { sweepAll, sweepSource } from './discover.ts';
 import * as store from './store.ts';
-import { announce, announceStaged, announceStock, announceTest, reportOps, sendFeedback } from './notify.ts';
+import { announce, announceStaged, announceStock, announceTest, reportOps } from './notify.ts';
 import { applyFilters, dedupe } from './filter.ts';
 import { probeUrl } from './fetcher.ts';
 import {
@@ -311,6 +311,8 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       // page, because "which account am I looking at" is exactly the question
       // you need answered correctly when the answer is surprising.
       const you = await store.userHandle(db, userId);
+      // Who you are and what you have done here — counted, this account only.
+      const me = await store.profile(db, userId).catch(() => null);
       // The money picture: what is committed right now, and any grant still
       // open. An open grant on the dashboard is either a buy in progress or a
       // Phantom that died mid-checkout — both worth seeing at a glance.
@@ -360,12 +362,9 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       return json({
         missions, runs, changes, products, listings, settings, discoveries, sweep, now, you,
         authorisations, committed, queues, stockLoads, acquisitions, requests, canCurate, canArm,
-        capabilities: shopStatus, agentSeenAt,
+        capabilities: shopStatus, agentSeenAt, me,
         // Whether alerts have anywhere to go. A boolean, never the URL.
         discord: Boolean(env.DISCORD_WEBHOOK_URL),
-        // Whether the feedback button has anywhere to send. Same rule: a
-        // control with nothing behind it is not shown.
-        feedback: Boolean(env.DISCORD_OPS_WEBHOOK_URL || env.DISCORD_WEBHOOK_URL),
       });
     }
 
@@ -895,26 +894,6 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
      * Discord webhook is a credential, anyone holding it can post as Phantom,
      * and a page that can be screenshotted is not where it belongs.
      */
-    /**
-     * Feedback, from whoever is looking at the page.
-     *
-     * It reaches the ops channel, which is where things that are wrong already
-     * go. There is no feedback TABLE on purpose: a message nobody reads is
-     * worse than no button, and a Discord channel is a place somebody actually
-     * looks. If no webhook is configured the button is not shown at all —
-     * see the `feedback` flag on the dashboard payload.
-     */
-    if (request.method === 'POST' && path === '/api/feedback') {
-      const hook = env.DISCORD_OPS_WEBHOOK_URL || env.DISCORD_WEBHOOK_URL;
-      if (!hook) return json({ sent: false, configured: false });
-      const b = await body<{ text?: string }>();
-      const text = String(b?.text ?? '').trim();
-      if (!text) return json({ error: 'say something first' }, 400);
-      if (text.length > 4000) return json({ error: 'that is longer than Discord will take' }, 400);
-      await sendFeedback(hook, await store.userHandle(db, userId), text, now);
-      return json({ sent: true, configured: true });
-    }
-
     if (request.method === 'POST' && path === '/api/notify/test') {
       if (!env.DISCORD_WEBHOOK_URL) {
         return json({ sent: false, configured: false }, 200);

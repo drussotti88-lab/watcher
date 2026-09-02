@@ -707,6 +707,39 @@ async function userHandle(db2, userId) {
   ]);
   return String(rows[0]?.handle ?? "");
 }
+async function profile(db2, userId) {
+  const [who] = await db2.query(
+    `SELECT handle, created_at, can_write_catalogue, can_arm,
+            vault_user_id, entitlement_checked_at
+       FROM users WHERE id = $1`,
+    [userId]
+  );
+  const [counts] = await db2.query(
+    `SELECT count(*)::text AS missions,
+            count(*) FILTER (WHERE armed)::text AS armed
+       FROM missions WHERE user_id = $1 AND enabled`,
+    [userId]
+  );
+  const [spend] = await db2.query(
+    `SELECT count(*)::text AS bought,
+            COALESCE(sum(r.total), 0)::text AS spent
+       FROM mission_runs r JOIN missions m ON m.id = r.mission_id
+      WHERE m.user_id = $1 AND r.outcome = 'bought'`,
+    [userId]
+  );
+  return {
+    handle: String(who?.handle ?? ""),
+    since: who?.created_at ? new Date(String(who.created_at)).toISOString() : "",
+    canCurate: who?.can_write_catalogue === true,
+    canArm: who?.can_arm === true,
+    vaultLinked: Boolean(who?.vault_user_id),
+    vaultCheckedAt: who?.entitlement_checked_at ? new Date(String(who.entitlement_checked_at)).toISOString() : "",
+    missions: Number(counts?.missions ?? 0),
+    armed: Number(counts?.armed ?? 0),
+    bought: Number(spend?.bought ?? 0),
+    spent: Number(spend?.spent ?? 0)
+  };
+}
 var DEFAULT_SETTINGS = {
   taxRate: 0,
   shippingAllowance: 0,
@@ -2453,19 +2486,6 @@ async function announceStaged(webhookUrl, items, now, note) {
   const embeds = buildStagedEmbeds(items, now, note);
   if (embeds.length) await post(webhookUrl, embeds);
 }
-function buildFeedbackEmbed(who, text, now) {
-  return {
-    title: "\u{1F4AC} Feedback",
-    description: clip(text, 3800),
-    color: COLOR_OPS,
-    fields: [inline("From", who || "someone signed in")],
-    timestamp: now
-  };
-}
-async function sendFeedback(webhookUrl, who, text, now) {
-  if (!text.trim()) return;
-  await post(webhookUrl, [buildFeedbackEmbed(who, text, now)]);
-}
 async function announce(webhookUrl, label, retailer, items, now) {
   if (items.length === 0) return;
   await post(webhookUrl, [buildDiscoveryEmbed(label, retailer, items, now)]);
@@ -2826,8 +2846,6 @@ var svg = (paths) => `<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="c
 var ICONS = {
   // A bell, for the things that want a person.
   bell: svg('<path d="M18 8a6 6 0 1 0-12 0c0 7-3 8-3 8h18s-3-1-3-8"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/>'),
-  // A speech bubble: somebody telling us something.
-  feedback: svg('<path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 9 9 0 0 1-3.8-.8L3 21l1.9-4.6A8.4 8.4 0 0 1 12 3.1a8.4 8.4 0 0 1 9 8.4z"/>'),
   // Discord's mark is theirs; this is a plain game controller, which is what
   // the link means here without borrowing somebody else's logo.
   discord: svg('<rect x="2" y="7" width="20" height="11" rx="5"/><path d="M7 11v3M5.5 12.5h3M15.5 12h.01M18 14h.01"/>'),
@@ -2933,6 +2951,21 @@ header > div:first-of-type, header > div:nth-of-type(2) { min-width: 0; }
 .bellrow .when { color: var(--dim); font-weight: 400; font-size: 12px; }
 .bellrow.alarm { border-left: 3px solid var(--alert); }
 .bellrow.warn { border-left: 3px solid var(--warn); }
+
+/* \u2500\u2500 The profile panel \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */
+.me-top { display: flex; align-items: center; gap: 10px; padding: 13px 12px 10px; }
+.me-name { font: 600 15px/1.2 var(--sans); color: var(--ink); }
+.me-rights { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 12px 11px; }
+/* Selector written as a child rather than ".me-rights .pill", because that
+   spelling contains the exact string a test greps for when it checks the real
+   .pill rule, and it silently became the first match. */
+.me-rights > span { font-size: 11px; }
+.me-stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1px;
+            background: var(--line); border-top: 1px solid var(--line);
+            border-bottom: 1px solid var(--line); margin-bottom: 11px; }
+.me-stat { background: var(--panel); padding: 10px 12px; }
+.me-stat b { display: block; font: 700 17px/1.1 var(--mono); color: var(--ink); }
+.me-stat span { font-size: 11.5px; color: var(--dim); letter-spacing: .02em; }
 /* The mark: the creature's eye from the dnacardvault logo, redrawn as SVG \u2014
    the same drawing the PWA icons are rendered from. */
 .mark { width: 34px; height: 34px; border-radius: 10px; flex: none;
@@ -3850,9 +3883,6 @@ ${FONTS}<style>${STYLE}</style></head>
          is hidden unless there is a webhook for it to reach. An icon that
          does nothing is the same lie as a lever attached to nothing. -->
     <div class="ribbon">
-      <button id="fb-open" class="rib" title="Send feedback" hidden>
-        ${ICONS.feedback}<span class="l-wide">Feedback</span>
-      </button>
       <a id="discord-link" class="rib" hidden target="_blank" rel="noreferrer"
          title="Open the Discord">${ICONS.discord}</a>
       <button id="bell-open" class="rib" title="What needs you" aria-expanded="false">
@@ -3868,9 +3898,20 @@ ${FONTS}<style>${STYLE}</style></head>
       <div class="pop-head">What needs you</div>
       <div id="bell-list"></div>
     </div>
-    <div class="pop pop-sm" id="me-pop" hidden>
-      <div class="pop-head"><span id="me-handle"></span><span class="who" id="who"></span></div>
-      <div class="meta" id="me-role" style="padding:0 12px 8px"></div>
+    <div class="pop" id="me-pop" hidden>
+      <!-- Identity, then what this account may do, then what it has actually
+           done. Every number below is this account's own. -->
+      <div class="me-top">
+        <span class="rib avatar" id="me-face" aria-hidden="true">\xB7</span>
+        <div class="grow">
+          <div class="me-name" id="me-handle"></div>
+          <div class="meta" id="me-since"></div>
+        </div>
+        <span class="who" id="who"></span>
+      </div>
+      <div class="me-rights" id="me-rights"></div>
+      <div class="me-stats" id="me-stats"></div>
+      <div class="meta" id="me-vault" style="padding:0 12px 12px"></div>
       <button class="popitem" id="wiz-open">How Phantom works</button>
       <button class="popitem" id="me-settings">Settings</button>
       <button class="popitem" id="install" hidden>Install the app</button>
@@ -4469,33 +4510,19 @@ ${FONTS}<style>${STYLE}</style></head>
     </div>
   </dialog>
 
-  <!-- Feedback goes to the ops channel, which is where things that are wrong
-       already go. There is no feedback table on purpose: a message nobody
-       reads is worse than no button. -->
-  <dialog id="fb-dialog">
-    <div class="card">
-      <div class="dlg-head">
-        <h3>Tell us what is wrong</h3>
-        <button type="button" class="small" data-act="fb-close">Close</button>
-      </div>
-      <p class="sub" style="margin:-4px 0 12px">
-        This lands in the Discord ops channel with your handle on it. Nothing
-        else about you is sent.
-      </p>
-      <form class="stack" id="fb-form">
-        <textarea name="text" rows="5" maxlength="4000"
-                  placeholder="What happened, and what did you expect instead?"></textarea>
-        <div class="actions">
-          <button type="submit" class="primary">Send</button>
-          <span class="msg" id="fb-msg"></span>
-        </div>
-      </form>
-    </div>
-  </dialog>
 </main>
 </div>
 <script>
 const money = (n) => n === null || n === undefined ? '\u2014' : '$' + Number(n).toFixed(2);
+
+/** A date a person can read, without a time nobody needs. */
+function shortDate(iso) {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return '';
+  return new Date(t).toLocaleDateString(undefined, {
+    year: 'numeric', month: 'short', day: 'numeric',
+  });
+}
 
 function ago(iso) {
   if (!iso) return 'never';
@@ -8450,18 +8477,62 @@ function renderBell() {
  * on earth keeps it.
  */
 function renderMe() {
-  const handle = String(DATA.you || '');
-  const initial = document.getElementById('me-initial');
-  if (initial) initial.textContent = (handle.trim()[0] || '\xB7').toUpperCase();
+  const me = DATA.me || {};
+  const handle = String(me.handle || DATA.you || '');
+
+  for (const id of ['me-initial', 'me-face']) {
+    const node = document.getElementById(id);
+    if (node) node.textContent = (handle.trim()[0] || '\xB7').toUpperCase();
+  }
   const name = document.getElementById('me-handle');
   if (name) name.textContent = handle || 'Signed in';
-  const role = document.getElementById('me-role');
-  if (role) {
-    role.textContent = DATA.canArm === true
-      ? 'This account runs a Phantom and may arm missions.'
-      : DATA.canCurate === true
-        ? 'This account curates the catalogue.'
-        : 'Watching only \u2014 the catalogue and the machine belong to the owner.';
+  const since = document.getElementById('me-since');
+  if (since) since.textContent = me.since ? 'here since ' + shortDate(me.since) : '';
+
+  /*
+   * What this account MAY do, said as the rights themselves.
+   *
+   * One sentence describing "your role" collapses two separate permissions
+   * that the store keeps deliberately apart \u2014 curating the shared catalogue
+   * and instructing a machine to spend. They will come apart in practice, so
+   * the panel names them one by one rather than inventing a word for the
+   * combination.
+   */
+  const rights = document.getElementById('me-rights');
+  if (rights) {
+    rights.textContent = '';
+    rights.appendChild(el('span', 'pill ' + (me.canArm ? 'flag' : 'info'),
+      me.canArm ? 'MAY BUY' : 'WATCHING ONLY'));
+    if (me.canCurate) rights.appendChild(el('span', 'pill info', 'CURATES THE CATALOGUE'));
+    if (!me.canArm && !me.canCurate) {
+      rights.appendChild(el('span', 'pill info', 'THE MACHINE IS THE OWNER\u2019S'));
+    }
+  }
+
+  /*
+   * What it has actually done, which is a different question from what it may
+   * do, and the more interesting one. Counted from this account's own rows.
+   */
+  const stats = document.getElementById('me-stats');
+  if (stats) {
+    stats.textContent = '';
+    const stat = (n, label) => {
+      const box = el('div', 'me-stat');
+      box.appendChild(el('b', null, String(n)));
+      box.appendChild(el('span', null, label));
+      stats.appendChild(box);
+    };
+    stat(me.missions ?? 0, 'watching');
+    stat(me.armed ?? 0, 'armed');
+    stat(me.bought ?? 0, me.bought === 1 ? 'order' : 'orders');
+    stat(money(me.spent ?? 0), 'spent');
+  }
+
+  const vault = document.getElementById('me-vault');
+  if (vault) {
+    vault.textContent = me.vaultLinked
+      ? 'Linked to DNA Card Vault \u2014 wins can go to your collection.'
+      : 'Not linked to DNA Card Vault.';
   }
 
   // Hidden until somebody sets an invite. A button that goes nowhere is worse
@@ -8472,31 +8543,7 @@ function renderMe() {
     dl.hidden = !invite;
     if (invite) dl.href = invite;
   }
-  const fb = document.getElementById('fb-open');
-  if (fb) fb.hidden = DATA.feedback !== true;
 }
-
-const fbDialog = document.getElementById('fb-dialog');
-document.getElementById('fb-open').addEventListener('click', () => {
-  closePops(null);
-  if (fbDialog.showModal) fbDialog.showModal(); else fbDialog.open = true;
-  const t = fbDialog.querySelector('[name=text]');
-  if (t) t.focus();
-});
-fbDialog.querySelector('[data-act=fb-close]').addEventListener('click', () => {
-  if (fbDialog.close) fbDialog.close(); else fbDialog.open = false;
-});
-document.getElementById('fb-form').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const form = e.target;
-  const box = form.querySelector('[name=text]');
-  const msg = document.getElementById('fb-msg');
-  await withButton(form.querySelector('button[type=submit]'), 'Sending\u2026', msg, async () => {
-    await api('POST', '/api/feedback', { text: box.value });
-    box.value = '';
-    return 'sent \u2014 thank you';
-  });
-});
 
 document.getElementById('flt-missions-more').addEventListener('click', () => {
   FILTERS_OPEN.missions = !FILTERS_OPEN.missions;
@@ -8949,6 +8996,7 @@ function createHandler(db2, env2) {
       ]);
       const sweep = await sweepState(db2, userId, SWEEP_SOURCE, settings.sweepEveryHours);
       const you = await userHandle(db2, userId);
+      const me = await profile(db2, userId).catch(() => null);
       const authorisations = await openAuthorisations(db2, userId);
       const committed = await committedLast24h(db2, userId);
       const queues = await queueSightings(db2, userId, 30);
@@ -8984,11 +9032,9 @@ function createHandler(db2, env2) {
         canArm: canArm2,
         capabilities: shopStatus,
         agentSeenAt,
+        me,
         // Whether alerts have anywhere to go. A boolean, never the URL.
-        discord: Boolean(env2.DISCORD_WEBHOOK_URL),
-        // Whether the feedback button has anywhere to send. Same rule: a
-        // control with nothing behind it is not shown.
-        feedback: Boolean(env2.DISCORD_OPS_WEBHOOK_URL || env2.DISCORD_WEBHOOK_URL)
+        discord: Boolean(env2.DISCORD_WEBHOOK_URL)
       });
     }
     if (request.method === "GET" && path.startsWith("/api/missions/") && path.endsWith("/runs")) {
@@ -9318,16 +9364,6 @@ function createHandler(db2, env2) {
       const done = await forgetDiscovery(db2, userId, id);
       if (!done) return json({ error: "no such discovery, or it was already decided" }, 404);
       return json({ forgotten: id });
-    }
-    if (request.method === "POST" && path === "/api/feedback") {
-      const hook = env2.DISCORD_OPS_WEBHOOK_URL || env2.DISCORD_WEBHOOK_URL;
-      if (!hook) return json({ sent: false, configured: false });
-      const b = await body();
-      const text = String(b?.text ?? "").trim();
-      if (!text) return json({ error: "say something first" }, 400);
-      if (text.length > 4e3) return json({ error: "that is longer than Discord will take" }, 400);
-      await sendFeedback(hook, await userHandle(db2, userId), text, now);
-      return json({ sent: true, configured: true });
     }
     if (request.method === "POST" && path === "/api/notify/test") {
       if (!env2.DISCORD_WEBHOOK_URL) {

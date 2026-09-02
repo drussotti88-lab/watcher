@@ -615,3 +615,34 @@ test('THE EMPTY-SYSTEM DEFAULTS ARE SILENCE, NOT A STREAM', async () => {
   assert.equal(cfg.stagedRepeatMinutes, 0);
   assert.deepEqual(cfg.inStockRepeatAfter, [], 'no follow-ups until somebody schedules them');
 });
+
+// ── The profile ──────────────────────────────────────────────────────────────
+
+test('A PROFILE COUNTS THIS ACCOUNT AND NOBODY ELSE', async () => {
+  // A profile that quietly showed the owner's totals to a member would be a
+  // leak wearing a friendly face.
+  const { db, listing } = await seeded();
+  const other = await store.upsertUser(db, { handle: 'someone-else' }).catch(() => null);
+  const mine = await store.profile(db, A);
+  assert.equal(mine.handle.length > 0, true);
+  assert.equal(mine.missions, 1, 'the one mission this account has');
+  assert.equal(mine.bought, 0);
+  assert.equal(mine.spent, 0);
+  assert.equal(typeof mine.vaultLinked, 'boolean');
+  if (other) {
+    const theirs = await store.profile(db, other.id);
+    assert.equal(theirs.missions, 0, 'a fresh account watches nothing');
+  }
+});
+
+test('the profile carries no secret about the account', async () => {
+  // Not the token, not its hash, and not the vault id — that an account is
+  // linked is the useful fact; which account it is linked to is somebody's
+  // identifier in another system.
+  const { db } = await seeded();
+  const p = await store.profile(db, A);
+  const text = JSON.stringify(p).toLowerCase();
+  assert.ok(!text.includes('token'));
+  assert.ok(!text.includes('hash'));
+  assert.ok(!('vaultUserId' in p));
+});

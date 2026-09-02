@@ -74,9 +74,6 @@ const ICONS = {
   // A bell, for the things that want a person.
   bell: svg('<path d="M18 8a6 6 0 1 0-12 0c0 7-3 8-3 8h18s-3-1-3-8"/>' +
     '<path d="M13.7 21a2 2 0 0 1-3.4 0"/>'),
-  // A speech bubble: somebody telling us something.
-  feedback: svg('<path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 9 9 0 0 1-3.8-.8L3 21l1.9-4.6' +
-    'A8.4 8.4 0 0 1 12 3.1a8.4 8.4 0 0 1 9 8.4z"/>'),
   // Discord's mark is theirs; this is a plain game controller, which is what
   // the link means here without borrowing somebody else's logo.
   discord: svg('<rect x="2" y="7" width="20" height="11" rx="5"/>' +
@@ -189,6 +186,21 @@ header > div:first-of-type, header > div:nth-of-type(2) { min-width: 0; }
 .bellrow .when { color: var(--dim); font-weight: 400; font-size: 12px; }
 .bellrow.alarm { border-left: 3px solid var(--alert); }
 .bellrow.warn { border-left: 3px solid var(--warn); }
+
+/* ── The profile panel ──────────────────────────────────────────────────── */
+.me-top { display: flex; align-items: center; gap: 10px; padding: 13px 12px 10px; }
+.me-name { font: 600 15px/1.2 var(--sans); color: var(--ink); }
+.me-rights { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 12px 11px; }
+/* Selector written as a child rather than ".me-rights .pill", because that
+   spelling contains the exact string a test greps for when it checks the real
+   .pill rule, and it silently became the first match. */
+.me-rights > span { font-size: 11px; }
+.me-stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1px;
+            background: var(--line); border-top: 1px solid var(--line);
+            border-bottom: 1px solid var(--line); margin-bottom: 11px; }
+.me-stat { background: var(--panel); padding: 10px 12px; }
+.me-stat b { display: block; font: 700 17px/1.1 var(--mono); color: var(--ink); }
+.me-stat span { font-size: 11.5px; color: var(--dim); letter-spacing: .02em; }
 /* The mark: the creature's eye from the dnacardvault logo, redrawn as SVG —
    the same drawing the PWA icons are rendered from. */
 .mark { width: 34px; height: 34px; border-radius: 10px; flex: none;
@@ -1119,9 +1131,6 @@ ${FONTS}<style>${STYLE}</style></head>
          is hidden unless there is a webhook for it to reach. An icon that
          does nothing is the same lie as a lever attached to nothing. -->
     <div class="ribbon">
-      <button id="fb-open" class="rib" title="Send feedback" hidden>
-        ${ICONS.feedback}<span class="l-wide">Feedback</span>
-      </button>
       <a id="discord-link" class="rib" hidden target="_blank" rel="noreferrer"
          title="Open the Discord">${ICONS.discord}</a>
       <button id="bell-open" class="rib" title="What needs you" aria-expanded="false">
@@ -1137,9 +1146,20 @@ ${FONTS}<style>${STYLE}</style></head>
       <div class="pop-head">What needs you</div>
       <div id="bell-list"></div>
     </div>
-    <div class="pop pop-sm" id="me-pop" hidden>
-      <div class="pop-head"><span id="me-handle"></span><span class="who" id="who"></span></div>
-      <div class="meta" id="me-role" style="padding:0 12px 8px"></div>
+    <div class="pop" id="me-pop" hidden>
+      <!-- Identity, then what this account may do, then what it has actually
+           done. Every number below is this account's own. -->
+      <div class="me-top">
+        <span class="rib avatar" id="me-face" aria-hidden="true">·</span>
+        <div class="grow">
+          <div class="me-name" id="me-handle"></div>
+          <div class="meta" id="me-since"></div>
+        </div>
+        <span class="who" id="who"></span>
+      </div>
+      <div class="me-rights" id="me-rights"></div>
+      <div class="me-stats" id="me-stats"></div>
+      <div class="meta" id="me-vault" style="padding:0 12px 12px"></div>
       <button class="popitem" id="wiz-open">How Phantom works</button>
       <button class="popitem" id="me-settings">Settings</button>
       <button class="popitem" id="install" hidden>Install the app</button>
@@ -1738,33 +1758,19 @@ ${FONTS}<style>${STYLE}</style></head>
     </div>
   </dialog>
 
-  <!-- Feedback goes to the ops channel, which is where things that are wrong
-       already go. There is no feedback table on purpose: a message nobody
-       reads is worse than no button. -->
-  <dialog id="fb-dialog">
-    <div class="card">
-      <div class="dlg-head">
-        <h3>Tell us what is wrong</h3>
-        <button type="button" class="small" data-act="fb-close">Close</button>
-      </div>
-      <p class="sub" style="margin:-4px 0 12px">
-        This lands in the Discord ops channel with your handle on it. Nothing
-        else about you is sent.
-      </p>
-      <form class="stack" id="fb-form">
-        <textarea name="text" rows="5" maxlength="4000"
-                  placeholder="What happened, and what did you expect instead?"></textarea>
-        <div class="actions">
-          <button type="submit" class="primary">Send</button>
-          <span class="msg" id="fb-msg"></span>
-        </div>
-      </form>
-    </div>
-  </dialog>
 </main>
 </div>
 <script>
 const money = (n) => n === null || n === undefined ? '—' : '$' + Number(n).toFixed(2);
+
+/** A date a person can read, without a time nobody needs. */
+function shortDate(iso) {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return '';
+  return new Date(t).toLocaleDateString(undefined, {
+    year: 'numeric', month: 'short', day: 'numeric',
+  });
+}
 
 function ago(iso) {
   if (!iso) return 'never';
@@ -5719,18 +5725,62 @@ function renderBell() {
  * on earth keeps it.
  */
 function renderMe() {
-  const handle = String(DATA.you || '');
-  const initial = document.getElementById('me-initial');
-  if (initial) initial.textContent = (handle.trim()[0] || '·').toUpperCase();
+  const me = DATA.me || {};
+  const handle = String(me.handle || DATA.you || '');
+
+  for (const id of ['me-initial', 'me-face']) {
+    const node = document.getElementById(id);
+    if (node) node.textContent = (handle.trim()[0] || '·').toUpperCase();
+  }
   const name = document.getElementById('me-handle');
   if (name) name.textContent = handle || 'Signed in';
-  const role = document.getElementById('me-role');
-  if (role) {
-    role.textContent = DATA.canArm === true
-      ? 'This account runs a Phantom and may arm missions.'
-      : DATA.canCurate === true
-        ? 'This account curates the catalogue.'
-        : 'Watching only — the catalogue and the machine belong to the owner.';
+  const since = document.getElementById('me-since');
+  if (since) since.textContent = me.since ? 'here since ' + shortDate(me.since) : '';
+
+  /*
+   * What this account MAY do, said as the rights themselves.
+   *
+   * One sentence describing "your role" collapses two separate permissions
+   * that the store keeps deliberately apart — curating the shared catalogue
+   * and instructing a machine to spend. They will come apart in practice, so
+   * the panel names them one by one rather than inventing a word for the
+   * combination.
+   */
+  const rights = document.getElementById('me-rights');
+  if (rights) {
+    rights.textContent = '';
+    rights.appendChild(el('span', 'pill ' + (me.canArm ? 'flag' : 'info'),
+      me.canArm ? 'MAY BUY' : 'WATCHING ONLY'));
+    if (me.canCurate) rights.appendChild(el('span', 'pill info', 'CURATES THE CATALOGUE'));
+    if (!me.canArm && !me.canCurate) {
+      rights.appendChild(el('span', 'pill info', 'THE MACHINE IS THE OWNER’S'));
+    }
+  }
+
+  /*
+   * What it has actually done, which is a different question from what it may
+   * do, and the more interesting one. Counted from this account's own rows.
+   */
+  const stats = document.getElementById('me-stats');
+  if (stats) {
+    stats.textContent = '';
+    const stat = (n, label) => {
+      const box = el('div', 'me-stat');
+      box.appendChild(el('b', null, String(n)));
+      box.appendChild(el('span', null, label));
+      stats.appendChild(box);
+    };
+    stat(me.missions ?? 0, 'watching');
+    stat(me.armed ?? 0, 'armed');
+    stat(me.bought ?? 0, me.bought === 1 ? 'order' : 'orders');
+    stat(money(me.spent ?? 0), 'spent');
+  }
+
+  const vault = document.getElementById('me-vault');
+  if (vault) {
+    vault.textContent = me.vaultLinked
+      ? 'Linked to DNA Card Vault — wins can go to your collection.'
+      : 'Not linked to DNA Card Vault.';
   }
 
   // Hidden until somebody sets an invite. A button that goes nowhere is worse
@@ -5741,31 +5791,7 @@ function renderMe() {
     dl.hidden = !invite;
     if (invite) dl.href = invite;
   }
-  const fb = document.getElementById('fb-open');
-  if (fb) fb.hidden = DATA.feedback !== true;
 }
-
-const fbDialog = document.getElementById('fb-dialog');
-document.getElementById('fb-open').addEventListener('click', () => {
-  closePops(null);
-  if (fbDialog.showModal) fbDialog.showModal(); else fbDialog.open = true;
-  const t = fbDialog.querySelector('[name=text]');
-  if (t) t.focus();
-});
-fbDialog.querySelector('[data-act=fb-close]').addEventListener('click', () => {
-  if (fbDialog.close) fbDialog.close(); else fbDialog.open = false;
-});
-document.getElementById('fb-form').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const form = e.target;
-  const box = form.querySelector('[name=text]');
-  const msg = document.getElementById('fb-msg');
-  await withButton(form.querySelector('button[type=submit]'), 'Sending…', msg, async () => {
-    await api('POST', '/api/feedback', { text: box.value });
-    box.value = '';
-    return 'sent — thank you';
-  });
-});
 
 document.getElementById('flt-missions-more').addEventListener('click', () => {
   FILTERS_OPEN.missions = !FILTERS_OPEN.missions;

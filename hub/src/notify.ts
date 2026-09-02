@@ -300,37 +300,6 @@ export async function announceStaged(
   if (embeds.length) await post(webhookUrl, embeds);
 }
 
-/**
- * Somebody telling you something is wrong with your own app.
- *
- * It goes to the ops webhook when there is one, and the main one otherwise:
- * feedback is closer to "a source stopped working" than to "something is in
- * stock", and it should not land in the middle of a drop alert.
- *
- * The handle is included because "the page is broken" from a member and from
- * the owner are two different problems, and the first thing you would ask is
- * who. Nothing else about them is sent.
- */
-export function buildFeedbackEmbed(who: string, text: string, now: string): Embed {
-  return {
-    title: '💬 Feedback',
-    description: clip(text, 3800),
-    color: COLOR_OPS,
-    fields: [inline('From', who || 'someone signed in')],
-    timestamp: now,
-  };
-}
-
-export async function sendFeedback(
-  webhookUrl: string,
-  who: string,
-  text: string,
-  now: string,
-): Promise<void> {
-  if (!text.trim()) return;
-  await post(webhookUrl, [buildFeedbackEmbed(who, text, now)]);
-}
-
 export async function announce(
   webhookUrl: string,
   label: string,
