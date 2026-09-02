@@ -2450,7 +2450,12 @@ body { margin: 0; color: var(--ink); font: 15px/1.55 var(--sans);
     var(--bg);
 }
 ::selection { background: rgba(127, 119, 221, .35); }
-main { max-width: 1040px; margin: 0 auto; padding: 28px 20px 96px; }
+/* viewport-fit=cover puts the page under the notch and the status bar. That
+   is what makes the bottom bar sit flush \u2014 but nothing was reserving the space
+   at the TOP, so on a phone the clock and the battery sat on top of the
+   wordmark. The inset is zero everywhere it does not apply. */
+main { max-width: 1040px; margin: 0 auto;
+       padding: calc(20px + env(safe-area-inset-top, 0px)) 20px 96px; }
 
 header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
 /* The mark: the creature's eye from the dnacardvault logo, redrawn as SVG \u2014
@@ -2568,6 +2573,13 @@ a { color: var(--accent); text-underline-offset: 2px; }
 }
 
 .bar { display: flex; gap: 8px; align-items: center; margin-bottom: 18px; flex-wrap: wrap; }
+.bar-more { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; flex: 1 1 auto; }
+/* The \u22EF only exists where the row cannot hold everything. */
+@media (min-width: 900px) { #bar-more-open { display: none; } }
+@media (max-width: 899px) {
+  .bar-more { flex-basis: 100%; }
+  #bar-more-open { padding: 8px 13px; font-size: 16px; line-height: 1; }
+}
 /* flex-basis 0, not the card column's 260px: with a 260px floor the spacer
    itself is what pushed Sign out onto a second row on a laptop. */
 .bar .grow { flex: 1 1 0; min-width: 0; }
@@ -2801,6 +2813,20 @@ button.small { padding: 4px 10px; font-size: 12px; border-radius: var(--r-sm); b
    old would hide real ones too. It is to let you narrow, and to say what you
    are looking at. */
 .filters { display: grid; gap: 9px; margin-bottom: 14px; }
+/* One row: the shop lens, the Filters control, and the view switcher. It used
+   to be three rows and the switcher had a row to itself. */
+.fltrow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+           margin: 0 0 10px; }
+.fltcount { margin: -4px 0 12px; }
+.fltrow .grow { flex: 1 1 0; min-width: 0; }
+.fltrow .chips { flex: 0 1 auto; }
+/* The count of what is on, on the control itself, so a collapsed panel is
+   never silently filtering. */
+.fltn { display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: 8px;
+        background: var(--accent-soft); color: var(--ink); font-family: var(--mono);
+        font-size: 11px; }
+/* The switcher stays on a phone. List versus tiles is MORE useful on a small
+   screen, not less \u2014 tiles are how you scan forty products by their pictures. */
 .filters input[type=search] { width: 100%; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .chipgroups { display: grid; gap: 6px; }
@@ -3294,24 +3320,45 @@ ${FONTS}<style>${STYLE}</style></head>
   <div class="card banner warn" id="load-banner" hidden></div>
 
 
+  <!-- Six controls, and on a phone they were three rows of buttons before any
+       content. Only one of them is pressed often. The rest go behind the \u22EF on
+       a narrow screen and stay inline where there is room for them. -->
   <div class="bar">
     <button id="add-open" class="primary">Add product</button>
-    <button id="sweep-now">Run catalogue sweep</button>
-    <button id="phantom-toggle">Turn Phantom off</button>
-    <button id="refresh">Refresh</button>
-    <label class="check sub"><input type="checkbox" id="auto" checked> auto every 30s</label>
-    <span class="grow"></span>
-    <a class="btn" href="/logout">Sign out</a>
+    <button id="bar-more-open" class="small" aria-expanded="false" title="More">\u22EF</button>
+    <div class="bar-more" id="bar-more" hidden>
+      <button id="sweep-now">Run catalogue sweep</button>
+      <button id="phantom-toggle">Turn Phantom off</button>
+      <button id="refresh">Refresh</button>
+      <label class="check sub"><input type="checkbox" id="auto" checked> auto every 30s</label>
+      <span class="grow"></span>
+      <a class="btn" href="/logout">Sign out</a>
+    </div>
   </div>
 
   <section id="tab-missions">
-  <div class="listtools"><div class="vt" data-list="missions"><button type="button" data-view="list" title="List view">\u2630</button><button type="button" data-view="grid" title="Grid view">\u25A6</button></div></div>
+    <!-- Twelve chips in three groups was six rows on a phone, before any
+         content and under three rows of buttons. The shop is the lens people
+         actually use \u2014 which shop am I looking at \u2014 so it stays out. Status
+         and mode go behind one control that says how many are on, and an
+         active one is pulled back out where it can be seen and cleared: a
+         filter that is hiding rows while hiding ITSELF is how somebody
+         concludes the app is broken. -->
+    <!-- Always present: the shop lens, the way into the rest, and the view
+         switcher. It is one row, and it used to be four. -->
+    <div class="fltrow">
+      <div class="chips" id="flt-missions-shops"></div>
+      <button type="button" class="small" id="flt-missions-more" aria-expanded="false" hidden>Filters</button>
+      <div class="chips" id="flt-missions-active"></div>
+      <span class="grow"></span>
+      <div class="vt" data-list="missions"><button type="button" data-view="list" title="List view">\u2630</button><button type="button" data-view="grid" title="Grid view">\u25A6</button></div>
+    </div>
     <div class="filters" id="flt-missions" hidden>
+      <div class="chipgroups" id="flt-missions-chips"></div>
       <input type="search" id="flt-missions-q" placeholder="Search missions"
              autocomplete="off" autocapitalize="off" spellcheck="false">
-      <div class="chipgroups" id="flt-missions-chips"></div>
-      <div class="sub" id="flt-missions-count"></div>
     </div>
+    <div class="sub fltcount" id="flt-missions-count"></div>
     <div id="missions"></div>
   </section>
 
@@ -4775,36 +4822,95 @@ function filterCountLine(id, shown, total, anyActive, key) {
  * A short list hides the bar and resets its filter \u2014 a filter you can
  * neither see nor clear must not be allowed to hide anything.
  */
+/** Whether the extra filters are showing. Per view, remembered while you look. */
+const FILTERS_OPEN = { missions: false };
+
+const STATUS_OPTIONS = [
+  { value: 'pre', label: 'Pre-order' },
+  { value: 'in', label: 'In stock' },
+  { value: 'out', label: 'Out of stock' },
+  { value: 'blind', label: 'Not reading' },
+];
+const MODE_OPTIONS = [
+  { value: 'armed', label: 'Armed' },
+  { value: 'watching', label: 'Watching' },
+  { value: 'off', label: 'Paused' },
+];
+
 function renderMissionsBar(all) {
-  const bar = document.getElementById('flt-missions');
+  const panel = document.getElementById('flt-missions');
   const f = LIST_FILTERS.missions;
+  const box = document.getElementById('flt-missions-q');
+  const shops = document.getElementById('flt-missions-shops');
+  const more = document.getElementById('flt-missions-more');
+  const active = document.getElementById('flt-missions-active');
+
+  // A short list is read, not filtered. The view switcher stays either way \u2014
+  // it lives in the row now rather than on one of its own, and how you want
+  // six cards laid out is still a question worth answering.
   if (all.length < FILTER_FROM) {
-    bar.hidden = true;
+    panel.hidden = true;
+    more.hidden = true;
+    shops.textContent = '';
+    active.textContent = '';
     f.shop = ''; f.status = ''; f.mode = ''; f.q = '';
-    const box = document.getElementById('flt-missions-q');
     if (box) box.value = '';
+    filterCountLine('flt-missions-count', all.length, all.length, false, 'missions');
     return all;
   }
-  bar.hidden = false;
-  const chips = document.getElementById('flt-missions-chips');
-  chips.textContent = '';
-  chips.appendChild(chipGroup(f, 'shop', all, missionMatchesFilter,
+  more.hidden = false;
+
+  // The lens that stays out. "Which shop am I looking at" is the question
+  // people ask on every visit; the rest are asked occasionally.
+  shops.textContent = '';
+  shops.appendChild(chipGroup(f, 'shop', all, missionMatchesFilter,
     shopOptions(all), 'All shops'));
-  chips.appendChild(chipGroup(f, 'status', all, missionMatchesFilter, [
-    { value: 'pre', label: 'Pre-order' },
-    { value: 'in', label: 'In stock' },
-    { value: 'out', label: 'Out of stock' },
-    { value: 'blind', label: 'Not reading' },
-  ], 'Any status'));
-  chips.appendChild(chipGroup(f, 'mode', all, missionMatchesFilter, [
-    { value: 'armed', label: 'Armed' },
-    { value: 'watching', label: 'Watching' },
-    { value: 'off', label: 'Paused' },
-  ], 'Any mode'));
-  const shown = all.filter(missionMatchesFilter);
-  filterCountLine('flt-missions-count', shown.length, all.length,
+
+  const extras = document.getElementById('flt-missions-chips');
+  const open = FILTERS_OPEN.missions;
+  panel.hidden = !open;
+  extras.textContent = '';
+  if (open) {
+    extras.appendChild(chipGroup(f, 'status', all, missionMatchesFilter, STATUS_OPTIONS, 'Any status'));
+    extras.appendChild(chipGroup(f, 'mode', all, missionMatchesFilter, MODE_OPTIONS, 'Any mode'));
+  }
+
+  // Anything on while the panel is shut comes back out as a chip you can see
+  // and press to clear. A filter that hides rows while hiding itself is the
+  // one that gets reported as a bug.
+  active.textContent = '';
+  if (!open) {
+    const shown = [];
+    if (f.status) {
+      const o = STATUS_OPTIONS.find((x) => x.value === f.status);
+      if (o) shown.push(['status', o.label]);
+    }
+    if (f.mode) {
+      const o = MODE_OPTIONS.find((x) => x.value === f.mode);
+      if (o) shown.push(['mode', o.label]);
+    }
+    for (const [field, label] of shown) {
+      active.appendChild(listChip(label + ' \u2715', null, true, () => {
+        f[field] = '';
+        render();
+      }));
+    }
+  }
+
+  const on = (f.status ? 1 : 0) + (f.mode ? 1 : 0);
+  more.textContent = 'Filters';
+  more.setAttribute('aria-expanded', String(open));
+  if (on) more.appendChild(el('span', 'fltn', String(on)));
+
+  // The search box lives in the panel, so it appears with it. A filter left on
+  // while the panel is shut would be invisible, so it is cleared on the way
+  // out rather than left hiding rows nobody can see it hiding.
+  if (box && !open && f.q) { f.q = ''; box.value = ''; }
+
+  const rows = all.filter(missionMatchesFilter);
+  filterCountLine('flt-missions-count', rows.length, all.length,
     !!(f.shop || f.status || f.mode || f.q), 'missions');
-  return shown;
+  return rows;
 }
 
 function renderProductsBar(all) {
@@ -6526,6 +6632,49 @@ function sharedUrl() {
     }
   });
 })();
+
+/*
+ * The overflow, and why it is decided in JS.
+ *
+ * The rule is "inline where it fits, behind a \u22EF where it does not", and the
+ * hidden attribute is what hides it \u2014 which CSS cannot then un-hide, because
+ * [hidden] is display:none !important at the top of this stylesheet (it has
+ * to be; see the note there). So the breakpoint is read here instead, once on
+ * load and again whenever the window changes shape.
+ *
+ * A phone that has opened the menu keeps it open until it is closed. Rotating
+ * a phone should not throw away what you just tapped.
+ */
+(function () {
+  // Guarded. Not every environment has matchMedia \u2014 and this runs at the top
+  // level, so an exception here does not break one control, it stops the whole
+  // page rendering. A missing capability must degrade to a sensible default,
+  // never to a blank screen.
+  const wide = typeof window.matchMedia === 'function'
+    ? window.matchMedia('(min-width: 900px)')
+    : { matches: true, addEventListener: null, addListener: null };
+  const more = document.getElementById('bar-more');
+  const open = document.getElementById('bar-more-open');
+  let showing = false;
+
+  const apply = () => {
+    more.hidden = wide.matches ? false : !showing;
+    open.setAttribute('aria-expanded', String(!more.hidden));
+  };
+
+  open.addEventListener('click', () => { showing = !showing; apply(); });
+  // addListener for older Safari, which has matchMedia but not addEventListener
+  // on the list. A control that silently stops responding to rotation is worse
+  // than the two lines this costs.
+  if (wide.addEventListener) wide.addEventListener('change', apply);
+  else if (wide.addListener) wide.addListener(apply);
+  apply();
+})();
+
+document.getElementById('flt-missions-more').addEventListener('click', () => {
+  FILTERS_OPEN.missions = !FILTERS_OPEN.missions;
+  render();
+});
 
 document.getElementById('wiz-open').addEventListener('click', () => openWizard(0));
 document.getElementById('wiz-close').addEventListener('click', closeWizard);

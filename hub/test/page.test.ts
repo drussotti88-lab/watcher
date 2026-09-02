@@ -1805,6 +1805,20 @@ const findNames = (h: Harness): string[] =>
   [...h.doc.querySelectorAll('#finds-list .name')].map((n) => n.textContent ?? '');
 const chips = (h: Harness, id: string): string[] =>
   [...h.doc.querySelectorAll('#' + id + ' .chip')].map((c) => c.textContent ?? '');
+/**
+ * Open the mission filter panel.
+ *
+ * Status and mode live behind one control now. Twelve chips in three groups
+ * was six rows on a phone before any content — the shop is the lens people
+ * use on every visit, and the rest are asked for occasionally, so they are
+ * one tap away instead of always on screen.
+ */
+const openMissionFilters = (h: Harness): void => {
+  const b = h.doc.getElementById('flt-missions-more') as any;
+  assert.ok(b && !b.hidden, 'the way into the filters should be offered');
+  if (b.getAttribute('aria-expanded') !== 'true') b.click();
+};
+
 const pressChip = (h: Harness, id: string, startsWith: string): void => {
   const c = [...h.doc.querySelectorAll('#' + id + ' .chip')]
     .find((b) => (b.textContent ?? '').startsWith(startsWith));
@@ -2174,36 +2188,82 @@ const typeInto = (h: Harness, id: string, value: string): void => {
   box.dispatchEvent(new h.dom.window.Event('input'));
 };
 
-test('A SHORT LIST GETS NO FILTER BAR, A LONG ONE DOES', async () => {
+test('A SHORT LIST GETS NO FILTERS AT ALL, A LONG ONE OFFERS THEM', async () => {
   // One mission does not need a search box; the bar would be clutter that
   // says "this app is complicated" on the first screen.
   const short = await boot(DASHBOARD);
+  assert.equal((short.doc.getElementById('flt-missions-more') as any).hidden, true);
   assert.equal((short.doc.getElementById('flt-missions') as any).hidden, true);
+  assert.equal(short.doc.querySelectorAll('#flt-missions-shops .chip').length, 0);
 
   const long = await boot(LISTED);
-  assert.equal((long.doc.getElementById('flt-missions') as any).hidden, false);
+  assert.equal((long.doc.getElementById('flt-missions-more') as any).hidden, false);
+  assert.ok(long.doc.querySelectorAll('#flt-missions-shops .chip').length > 1, 'the shop lens is out');
   assert.equal((long.doc.getElementById('flt-products') as any).hidden, false);
   assert.equal((long.doc.getElementById('flt-activity') as any).hidden, false);
 });
 
+test('THE VIEW SWITCHER SURVIVES A SHORT LIST', async () => {
+  // It used to sit on a row of its own, which is what made this safe. Now it
+  // shares the filter row — and six cards still deserve a choice about how
+  // they are laid out.
+  const h = await boot(DASHBOARD);
+  const vt = h.doc.querySelector('.fltrow .vt[data-list=missions]');
+  assert.ok(vt, 'the switcher is still there with no filters on screen');
+});
+
+test('STATUS AND MODE ARE ONE TAP AWAY, NOT SIX ROWS OF CHIPS', async () => {
+  const h = await boot(LISTED);
+  assert.equal((h.doc.getElementById('flt-missions') as any).hidden, true, 'shut to begin with');
+  openMissionFilters(h);
+  assert.equal((h.doc.getElementById('flt-missions') as any).hidden, false);
+  assert.ok(chips(h, 'flt-missions-chips').some((c) => c.startsWith('Any status')));
+  assert.ok(chips(h, 'flt-missions-chips').some((c) => c.startsWith('Any mode')));
+});
+
+test('A FILTER LEFT ON WHILE THE PANEL IS SHUT STAYS VISIBLE', async () => {
+  // The failure this prevents: rows are being hidden and the thing hiding them
+  // is itself hidden. That is not a tidy interface, it is a bug report.
+  const h = await boot(LISTED);
+  openMissionFilters(h);
+  pressChip(h, 'flt-missions-chips', 'In stock');
+  (h.doc.getElementById('flt-missions-more') as any).click();
+
+  assert.equal((h.doc.getElementById('flt-missions') as any).hidden, true, 'panel shut');
+  const shown = chips(h, 'flt-missions-active');
+  assert.ok(shown.some((c) => c.startsWith('In stock')), `active filter not shown: ${shown}`);
+  assert.match((h.doc.getElementById('flt-missions-more') as any).textContent, /1/, 'and counted');
+});
+
+test('pressing the shown filter clears it', async () => {
+  const h = await boot(LISTED);
+  openMissionFilters(h);
+  pressChip(h, 'flt-missions-chips', 'In stock');
+  (h.doc.getElementById('flt-missions-more') as any).click();
+  pressChip(h, 'flt-missions-active', 'In stock');
+  assert.equal(chips(h, 'flt-missions-active').length, 0);
+});
+
 test('the missions shop chip narrows to that shop', async () => {
   const h = await boot(LISTED);
-  pressChip(h, 'flt-missions-chips', 'Walmart');
+  pressChip(h, 'flt-missions-shops', 'Walmart');
   const names = missionNames(h);
   assert.ok(names.some((n) => n.includes('Charlie')));
   assert.ok(names.some((n) => n.includes('Echo')));
   assert.ok(!names.some((n) => n.includes('Alpha')));
-  pressChip(h, 'flt-missions-chips', 'Walmart');
+  pressChip(h, 'flt-missions-shops', 'Walmart');
   assert.ok(missionNames(h).some((n) => n.includes('Alpha')), 'pressing again clears it');
 });
 
 test('the missions status chip tells pre-order and in-stock apart', async () => {
   const h = await boot(LISTED);
+  openMissionFilters(h);
   pressChip(h, 'flt-missions-chips', 'Pre-order');
   assert.deepEqual(missionNames(h).filter((n) => n.includes('Delta')).length, 1);
   assert.equal(missionNames(h).length, 1, 'the in-stock Alpha does not answer to pre-order');
 
   const h2 = await boot(LISTED);
+  openMissionFilters(h2);
   pressChip(h2, 'flt-missions-chips', 'In stock');
   const names = missionNames(h2);
   assert.ok(names.some((n) => n.includes('Alpha')));
@@ -2212,11 +2272,13 @@ test('the missions status chip tells pre-order and in-stock apart', async () => 
 
 test('the mode chips answer armed, watching, paused', async () => {
   const h = await boot(LISTED);
+  openMissionFilters(h);
   pressChip(h, 'flt-missions-chips', 'Armed');
   assert.equal(missionNames(h).length, 1);
   assert.ok(missionNames(h)[0]!.includes('Bravo'));
 
   const h2 = await boot(LISTED);
+  openMissionFilters(h2);
   pressChip(h2, 'flt-missions-chips', 'Paused');
   assert.equal(missionNames(h2).length, 1);
   assert.ok(missionNames(h2)[0]!.includes('Echo'));
@@ -2224,7 +2286,8 @@ test('the mode chips answer armed, watching, paused', async () => {
 
 test('MISSION CHIP COUNTS RESPECT THE OTHER FILTERS', async () => {
   const h = await boot(LISTED);
-  pressChip(h, 'flt-missions-chips', 'Walmart');
+  openMissionFilters(h);
+  pressChip(h, 'flt-missions-shops', 'Walmart');
   const armed = chips(h, 'flt-missions-chips').find((c) => c.startsWith('Armed'));
   assert.equal(armed, 'Armed0', 'no armed Walmart missions, and it says so');
   const paused = chips(h, 'flt-missions-chips').find((c) => c.startsWith('Paused'));
@@ -2233,6 +2296,7 @@ test('MISSION CHIP COUNTS RESPECT THE OTHER FILTERS', async () => {
 
 test('searching missions matches name, shop, and SKU, every word any order', async () => {
   const h = await boot(LISTED);
+  openMissionFilters(h);
   typeInto(h, 'flt-missions-q', 'booster bravo');
   assert.equal(missionNames(h).length, 1);
   assert.ok(missionNames(h)[0]!.includes('Bravo'));
@@ -2243,6 +2307,7 @@ test('searching missions matches name, shop, and SKU, every word any order', asy
 
 test('mission filters that match nothing say so and offer a way back', async () => {
   const h = await boot(LISTED);
+  openMissionFilters(h);
   typeInto(h, 'flt-missions-q', 'charizard');
   assert.match($(h, '#missions').textContent, /Nothing matches those filters/);
   assert.match($(h, '#flt-missions-count').textContent, /Showing 0 of 6/);
@@ -2260,7 +2325,8 @@ test('the filter survives the thirty-second refresh', async () => {
   // The page redraws from fresh data every thirty seconds. A filter that
   // reset each time would be unusable; one that lives in the module survives.
   const h = await boot(LISTED);
-  pressChip(h, 'flt-missions-chips', 'Walmart');
+  openMissionFilters(h);
+  pressChip(h, 'flt-missions-shops', 'Walmart');
   assert.equal(missionNames(h).length, 2);
   ($(h, '#refresh') as HTMLButtonElement).click();
   await h.settle();

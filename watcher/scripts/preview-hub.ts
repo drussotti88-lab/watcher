@@ -84,6 +84,8 @@ const DASHBOARD = {
     find({ id: 3, name: 'Pokemon Trading Card Game Scarlet & Violet 10 Destined Rivals Booster Bundle', retailer: 'Walmart', state: 'out', price: 26.94, otherOffers: 4, firstSeenAt: ago(60 * 5), imageUrl: swatch('#8a6a3c'), kind: 'booster bundle', signal: 'recent' }),
     find({ id: 4, name: 'Pokemon Prismatic Evolutions Mini Tins', retailer: 'Walmart', state: 'out', price: 65.00, otherOffers: 9, firstSeenAt: ago(60 * 80), imageUrl: swatch('#a05f8a'), kind: 'mini tin' }),
     find({ id: 5, name: 'Pokémon TCG: 30th Celebration Poster Collection', retailer: 'Target', state: 'out', price: 19.99, releaseDate: days(16), firstSeenAt: ago(60 * 49), imageUrl: swatch('#5b7ba6'), kind: 'poster collection' }),
+    mission({ id: 6, listingId: 6, productName: 'Pokemon Prismatic Evolutions Mini Tin', imageUrl: swatch('#7a5f8a'), retailer: 'Walmart', externalId: '22201', state: 'out' }),
+    mission({ id: 7, listingId: 7, productName: 'Pokemon Mega Heroes Mini Tin Lucario', imageUrl: swatch('#4a6f8a'), retailer: 'Walmart', externalId: '22202', state: 'in', price: 29.99 }),
   ],
 };
 
@@ -110,6 +112,11 @@ for (const [w, h, label] of [[390, 844, 'phone'], [1280, 900, 'desktop']] as con
   await page.goto('http://localhost:4173/');
   await page.waitForTimeout(2500);
   await page.screenshot({ path: `/home/claude/scratch/hubshots/${tag}-${label}-missions.png` });
+  await page.evaluate(() => document.getElementById('flt-missions-more')?.click());
+  await page.waitForTimeout(250);
+  await page.screenshot({ path: `/home/claude/scratch/hubshots/${tag}-${label}-filters.png` });
+  await page.evaluate(() => document.getElementById('flt-missions-more')?.click());
+  await page.waitForTimeout(250);
   await page.click('[data-tab=finds]');
   await page.waitForTimeout(400);
   await page.screenshot({ path: `/home/claude/scratch/hubshots/${tag}-${label}-finds.png` });
@@ -118,10 +125,10 @@ for (const [w, h, label] of [[390, 844, 'phone'], [1280, 900, 'desktop']] as con
   await page.screenshot({ path: `/home/claude/scratch/hubshots/${tag}-${label}-activity.png` });
   await page.click('[data-tab=missions]');
   await page.waitForTimeout(300);
-  await page.click('.vt [data-view=grid]');
+  await page.click('#tab-missions .vt [data-view=grid]');
   await page.waitForTimeout(300);
   await page.screenshot({ path: `/home/claude/scratch/hubshots/${tag}-${label}-grid.png` });
-  await page.click('.vt [data-view=list]');
+  await page.click('#tab-missions .vt [data-view=list]');
   await page.waitForTimeout(200);
   await page.getByText('Settings').first().click();
   await page.waitForTimeout(400);
