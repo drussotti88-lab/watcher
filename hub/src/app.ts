@@ -329,6 +329,22 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       // stops a submission feeling like a hole in the ground.
       const requests = await store.listProductRequests(db, userId);
       const canCurate = await store.canWriteCatalogue(db, userId);
+      /*
+       * May this account command a machine?
+       *
+       * The page needs it to decide what Settings even shows. Half of that
+       * screen — Phantom on and off, the sweep, watching hours, drop windows,
+       * the shops, the spend cap, the Discord webhook — is not configuration
+       * of a VIEW, it is configuration of somebody's agent and somebody's
+       * money. Showing it to a member who has neither is offering a lever that
+       * is not attached to anything.
+       *
+       * `canArm` is the honest test for it: the right to instruct a machine to
+       * spend. It is deliberately separate from canCurate in the store, and
+       * kept separate here, because a member could one day run their own agent
+       * without ever earning the right to edit the shared catalogue.
+       */
+      const canArm = await store.canArm(db, userId);
       // Is the machine still there? Silence is the failure this cannot afford,
       // and it is the one that looks like nothing at all.
       const agentSeenAt = await store.agentLastSeen(db, userId);
@@ -343,7 +359,7 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       }));
       return json({
         missions, runs, changes, products, listings, settings, discoveries, sweep, now, you,
-        authorisations, committed, queues, stockLoads, acquisitions, requests, canCurate,
+        authorisations, committed, queues, stockLoads, acquisitions, requests, canCurate, canArm,
         capabilities: shopStatus, agentSeenAt,
         // Whether alerts have anywhere to go. A boolean, never the URL.
         discord: Boolean(env.DISCORD_WEBHOOK_URL),

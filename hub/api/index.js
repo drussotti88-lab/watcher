@@ -2991,13 +2991,8 @@ a { color: var(--accent); text-underline-offset: 2px; }
 }
 
 .bar { display: flex; gap: 8px; align-items: center; margin-bottom: 18px; flex-wrap: wrap; }
-.bar-more { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; flex: 1 1 auto; }
-/* The \u22EF only exists where the row cannot hold everything. */
-@media (min-width: 900px) { #bar-more-open { display: none; } }
-@media (max-width: 899px) {
-  .bar-more { flex-basis: 100%; }
-  #bar-more-open { padding: 8px 13px; font-size: 16px; line-height: 1; }
-}
+/* The \u22EF overflow menu is gone with the buttons it used to hide: two things and
+   a spacer fit on a phone without needing somewhere to hide. */
 /* flex-basis 0, not the card column's 260px: with a 260px floor the spacer
    itself is what pushed Sign out onto a second row on a laptop. */
 .bar .grow { flex: 1 1 0; min-width: 0; }
@@ -3857,18 +3852,16 @@ ${FONTS}<style>${STYLE}</style></head>
   <div class="card banner warn" id="load-banner" hidden></div>
 
 
-  <!-- Six controls, and on a phone they were three rows of buttons before any
-       content. Only one of them is pressed often. The rest go behind the \u22EF on
-       a narrow screen and stay inline where there is room for them. -->
+  <!-- What is left after four controls went to Settings.
+       This started as six buttons in three rows on a phone, before any content.
+       Refresh and auto-refresh went first, then Phantom on/off and the sweep:
+       none of them is pressed while you are reading a list, and all of them
+       were taking room above every one of them. Adding a product is the only
+       thing you do FROM a list, so it is the only thing that stayed. -->
   <div class="bar">
     <button id="add-open" class="primary">Add product</button>
-    <button id="bar-more-open" class="small" aria-expanded="false" title="More">\u22EF</button>
-    <div class="bar-more" id="bar-more" hidden>
-      <button id="sweep-now">Run catalogue sweep</button>
-      <button id="phantom-toggle">Turn Phantom off</button>
-      <span class="grow"></span>
-      <a class="btn" href="/logout">Sign out</a>
-    </div>
+    <span class="grow"></span>
+    <a class="btn" href="/logout">Sign out</a>
   </div>
 
   <!-- \u2500\u2500 The dashboard \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
@@ -4069,6 +4062,54 @@ ${FONTS}<style>${STYLE}</style></head>
       </div>
     </div>
 
+    <p class="sub" id="member-note" style="margin:-2px 0 18px" hidden>
+      Everything below this point configures the machine that does the
+      watching, and the money it is allowed to spend. That machine is not
+      yours, so it is not shown. Your missions, your history and the shared
+      catalogue are all on the other tabs and work exactly the same.
+    </p>
+
+    <!-- \u2500\u2500 The machine, and the money \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+         Everything from here down commands somebody's agent or spends
+         somebody's card: Phantom on and off, the sweep, watching hours, drop
+         windows, which shops, the spend cap, the Discord webhook, the
+         diagnostics of a machine you may not have.
+
+         A member sees none of it. Not greyed out \u2014 absent. A disabled control
+         still says "this is yours, and it is broken"; an absent one says the
+         truth, which is that it belongs to someone else. -->
+    <div id="machine-settings">
+    <h2>Phantom</h2>
+    <p class="sub" style="margin:-6px 0 14px">
+      The two switches that change what the machine is doing, rather than what
+      this page shows. They were in the toolbar over every list; neither is
+      pressed while you are reading one.
+    </p>
+    <div class="card">
+      <div class="row">
+        <div class="grow">
+          <div class="name" id="phantom-state">Phantom</div>
+          <div class="meta" style="margin-top:6px">
+            Off stops the checking entirely. Missions, history and alerts stay
+            exactly as they are and pick up where they left off.
+          </div>
+        </div>
+        <button id="phantom-toggle">Turn Phantom off</button>
+      </div>
+    </div>
+    <div class="card" style="margin-top:10px">
+      <div class="row">
+        <div class="grow">
+          <div class="name">Catalogue sweep</div>
+          <div class="meta" style="margin-top:6px">
+            Looks through the shops for products we have never seen and puts
+            them in Discovery. It runs on its own schedule; this asks for one now.
+          </div>
+        </div>
+        <button id="sweep-now">Run catalogue sweep</button>
+      </div>
+    </div>
+
     <h2>Alerts</h2>
     <p class="sub" style="margin:-6px 0 14px">
       The page is the primary surface, and it only helps when you are looking at
@@ -4253,6 +4294,7 @@ ${FONTS}<style>${STYLE}</style></head>
         written down, and taken out again here on the way out. Nothing leaves
         until you press the button.
       </p>
+    </div>
     </div>
   </section>
   <dialog id="add-dialog">
@@ -6028,6 +6070,31 @@ function render() {
   const toggle = document.getElementById('phantom-toggle');
   toggle.textContent = st.paused ? 'Turn Phantom on' : 'Turn Phantom off';
   toggle.className = st.paused ? 'primary' : '';
+  // In the toolbar the button was the only thing on screen saying what state
+  // Phantom was in, so its label had to carry both. On a settings row there is
+  // a line above it that can say the state plainly, and the button can go back
+  // to naming the action alone.
+  const pstate = document.getElementById('phantom-state');
+  if (pstate) pstate.textContent = st.paused ? 'Phantom is off' : 'Phantom is watching';
+
+  /*
+   * Whose screen this is.
+   *
+   * A member's account watches the same shared catalogue and keeps its own
+   * missions and history, but it has no agent and no card. Half of Settings
+   * is therefore about a machine they do not have, and showing it \u2014 even
+   * greyed out \u2014 is offering a lever attached to nothing. Absent is the honest
+   * rendering; a sentence in its place says why rather than leaving a gap.
+   *
+   * Gated on canArm, the right to instruct a machine to spend, because that is
+   * the question this screen is actually asking. Fails closed: an older Hub
+   * that does not send the flag shows a member's view, which hides controls
+   * rather than offering ones that will not work.
+   */
+  const machine = document.getElementById('machine-settings');
+  const note = document.getElementById('member-note');
+  if (machine) machine.hidden = DATA.canArm !== true;
+  if (note) note.hidden = DATA.canArm === true;
 
   // The sweep button says which of three things is true, because "queued" for
   // forty minutes reads as stuck. A sweep is thirteen queries reported one at a
@@ -8039,32 +8106,6 @@ function sharedUrl() {
  * A phone that has opened the menu keeps it open until it is closed. Rotating
  * a phone should not throw away what you just tapped.
  */
-(function () {
-  // Guarded. Not every environment has matchMedia \u2014 and this runs at the top
-  // level, so an exception here does not break one control, it stops the whole
-  // page rendering. A missing capability must degrade to a sensible default,
-  // never to a blank screen.
-  const wide = typeof window.matchMedia === 'function'
-    ? window.matchMedia('(min-width: 900px)')
-    : { matches: true, addEventListener: null, addListener: null };
-  const more = document.getElementById('bar-more');
-  const open = document.getElementById('bar-more-open');
-  let showing = false;
-
-  const apply = () => {
-    more.hidden = wide.matches ? false : !showing;
-    open.setAttribute('aria-expanded', String(!more.hidden));
-  };
-
-  open.addEventListener('click', () => { showing = !showing; apply(); });
-  // addListener for older Safari, which has matchMedia but not addEventListener
-  // on the list. A control that silently stops responding to rotation is worse
-  // than the two lines this costs.
-  if (wide.addEventListener) wide.addEventListener('change', apply);
-  else if (wide.addListener) wide.addListener(apply);
-  apply();
-})();
-
 document.getElementById('flt-missions-more').addEventListener('click', () => {
   FILTERS_OPEN.missions = !FILTERS_OPEN.missions;
   render();
@@ -8523,6 +8564,7 @@ function createHandler(db2, env2) {
       const acquisitions = await listAcquisitions(db2, userId);
       const requests = await listProductRequests(db2, userId);
       const canCurate = await canWriteCatalogue(db2, userId);
+      const canArm2 = await canArm(db2, userId);
       const agentSeenAt = await agentLastSeen(db2, userId);
       const shopStatus = capabilityTable().retailers.map((r) => ({
         name: r.name,
@@ -8547,6 +8589,7 @@ function createHandler(db2, env2) {
         acquisitions,
         requests,
         canCurate,
+        canArm: canArm2,
         capabilities: shopStatus,
         agentSeenAt,
         // Whether alerts have anywhere to go. A boolean, never the URL.

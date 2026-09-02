@@ -157,6 +157,19 @@ async function boot(
  * A test run that dies of its own weight is indistinguishable from a bug, and
  * the wrong one is much easier to chase.
  */
+/*
+ * Every jsdom window this file opens, so it can be closed again.
+ *
+ * Without this the file booted hundreds of windows, ran out of memory and was
+ * SIGKILLed — which the runner reports as a failed FILE with no failing
+ * assertion in it. A suite that dies has not told you the tests passed and has
+ * not told you they failed; it has told you nothing while looking like an
+ * answer, which is the same lie as a watcher that stops watching.
+ *
+ * The file grew past 260 tests and started dying again when four files ran at
+ * once, so the runner's concurrency came down to two as well. Slower and
+ * honest beats fast and ambiguous.
+ */
 const OPEN: { window: { close(): void } }[] = [];
 afterEach(() => {
   for (const d of OPEN) {
@@ -169,6 +182,9 @@ const $ = (h: Harness, sel: string): any => h.doc.querySelector(sel);
 const submit = (form: any, win: any): void => {
   form.dispatchEvent(new win.Event('submit', { bubbles: true, cancelable: true }));
 };
+
+/** An element by id, for readability in containment checks. */
+const h1 = (h: Harness, sel: string): Element => h.doc.querySelector(sel) as Element;
 
 /**
  * Open a mission's pop-up the way a person does: by pressing the card.
@@ -3546,4 +3562,67 @@ test('THE POP-UP DOES NOT RESIZE WHEN YOU CHANGE TABS', async () => {
   const css = h.doc.querySelector('style').textContent;
   assert.match(css, /\.dlgbody \{[^}]*height: min\(/, 'one height for both');
   assert.match(css, /\.dlgbody \{[^}]*overflow-y: auto/, 'and the content moves, not the window');
+});
+
+test('THE TOOLBAR KEEPS ONLY WHAT YOU DO FROM A LIST', async () => {
+  // It began as six controls in three rows on a phone, above every list.
+  // Refresh and auto-refresh went to Settings, then Phantom on/off and the
+  // sweep. Adding a product is the only one of them you do while reading a
+  // list, so it is the only one left.
+  const h = await boot(DASHBOARD);
+  const bar = h.doc.querySelector('.bar');
+  const settings = h.doc.getElementById('tab-settings');
+
+  assert.ok(bar.querySelector('#add-open'), 'add stays');
+  assert.ok(bar.querySelector('a[href="/logout"]'), 'and the way out');
+  assert.ok(!bar.querySelector('#phantom-toggle'), 'the machine switch moved');
+  assert.ok(!bar.querySelector('#sweep-now'));
+  assert.ok(settings.contains(h.doc.getElementById('phantom-toggle')));
+  assert.ok(settings.contains(h.doc.getElementById('sweep-now')));
+  assert.ok(!h.doc.getElementById('bar-more-open'), 'and the overflow menu has nothing left to hide');
+});
+
+test('the settings row says the state, so the button can name the action', async () => {
+  const running = await boot({ ...DASHBOARD, settings: { ...DASHBOARD.settings, paused: false } });
+  assert.match($(running, '#phantom-state').textContent, /watching/);
+  assert.equal($(running, '#phantom-toggle').textContent, 'Turn Phantom off');
+
+  const stopped = await boot({ ...DASHBOARD, settings: { ...DASHBOARD.settings, paused: true } });
+  assert.match($(stopped, '#phantom-state').textContent, /off/);
+  assert.equal($(stopped, '#phantom-toggle').textContent, 'Turn Phantom on');
+});
+
+// ── Whose screen is this ─────────────────────────────────────────────────────
+
+test('A MEMBER IS NOT SHOWN CONTROLS FOR A MACHINE THEY DO NOT HAVE', async () => {
+  // Half of Settings commands somebody's agent or spends somebody's card.
+  // A member has neither, so it is absent — not greyed out. A disabled control
+  // says "this is yours and it is broken"; an absent one says the truth.
+  const member = await boot({ ...DASHBOARD, canArm: false, canCurate: false });
+  assert.equal(($(member, '#machine-settings') as any).hidden, true);
+  assert.equal(($(member, '#member-note') as any).hidden, false, 'and it says why');
+
+  const owner = await boot({ ...DASHBOARD, canArm: true, canCurate: true });
+  assert.equal(($(owner, '#machine-settings') as any).hidden, false);
+  assert.equal(($(owner, '#member-note') as any).hidden, true, 'no explanation needed');
+});
+
+test('the view controls belong to everyone', async () => {
+  // Appearance and the refresh of THIS PAGE are about the screen in front of
+  // you, not about the machine. They sit above the split for that reason.
+  const member = await boot({ ...DASHBOARD, canArm: false });
+  const machine = $(member, '#machine-settings');
+  assert.ok(!machine.contains(h1(member, '#material-toggle')), 'glass is yours');
+  assert.ok(!machine.contains(h1(member, '#auto')), 'so is the refresh');
+  assert.ok(machine.contains(h1(member, '#phantom-toggle')), 'the machine switch is not');
+  assert.ok(machine.contains(h1(member, '#sweep-now')));
+});
+
+test('AN OLDER HUB THAT SENDS NO FLAG FAILS CLOSED', async () => {
+  // Hiding a control somebody owns is a nuisance. Offering one that is not
+  // attached to anything is a bug report.
+  const d = JSON.parse(JSON.stringify(DASHBOARD));
+  delete d.canArm;
+  const h = await boot(d);
+  assert.equal(($(h, '#machine-settings') as any).hidden, true);
 });

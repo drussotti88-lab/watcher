@@ -12,7 +12,7 @@
     "bundle": "node --experimental-strip-types scripts/bundle.ts",
     "deploy": "npm run bundle && vercel deploy --prod",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit",
-    "test": "node --experimental-strip-types --test-force-exit --test --test-concurrency=4 test/*.test.ts",
+    "test": "node --experimental-strip-types --test-force-exit --test --test-concurrency=2 test/*.test.ts",
     "user": "node --experimental-strip-types --env-file-if-exists=.env.local scripts/user.ts",
     "doctor": "node --experimental-strip-types --env-file-if-exists=.env.local scripts/doctor.ts",
     "db:push": "node --experimental-strip-types --env-file-if-exists=.env.local scripts/migrate.ts schema.sql",
