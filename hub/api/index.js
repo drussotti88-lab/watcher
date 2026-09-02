@@ -2253,6 +2253,14 @@ var COLOR_OPS = 9069584;
 var COLOR_STAGED = 12597547;
 var COLOR_IN = 2067276;
 var MAX_FIELDS = 20;
+var inline = (name, value) => ({ name, value, inline: true });
+var dollars = (n) => n === null || n === void 0 ? "\u2014" : `$${Number(n).toFixed(2)}`;
+function stockPhrase(quantity, orderLimit, sellable) {
+  if (quantity === null || quantity === void 0) return sellable ? "in stock" : "not sellable";
+  const capped = quantity > 0 && (orderLimit !== null && orderLimit !== void 0 && orderLimit > 0 && quantity === orderLimit || quantity === 10 || quantity === 20);
+  const n = capped ? `${quantity}+` : String(quantity);
+  return sellable ? `${n} available` : `${n} staged`;
+}
 function clip(s, n) {
   return s.length <= n ? s : `${s.slice(0, n - 1)}\u2026`;
 }
@@ -2302,70 +2310,76 @@ async function post(url, embeds) {
     console.warn("discord unreachable", err instanceof Error ? err.message : String(err));
   }
 }
-function buildStagedEmbed(items, now) {
-  if (items.length === 0) return null;
-  return {
-    title: `\u{1F6A8} STOCK LOADED \u2014 a drop looks near`,
-    description: items.length === 1 ? "Counted in the warehouse, and the shop is still saying no." : `${items.length} listings are counted and not sellable yet.`,
-    color: COLOR_STAGED,
-    fields: items.slice(0, MAX_FIELDS).map((i) => ({
-      name: clip(i.name || "a watched listing", 240),
-      value: clip(
-        `**~${i.quantity.toLocaleString("en-US")} units** at ${i.retailer || "the shop"}` + (i.url ? `
-[open the listing](${i.url})` : ""),
-        1e3
+function buildStockEmbeds(items, now, note) {
+  return items.slice(0, 10).map((i) => {
+    const fields = [
+      inline("Price", dollars(i.price)),
+      inline("Stock", stockPhrase(i.quantity, i.orderLimit, true)),
+      inline("Retailer", i.retailer || "\u2014")
+    ];
+    fields.push(inline("MSRP", dollars(i.msrp)));
+    if (i.price !== null && i.msrp !== null && i.msrp > 0) {
+      const over = i.price - i.msrp;
+      fields.push(inline("vs MSRP", over > 5e-3 ? `+${dollars(over)}` : "at or under"));
+    } else {
+      fields.push(inline("vs MSRP", "\u2014"));
+    }
+    fields.push(
+      inline(
+        "Seller",
+        i.seller === "marketplace" ? `\u26A0\uFE0F ${i.sellerName || "marketplace seller"}` : i.retailer || "the shop"
       )
-    })),
-    footer: { text: "not buyable yet \u2014 this is the warning, not the drop" },
-    timestamp: now
-  };
-}
-function buildStockEmbed(items, now, note) {
-  if (items.length === 0) return null;
-  const one = items.length === 1;
-  return {
-    title: one ? `\u{1F7E2} IN STOCK \u2014 ${clip(items[0].name, 200)}` : `\u{1F7E2} ${items.length} items came in stock`,
-    description: one ? void 0 : "Everything below became buyable in the last check.",
-    ...note ? { footer: { text: note } } : {},
-    color: COLOR_IN,
-    fields: items.slice(0, MAX_FIELDS).map((i) => {
-      const bits = [];
-      if (i.price !== null) {
-        const over = i.msrp !== null && i.msrp > 0 ? i.price - i.msrp : null;
-        bits.push(
-          `**$${i.price.toFixed(2)}**` + (over !== null && over > 5e-3 ? ` (${"$" + over.toFixed(2)} over MSRP)` : "")
-        );
-      }
-      if (i.retailer) bits.push(i.retailer);
-      if (i.seller && i.seller !== "retailer") bits.push(`sold by a ${i.seller} seller`);
-      bits.push(i.armed ? "**ARMED** \u2014 Phantom will act" : "watching only \u2014 you have to act");
-      return {
-        name: clip(i.name, 240),
-        value: clip(bits.join(" \xB7 ") + (i.url ? `
-[open the listing](${i.url})` : ""), 1e3)
-      };
-    }),
-    timestamp: now
-  };
+    );
+    fields.push(inline("Mission", i.armed ? "**ARMED** \u2014 will act" : "watching only \u2014 you act"));
+    return {
+      title: clip(i.name || "a watched listing", 240),
+      ...i.url ? { url: i.url } : {},
+      color: COLOR_IN,
+      ...i.imageUrl ? { thumbnail: { url: i.imageUrl } } : {},
+      fields,
+      ...note ? { footer: { text: note } } : {},
+      timestamp: now
+    };
+  });
 }
 async function announceStock(webhookUrl, items, now, note) {
-  const embed = buildStockEmbed(items, now, note);
-  if (embed) await post(webhookUrl, [embed]);
+  const embeds = buildStockEmbeds(items, now, note);
+  if (embeds.length) await post(webhookUrl, embeds);
 }
 async function announceTest(webhookUrl, now) {
   await post(webhookUrl, [
     {
       title: "\u2705 Phantom is connected",
-      description: "This is a test message. Real alerts look like this one: in-stock on a watched listing, stock staged before a drop, and sources that stopped working.",
+      description: "This is a test message. Real alerts arrive one card per product: in stock on a watched listing, stock staged before a drop, and sources that stopped working.",
       color: COLOR_IN,
       footer: { text: "sent from Settings" },
       timestamp: now
     }
   ]);
 }
-async function announceStaged(webhookUrl, items, now) {
-  const embed = buildStagedEmbed(items, now);
-  if (embed) await post(webhookUrl, [embed]);
+function buildStagedEmbeds(items, now, note) {
+  return items.slice(0, 10).map((i) => {
+    const fields = [
+      inline("Stock staged", `**${i.quantity.toLocaleString("en-US")}** units`),
+      inline("Retailer", i.retailer || "\u2014"),
+      inline("Buyable", "not yet")
+    ];
+    if (i.releaseDate) fields.push(inline("On sale", i.releaseDate));
+    return {
+      title: clip(i.name || "a watched listing", 240),
+      ...i.url ? { url: i.url } : {},
+      description: "Counted in the warehouse, and the shop is still saying no.",
+      color: COLOR_STAGED,
+      ...i.imageUrl ? { thumbnail: { url: i.imageUrl } } : {},
+      fields,
+      footer: { text: note ?? "not buyable yet \u2014 this is the warning, not the drop" },
+      timestamp: now
+    };
+  });
+}
+async function announceStaged(webhookUrl, items, now, note) {
+  const embeds = buildStagedEmbeds(items, now, note);
+  if (embeds.length) await post(webhookUrl, embeds);
 }
 async function announce(webhookUrl, label, retailer, items, now) {
   if (items.length === 0) return;
@@ -8673,8 +8687,12 @@ function createHandler(db2, env2) {
             price: m.price,
             msrp: m.msrp,
             url: m.url,
+            imageUrl: m.imageUrl,
             armed: m.armed,
-            seller: m.sellerKind ?? ""
+            seller: m.sellerKind ?? "",
+            sellerName: m.sellerName ?? "",
+            quantity: m.availableQuantity,
+            orderLimit: m.orderLimit
           })),
           now,
           "PREVIEW \u2014 sent from Settings. The real one fires the moment something goes from out of stock to in."
@@ -8852,8 +8870,12 @@ function createHandler(db2, env2) {
               price: c.obs.price ?? null,
               msrp: m ? m.msrp : null,
               url: m ? m.url : "",
+              imageUrl: m ? m.imageUrl : "",
               armed: m ? m.armed : false,
-              seller: c.obs.sellerKind ?? ""
+              seller: c.obs.sellerKind ?? "",
+              sellerName: c.obs.sellerName ?? (m ? m.sellerName : "") ?? "",
+              quantity: c.obs.availableQuantity ?? null,
+              orderLimit: c.obs.orderLimit ?? (m ? m.orderLimit : null)
             };
           }),
           now
@@ -8868,7 +8890,9 @@ function createHandler(db2, env2) {
               name: m ? m.productName : `listing ${l.listingId}`,
               retailer: m ? m.retailer : "",
               quantity: l.quantity,
-              url: m ? m.url : ""
+              url: m ? m.url : "",
+              imageUrl: m ? m.imageUrl : "",
+              releaseDate: m ? m.releaseDate ?? "" : ""
             };
           }),
           now

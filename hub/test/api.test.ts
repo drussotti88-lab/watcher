@@ -429,3 +429,83 @@ test('THE PREVIEW REFUSES RATHER THAN INVENTING A TRANSITION', async () => {
     env.DISCORD_WEBHOOK_URL = was;
   }
 });
+
+// ── One card per product ─────────────────────────────────────────────────────
+
+test('EACH PRODUCT GETS ITS OWN CARD, NOT A SHARED DIGEST', async () => {
+  // A drop alert has one job: what, how much, where, in the time it takes to
+  // glance at a phone. A product sharing a card with four others has to be
+  // found before it can be read.
+  const { buildStockEmbeds } = await import('../src/notify.ts');
+  const now = new Date().toISOString();
+  const embeds = buildStockEmbeds(
+    [
+      {
+        name: 'Chaos Rising ETB', retailer: 'Target', price: 59.99, msrp: 49.99,
+        url: 'https://www.target.com/p/-/A-95267143', imageUrl: 'https://img.test/a.png',
+        armed: false, seller: 'retailer', sellerName: 'Target', quantity: 10, orderLimit: 2,
+      },
+      {
+        name: 'Mega Zygarde ex PC', retailer: 'Target', price: 44.99, msrp: 45.99,
+        url: 'https://www.target.com/p/-/A-95280894', imageUrl: '',
+        armed: true, seller: 'retailer', sellerName: 'Target', quantity: 7, orderLimit: 2,
+      },
+    ],
+    now,
+  );
+
+  assert.equal(embeds.length, 2, 'two products, two cards');
+  assert.equal(embeds[0].title, 'Chaos Rising ETB');
+  assert.equal(embeds[0].url, 'https://www.target.com/p/-/A-95267143', 'the title is the link');
+  assert.equal(embeds[0].thumbnail?.url, 'https://img.test/a.png');
+  assert.ok(!embeds[1].thumbnail, 'no photo, no empty thumbnail');
+
+  const f = (e: any, name: string) => e.fields.find((x: any) => x.name === name)?.value;
+  assert.equal(f(embeds[0], 'Price'), '$59.99');
+  assert.equal(f(embeds[0], 'Stock'), '10+ available', 'a ceiling is still shown as a floor');
+  assert.equal(f(embeds[0], 'vs MSRP'), '+$10.00');
+  assert.match(f(embeds[0], 'Mission'), /watching only/);
+  assert.equal(f(embeds[1], 'Stock'), '7 available', 'a real count is printed plainly');
+  assert.equal(f(embeds[1], 'vs MSRP'), 'at or under');
+  assert.match(f(embeds[1], 'Mission'), /ARMED/);
+  assert.ok(embeds[0].fields.every((x: any) => x.inline), 'laid out across, not down');
+});
+
+test('a marketplace seller is named and flagged, because the price will not say', async () => {
+  const { buildStockEmbeds } = await import('../src/notify.ts');
+  const [e] = buildStockEmbeds(
+    [{
+      name: 'A tin', retailer: 'Walmart', price: 43.97, msrp: 17.00, url: '', imageUrl: '',
+      armed: false, seller: 'marketplace', sellerName: 'Robyns Treasure Nest LLC',
+      quantity: null, orderLimit: 2,
+    }],
+    new Date().toISOString(),
+  );
+  const seller = (e as any).fields.find((x: any) => x.name === 'Seller').value;
+  assert.match(seller, /Robyns Treasure Nest/);
+  assert.match(seller, /⚠️/, 'every mission refuses these by default');
+});
+
+test('STAGED STOCK IS ITS OWN CARD, IN ITS OWN COLOUR', async () => {
+  // "Be at a screen in three hours" is a different decision from "click now",
+  // and the two must not look alike at a glance.
+  const { buildStagedEmbeds, buildStockEmbeds } = await import('../src/notify.ts');
+  const now = new Date().toISOString();
+  const [staged] = buildStagedEmbeds(
+    [{ name: '30th Celebration ETB', retailer: 'Target', quantity: 31000,
+       url: 'https://t.test/x', imageUrl: '', releaseDate: '2026-09-16' }],
+    now,
+  );
+  assert.equal(staged.title, '30th Celebration ETB');
+  const f = (e: any, n: string) => e.fields.find((x: any) => x.name === n)?.value;
+  assert.match(f(staged, 'Stock staged'), /31,000/, 'a number this size needs its commas');
+  assert.equal(f(staged, 'Buyable'), 'not yet');
+  assert.equal(f(staged, 'On sale'), '2026-09-16');
+
+  const [inStock] = buildStockEmbeds(
+    [{ name: 'x', retailer: 'Target', price: 1, msrp: 1, url: '', imageUrl: '',
+       armed: false, seller: 'retailer', sellerName: '', quantity: 1, orderLimit: null }],
+    now,
+  );
+  assert.notEqual(staged.color, inStock.color);
+});

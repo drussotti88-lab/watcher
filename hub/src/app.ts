@@ -912,8 +912,12 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
             price: m.price,
             msrp: m.msrp,
             url: m.url,
+            imageUrl: m.imageUrl,
             armed: m.armed,
             seller: m.sellerKind ?? '',
+            sellerName: m.sellerName ?? '',
+            quantity: m.availableQuantity,
+            orderLimit: m.orderLimit,
           })),
           now,
           'PREVIEW — sent from Settings. The real one fires the moment something goes from out of stock to in.',
@@ -1223,14 +1227,21 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
           env.DISCORD_WEBHOOK_URL,
           cameIntoStock.map((c) => {
             const m = byListing.get(c.obs.listingId);
+            // The reading is fresher than the watchlist for price, count and
+            // seller; the watchlist is the only place the name, photo, MSRP,
+            // link and armed flag exist. Each field comes from whichever knows.
             return {
               name: m ? m.productName : `listing ${c.obs.listingId}`,
               retailer: m ? m.retailer : '',
               price: c.obs.price ?? null,
               msrp: m ? m.msrp : null,
               url: m ? m.url : '',
+              imageUrl: m ? m.imageUrl : '',
               armed: m ? m.armed : false,
               seller: c.obs.sellerKind ?? '',
+              sellerName: c.obs.sellerName ?? (m ? m.sellerName : '') ?? '',
+              quantity: c.obs.availableQuantity ?? null,
+              orderLimit: c.obs.orderLimit ?? (m ? m.orderLimit : null),
             };
           }),
           now,
@@ -1247,6 +1258,8 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
               retailer: m ? m.retailer : '',
               quantity: l.quantity,
               url: m ? m.url : '',
+              imageUrl: m ? m.imageUrl : '',
+              releaseDate: m ? (m.releaseDate ?? '') : '',
             };
           }),
           now,

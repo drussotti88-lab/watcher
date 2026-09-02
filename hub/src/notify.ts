@@ -16,11 +16,47 @@ const MAX_FIELDS = 20;
 
 interface Embed {
   title?: string;
+  /** Makes the title a link. One click from the alert to the buy button. */
+  url?: string;
   description?: string;
   color?: number;
   fields?: { name: string; value: string; inline?: boolean }[];
+  /** The product photo, small and to the right — how you recognise it at 3am. */
+  thumbnail?: { url: string };
   footer?: { text: string };
   timestamp?: string;
+}
+
+/** Discord lays out at most three inline fields per row. */
+const inline = (name: string, value: string) => ({ name, value, inline: true });
+
+const dollars = (n: number | null | undefined): string =>
+  n === null || n === undefined ? '—' : `$${Number(n).toFixed(2)}`;
+
+/**
+ * What to say about a count, in the same words the page uses.
+ *
+ * The rule is duplicated from isCapped() in page.ts rather than shared, because
+ * one is server-side TypeScript and the other is a string of browser JavaScript
+ * inside a template literal. If the rule changes, both change — the tests on
+ * each side say so.
+ *
+ * The plus means the number is a ceiling and the truth is at least that. See
+ * claude/why-stock-says-ten-plus.md for what we do and do not know about why.
+ */
+export function stockPhrase(
+  quantity: number | null | undefined,
+  orderLimit: number | null | undefined,
+  sellable: boolean,
+): string {
+  if (quantity === null || quantity === undefined) return sellable ? 'in stock' : 'not sellable';
+  const capped =
+    quantity > 0 &&
+    ((orderLimit !== null && orderLimit !== undefined && orderLimit > 0 && quantity === orderLimit) ||
+      quantity === 10 ||
+      quantity === 20);
+  const n = capped ? `${quantity}+` : String(quantity);
+  return sellable ? `${n} available` : `${n} staged`;
 }
 
 function clip(s: string, n: number): string {
@@ -93,106 +129,91 @@ async function post(url: string, embeds: Embed[]): Promise<void> {
 }
 
 /**
- * Stock counted in a warehouse behind a listing the shop still refuses to sell.
- *
- * The one message in this file that is worth waking up for. Everything else
- * here reports something that already happened; this reports something that
- * has not happened yet, which is the only kind of warning you can act on.
- *
- * Red, and it says the number. "A drop looks near" without the size of the
- * load-in is a nudge; "31,000 units" is a decision.
- */
-export function buildStagedEmbed(
-  items: { name: string; retailer: string; quantity: number; url: string }[],
-  now: string,
-): Embed | null {
-  if (items.length === 0) return null;
-  return {
-    title: `🚨 STOCK LOADED — a drop looks near`,
-    description:
-      items.length === 1
-        ? 'Counted in the warehouse, and the shop is still saying no.'
-        : `${items.length} listings are counted and not sellable yet.`,
-    color: COLOR_STAGED,
-    fields: items.slice(0, MAX_FIELDS).map((i) => ({
-      name: clip(i.name || 'a watched listing', 240),
-      value: clip(
-        `**~${i.quantity.toLocaleString('en-US')} units** at ${i.retailer || 'the shop'}` +
-          (i.url ? `\n[open the listing](${i.url})` : ''),
-        1000,
-      ),
-    })),
-    footer: { text: 'not buyable yet — this is the warning, not the drop' },
-    timestamp: now,
-  };
-}
-
-/**
  * Something a mission is watching just became buyable.
  *
- * This used to reuse the DISCOVERY embed, and the result was close to
- * unreadable: the title said "1 new product —" with nothing after the dash,
- * the field name was the raw reader note ("shipping IN_STOCK; atp 10; limit
- * 2") and its value was a bare listing id. All three of the things a person
- * needs at 3am — what it is, what it costs, where to click — were missing,
- * and the one thing shown was debug output.
+ * ── One post per product, not one post per batch ────────────────────────────
  *
- * A discovery is "we found a product that exists". This is "the thing you
- * asked us to watch is on sale right now". They are not the same message and
- * they should never have shared a template.
+ * This used to be a single embed with a field per item, which reads as a
+ * digest: fine for a nightly summary, wrong for the thing you are racing. A
+ * drop alert has one job — say WHAT, HOW MUCH, and WHERE in the time it takes
+ * to glance at a phone — and a product sharing a card with four others has to
+ * be found before it can be read.
+ *
+ * So each item gets its own embed: the name as the title and a link, the photo
+ * as the thumbnail so it is recognised before it is read, and the numbers laid
+ * out three across. Discord takes up to ten in one message, so a batch still
+ * arrives as one notification rather than ten pings.
+ *
+ * Before this it reused the DISCOVERY template, and what actually went out was
+ * titled "1 new product --" with the raw reader note as a field name and a bare
+ * listing id as its value. A discovery is "this product exists". This is "the
+ * thing you asked us to watch is on sale right now". Not the same message.
  */
-export function buildStockEmbed(
-  items: {
-    name: string;
-    retailer: string;
-    price: number | null;
-    msrp: number | null;
-    url: string;
-    armed: boolean;
-    seller: string;
-  }[],
-  now: string,
-  /** Set on a preview, so a rehearsal is never mistaken for the real thing. */
-  note?: string,
-): Embed | null {
-  if (items.length === 0) return null;
-  const one = items.length === 1;
-  return {
-    title: one ? `🟢 IN STOCK — ${clip(items[0]!.name, 200)}` : `🟢 ${items.length} items came in stock`,
-    description: one ? undefined : 'Everything below became buyable in the last check.',
-    ...(note ? { footer: { text: note } } : {}),
-    color: COLOR_IN,
-    fields: items.slice(0, MAX_FIELDS).map((i) => {
-      const bits: string[] = [];
-      if (i.price !== null) {
-        const over = i.msrp !== null && i.msrp > 0 ? i.price - i.msrp : null;
-        bits.push(
-          `**$${i.price.toFixed(2)}**` +
-            (over !== null && over > 0.005 ? ` (${'$' + over.toFixed(2)} over MSRP)` : ''),
-        );
-      }
-      if (i.retailer) bits.push(i.retailer);
-      // The seller is the difference between a drop and a reseller at 3x, and
-      // it is the one fact a person cannot infer from the price alone.
-      if (i.seller && i.seller !== 'retailer') bits.push(`sold by a ${i.seller} seller`);
-      bits.push(i.armed ? '**ARMED** — Phantom will act' : 'watching only — you have to act');
-      return {
-        name: clip(i.name, 240),
-        value: clip(bits.join(' · ') + (i.url ? `\n[open the listing](${i.url})` : ''), 1000),
-      };
-    }),
-    timestamp: now,
-  };
+export interface StockItem {
+  name: string;
+  retailer: string;
+  price: number | null;
+  msrp: number | null;
+  url: string;
+  imageUrl: string;
+  armed: boolean;
+  seller: string;
+  sellerName: string;
+  quantity: number | null;
+  orderLimit: number | null;
+}
+
+export function buildStockEmbeds(items: StockItem[], now: string, note?: string): Embed[] {
+  return items.slice(0, 10).map((i) => {
+    const fields = [
+      inline('Price', dollars(i.price)),
+      inline('Stock', stockPhrase(i.quantity, i.orderLimit, true)),
+      inline('Retailer', i.retailer || '—'),
+    ];
+
+    // MSRP and the gap to it, which is the whole question on a resale-priced
+    // listing. Shown as a pair so the second number has something to mean.
+    fields.push(inline('MSRP', dollars(i.msrp)));
+    if (i.price !== null && i.msrp !== null && i.msrp > 0) {
+      const over = i.price - i.msrp;
+      fields.push(inline('vs MSRP', over > 0.005 ? `+${dollars(over)}` : 'at or under'));
+    } else {
+      fields.push(inline('vs MSRP', '—'));
+    }
+
+    // The one fact a price cannot tell you. Every mission refuses a reseller by
+    // default, so an alert that does not name one invites a bad click.
+    fields.push(
+      inline(
+        'Seller',
+        i.seller === 'marketplace'
+          ? `⚠️ ${i.sellerName || 'marketplace seller'}`
+          : i.retailer || 'the shop',
+      ),
+    );
+
+    fields.push(inline('Mission', i.armed ? '**ARMED** — will act' : 'watching only — you act'));
+
+    return {
+      title: clip(i.name || 'a watched listing', 240),
+      ...(i.url ? { url: i.url } : {}),
+      color: COLOR_IN,
+      ...(i.imageUrl ? { thumbnail: { url: i.imageUrl } } : {}),
+      fields,
+      ...(note ? { footer: { text: note } } : {}),
+      timestamp: now,
+    };
+  });
 }
 
 export async function announceStock(
   webhookUrl: string,
-  items: Parameters<typeof buildStockEmbed>[0],
+  items: StockItem[],
   now: string,
   note?: string,
 ): Promise<void> {
-  const embed = buildStockEmbed(items, now, note);
-  if (embed) await post(webhookUrl, [embed]);
+  const embeds = buildStockEmbeds(items, now, note);
+  if (embeds.length) await post(webhookUrl, embeds);
 }
 
 /**
@@ -208,8 +229,8 @@ export async function announceTest(webhookUrl: string, now: string): Promise<voi
     {
       title: '✅ Phantom is connected',
       description:
-        'This is a test message. Real alerts look like this one: in-stock on a ' +
-        'watched listing, stock staged before a drop, and sources that stopped working.',
+        'This is a test message. Real alerts arrive one card per product: in stock ' +
+        'on a watched listing, stock staged before a drop, and sources that stopped working.',
       color: COLOR_IN,
       footer: { text: 'sent from Settings' },
       timestamp: now,
@@ -217,13 +238,56 @@ export async function announceTest(webhookUrl: string, now: string): Promise<voi
   ]);
 }
 
+/**
+ * Stock counted in a warehouse behind a listing the shop still refuses to sell.
+ *
+ * The one message in this file worth waking up for. Everything else here
+ * reports something that already happened; this reports something that has
+ * not happened yet, which is the only kind of warning you can act on.
+ *
+ * One embed per product, same as the in-stock alert, and red — because the
+ * decision it asks for ("be at a screen in three hours") is a different
+ * decision from "click now", and the two must not look alike at a glance.
+ */
+export interface StagedItem {
+  name: string;
+  retailer: string;
+  quantity: number;
+  url: string;
+  imageUrl: string;
+  releaseDate: string;
+}
+
+export function buildStagedEmbeds(items: StagedItem[], now: string, note?: string): Embed[] {
+  return items.slice(0, 10).map((i) => {
+    const fields = [
+      inline('Stock staged', `**${i.quantity.toLocaleString('en-US')}** units`),
+      inline('Retailer', i.retailer || '—'),
+      inline('Buyable', 'not yet'),
+    ];
+    // A date turns "soon" into a plan. Only when the retailer published one.
+    if (i.releaseDate) fields.push(inline('On sale', i.releaseDate));
+    return {
+      title: clip(i.name || 'a watched listing', 240),
+      ...(i.url ? { url: i.url } : {}),
+      description: 'Counted in the warehouse, and the shop is still saying no.',
+      color: COLOR_STAGED,
+      ...(i.imageUrl ? { thumbnail: { url: i.imageUrl } } : {}),
+      fields,
+      footer: { text: note ?? 'not buyable yet — this is the warning, not the drop' },
+      timestamp: now,
+    };
+  });
+}
+
 export async function announceStaged(
   webhookUrl: string,
-  items: { name: string; retailer: string; quantity: number; url: string }[],
+  items: StagedItem[],
   now: string,
+  note?: string,
 ): Promise<void> {
-  const embed = buildStagedEmbed(items, now);
-  if (embed) await post(webhookUrl, [embed]);
+  const embeds = buildStagedEmbeds(items, now, note);
+  if (embeds.length) await post(webhookUrl, embeds);
 }
 
 export async function announce(
