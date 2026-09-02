@@ -622,6 +622,18 @@ button.small { padding: 4px 10px; font-size: 12px; border-radius: var(--r-sm); b
 .dlgtabs button.on { background: var(--accent-soft); border-color: var(--accent);
                      color: var(--accent); }
 
+/* ── One box, whichever tab is showing ──────────────────────────────────────
+   The panels are different heights — a settings form is a fixed set of fields,
+   a run history is however long the history is — so switching tabs made the
+   window jump and resize under the pointer, which on a long history meant the
+   tab you just pressed moved away from where you pressed it.
+   A fixed height fixes the frame and lets the CONTENT move instead. Both tabs
+   now scroll inside the same box rather than the box growing to fit them. */
+.dlgbody { height: min(58vh, 520px); overflow-y: auto; overscroll-behavior: contain;
+           /* Room for a scrollbar so text does not shift sideways when one
+              tab needs it and the other does not. */
+           padding-right: 4px; }
+
 /* ── A card you can press ───────────────────────────────────────────────────
    The whole tile opens the pop-up now, so it has to LOOK pressable and behave
    like a control: a pointer, a lift on hover, and a focus ring for anyone
@@ -899,6 +911,9 @@ dialog {
 }
 dialog::backdrop { background: rgba(4, 3, 8, .72); }
 dialog .card { margin: 0; max-height: 86vh; overflow-y: auto; }
+/* Two scrollbars for one pop-up is a UI arguing with itself. When the mission
+   dialog is showing, the fixed-height panel inside is the thing that scrolls. */
+dialog .card:has(.dlgbody) { overflow-y: visible; }
 /* The detail pop-up carries run tables, so it earns more width. */
 #detail-dialog { max-width: 720px; }
 .dlg-head { display: flex; justify-content: space-between; align-items: center;
@@ -1848,7 +1863,7 @@ function renderDetail(force) {
      * be walked past to reach the other.
      */
     const tabs = el('div', 'dlgtabs');
-    const bodyIn = el('div');
+    const bodyIn = el('div', 'dlgbody');
     const pick = (name, label) => {
       const b = el('button', 'small' + (DETAIL_TAB === name ? ' on' : ''), label);
       b.type = 'button';

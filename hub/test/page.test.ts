@@ -3526,3 +3526,24 @@ test('a mission from an older Hub shows as announcing, not silenced', async () =
   openMission(h);
   assert.equal((h.doc.querySelector('#detail-body [name=alerts]') as any).checked, true);
 });
+
+test('THE POP-UP DOES NOT RESIZE WHEN YOU CHANGE TABS', async () => {
+  // A settings form is a fixed set of fields; a run history is however long the
+  // history is. Sizing the window to its contents made it jump under the
+  // pointer — on a long history the tab you just pressed moved away from where
+  // you pressed it. The frame is fixed and the content scrolls instead.
+  const h = await boot();
+  h.reply('GET /api/missions/1/runs', { runs: [] });
+  openMission(h);
+  const settingsBox = $(h, '#detail-body .dlgbody');
+  assert.ok(settingsBox, 'the settings tab lives in the fixed box');
+
+  openMissionRuns(h);
+  await h.settle();
+  const runsBox = $(h, '#detail-body .dlgbody');
+  assert.ok(runsBox, 'and so does the history');
+
+  const css = h.doc.querySelector('style').textContent;
+  assert.match(css, /\.dlgbody \{[^}]*height: min\(/, 'one height for both');
+  assert.match(css, /\.dlgbody \{[^}]*overflow-y: auto/, 'and the content moves, not the window');
+});
