@@ -148,6 +148,19 @@ async function post(url: string, embeds: Embed[]): Promise<void> {
  * titled "1 new product --" with the raw reader note as a field name and a bare
  * listing id as its value. A discovery is "this product exists". This is "the
  * thing you asked us to watch is on sale right now". Not the same message.
+ *
+ * ── Who this is written for ─────────────────────────────────────────────────
+ *
+ * People in a Discord server who are going to click through and buy it
+ * themselves. Not the owner, and not the machine. So the card carries what a
+ * buyer needs to decide — what it is, what it costs, whether that is a fair
+ * price, who is actually selling it, and a link — and nothing about how
+ * Phantom is configured.
+ *
+ * Whether the mission is armed is deliberately NOT carried here. Whether the owner's machine intends to
+ * buy this one is his business, it tells a reader nothing they can act on, and
+ * announcing to a room that a bot is about to compete with them for the same
+ * box is a strange thing to put in an alert you are sending them as a favour.
  */
 export interface StockItem {
   name: string;
@@ -156,7 +169,6 @@ export interface StockItem {
   msrp: number | null;
   url: string;
   imageUrl: string;
-  armed: boolean;
   seller: string;
   sellerName: string;
   quantity: number | null;
@@ -191,8 +203,6 @@ export function buildStockEmbeds(items: StockItem[], now: string, note?: string)
           : i.retailer || 'the shop',
       ),
     );
-
-    fields.push(inline('Mission', i.armed ? '**ARMED** — will act' : 'watching only — you act'));
 
     return {
       title: clip(i.name || 'a watched listing', 240),

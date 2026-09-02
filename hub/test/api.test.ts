@@ -443,12 +443,12 @@ test('EACH PRODUCT GETS ITS OWN CARD, NOT A SHARED DIGEST', async () => {
       {
         name: 'Chaos Rising ETB', retailer: 'Target', price: 59.99, msrp: 49.99,
         url: 'https://www.target.com/p/-/A-95267143', imageUrl: 'https://img.test/a.png',
-        armed: false, seller: 'retailer', sellerName: 'Target', quantity: 10, orderLimit: 2,
+        seller: 'retailer', sellerName: 'Target', quantity: 10, orderLimit: 2,
       },
       {
         name: 'Mega Zygarde ex PC', retailer: 'Target', price: 44.99, msrp: 45.99,
         url: 'https://www.target.com/p/-/A-95280894', imageUrl: '',
-        armed: true, seller: 'retailer', sellerName: 'Target', quantity: 7, orderLimit: 2,
+        seller: 'retailer', sellerName: 'Target', quantity: 7, orderLimit: 2,
       },
     ],
     now,
@@ -464,10 +464,9 @@ test('EACH PRODUCT GETS ITS OWN CARD, NOT A SHARED DIGEST', async () => {
   assert.equal(f(embeds[0], 'Price'), '$59.99');
   assert.equal(f(embeds[0], 'Stock'), '10+ available', 'a ceiling is still shown as a floor');
   assert.equal(f(embeds[0], 'vs MSRP'), '+$10.00');
-  assert.match(f(embeds[0], 'Mission'), /watching only/);
   assert.equal(f(embeds[1], 'Stock'), '7 available', 'a real count is printed plainly');
   assert.equal(f(embeds[1], 'vs MSRP'), 'at or under');
-  assert.match(f(embeds[1], 'Mission'), /ARMED/);
+  assert.ok(!f(embeds[1], 'Mission'), 'the owner\'s arming state is not the readers\' business');
   assert.ok(embeds[0].fields.every((x: any) => x.inline), 'laid out across, not down');
 });
 
@@ -476,7 +475,7 @@ test('a marketplace seller is named and flagged, because the price will not say'
   const [e] = buildStockEmbeds(
     [{
       name: 'A tin', retailer: 'Walmart', price: 43.97, msrp: 17.00, url: '', imageUrl: '',
-      armed: false, seller: 'marketplace', sellerName: 'Robyns Treasure Nest LLC',
+      seller: 'marketplace', sellerName: 'Robyns Treasure Nest LLC',
       quantity: null, orderLimit: 2,
     }],
     new Date().toISOString(),
@@ -504,7 +503,7 @@ test('STAGED STOCK IS ITS OWN CARD, IN ITS OWN COLOUR', async () => {
 
   const [inStock] = buildStockEmbeds(
     [{ name: 'x', retailer: 'Target', price: 1, msrp: 1, url: '', imageUrl: '',
-       armed: false, seller: 'retailer', sellerName: '', quantity: 1, orderLimit: null }],
+       seller: 'retailer', sellerName: '', quantity: 1, orderLimit: null }],
     now,
   );
   assert.notEqual(staged.color, inStock.color);

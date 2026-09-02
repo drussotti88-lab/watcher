@@ -2271,13 +2271,22 @@ test('THE VIEW SWITCHER SURVIVES A SHORT LIST', async () => {
   assert.ok(vt, 'the switcher is still there with no filters on screen');
 });
 
-test('STATUS AND MODE ARE ONE TAP AWAY, NOT SIX ROWS OF CHIPS', async () => {
+test('STOCK STATUS IS ONE TAP AWAY; ARMED AND PAUSED ARE ALWAYS ON SCREEN', async () => {
+  // Mode came out from behind the button. "Which of these is switched on" is
+  // asked as often as "which shop", and it was two clicks away.
   const h = await boot(LISTED);
-  assert.equal((h.doc.getElementById('flt-missions') as any).hidden, true, 'shut to begin with');
+  assert.equal((h.doc.getElementById('flt-missions') as any).hidden, true, 'panel shut to begin with');
+  assert.ok(
+    chips(h, 'flt-missions-modes').some((c) => c.startsWith('Any mode')),
+    'mode is visible without opening anything',
+  );
   openMissionFilters(h);
   assert.equal((h.doc.getElementById('flt-missions') as any).hidden, false);
   assert.ok(chips(h, 'flt-missions-chips').some((c) => c.startsWith('Any status')));
-  assert.ok(chips(h, 'flt-missions-chips').some((c) => c.startsWith('Any mode')));
+  assert.ok(
+    !chips(h, 'flt-missions-chips').some((c) => c.startsWith('Any mode')),
+    'and not shown twice',
+  );
 });
 
 test('A FILTER LEFT ON WHILE THE PANEL IS SHUT STAYS VISIBLE', async () => {
@@ -2330,27 +2339,28 @@ test('the missions status chip tells pre-order and in-stock apart', async () => 
 });
 
 test('the mode chips answer armed, watching, paused', async () => {
+  // No openMissionFilters(): that is the point of moving them.
   const h = await boot(LISTED);
-  openMissionFilters(h);
-  pressChip(h, 'flt-missions-chips', 'Armed');
+  pressChip(h, 'flt-missions-modes', 'Armed');
   assert.equal(missionNames(h).length, 1);
   assert.ok(missionNames(h)[0]!.includes('Bravo'));
 
   const h2 = await boot(LISTED);
-  openMissionFilters(h2);
-  pressChip(h2, 'flt-missions-chips', 'Paused');
+  pressChip(h2, 'flt-missions-modes', 'Paused');
   assert.equal(missionNames(h2).length, 1);
   assert.ok(missionNames(h2)[0]!.includes('Echo'));
 });
 
 test('MISSION CHIP COUNTS RESPECT THE OTHER FILTERS', async () => {
   const h = await boot(LISTED);
-  openMissionFilters(h);
   pressChip(h, 'flt-missions-shops', 'Walmart');
-  const armed = chips(h, 'flt-missions-chips').find((c) => c.startsWith('Armed'));
-  assert.equal(armed, 'Armed0', 'no armed Walmart missions, and it says so');
-  const paused = chips(h, 'flt-missions-chips').find((c) => c.startsWith('Paused'));
-  assert.equal(paused, 'Paused1');
+  const paused = chips(h, 'flt-missions-modes').find((c) => c.startsWith('Paused'));
+  assert.equal(paused, 'Paused1', 'counted within the shop already chosen');
+  // On the always-visible row an empty option is dropped rather than dimmed.
+  // Dimming is right inside the panel, where a greyed chip says the category
+  // exists and is empty; out here it would be a dead chip on every screen.
+  const armed = chips(h, 'flt-missions-modes').find((c) => c.startsWith('Armed'));
+  assert.equal(armed, undefined, 'no armed Walmart missions, so no Armed chip');
 });
 
 test('searching missions matches name, shop, and SKU, every word any order', async () => {
@@ -3427,4 +3437,21 @@ test('THE MONEY BAR DOES NOT SHARE A CLASS WITH EVERY FORM', async () => {
   assert.match(css, /\.moneybar \{[^}]*height: 14px/);
   assert.doesNotMatch(css, /\n\.stack \{[^}]*height: 14px/, 'never again');
   assert.match(css, /\.stack, form\.stack \{[^}]*display: grid/);
+});
+
+
+test('MOVING REFRESH OUT OF THE TOOLBAR KEEPS IT WORKING', async () => {
+  // The controls moved into Settings and kept their ids, so the auto-refresh
+  // timer and the click handler bind to the same elements they always did.
+  const h = await boot(DASHBOARD);
+  const auto = h.doc.getElementById('auto') as any;
+  const refresh = h.doc.getElementById('refresh') as any;
+  assert.ok(auto, 'the auto-refresh tick still exists');
+  assert.ok(refresh, 'and the button');
+  assert.ok(
+    h.doc.getElementById('tab-settings').contains(auto),
+    'both now live in Settings rather than above every list',
+  );
+  assert.ok(h.doc.getElementById('tab-settings').contains(refresh));
+  assert.ok(!h.doc.querySelector('.bar').contains(refresh), 'and not in the toolbar');
 });

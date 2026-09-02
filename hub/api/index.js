@@ -2330,7 +2330,6 @@ function buildStockEmbeds(items, now, note) {
         i.seller === "marketplace" ? `\u26A0\uFE0F ${i.sellerName || "marketplace seller"}` : i.retailer || "the shop"
       )
     );
-    fields.push(inline("Mission", i.armed ? "**ARMED** \u2014 will act" : "watching only \u2014 you act"));
     return {
       title: clip(i.name || "a watched listing", 240),
       ...i.url ? { url: i.url } : {},
@@ -3773,8 +3772,6 @@ ${FONTS}<style>${STYLE}</style></head>
     <div class="bar-more" id="bar-more" hidden>
       <button id="sweep-now">Run catalogue sweep</button>
       <button id="phantom-toggle">Turn Phantom off</button>
-      <button id="refresh">Refresh</button>
-      <label class="check sub"><input type="checkbox" id="auto" checked> auto every 30s</label>
       <span class="grow"></span>
       <a class="btn" href="/logout">Sign out</a>
     </div>
@@ -3849,6 +3846,12 @@ ${FONTS}<style>${STYLE}</style></head>
          switcher. It is one row, and it used to be four. -->
     <div class="fltrow">
       <div class="chips" id="flt-missions-shops"></div>
+      <!-- Armed, watching, paused. These lived behind the Filters button and
+           should not have: "which of these is switched on" is asked as often as
+           "which shop", and a control you have to go looking for is a control
+           that gets asked for again. Empty ones are omitted rather than dimmed
+           so the row cannot grow on an account that has none of them. -->
+      <div class="chips" id="flt-missions-modes"></div>
       <button type="button" class="small" id="flt-missions-more" aria-expanded="false" hidden>Filters</button>
       <div class="chips" id="flt-missions-active"></div>
       <span class="grow"></span>
@@ -3951,6 +3954,25 @@ ${FONTS}<style>${STYLE}</style></head>
     <div class="card">
       <label class="check"><input type="checkbox" id="material-toggle"> Liquid glass</label>
       <div class="meta" style="margin-top:8px" id="material-note"></div>
+    </div>
+
+    <h2>This page</h2>
+    <p class="sub" style="margin:-6px 0 14px">
+      The page refreshes itself while it is open. These were sitting in the
+      toolbar above every list, which is a lot of room for a control nobody
+      presses when it is already happening on its own.
+    </p>
+    <div class="card">
+      <div class="row">
+        <div class="grow">
+          <label class="check"><input type="checkbox" id="auto" checked> Refresh automatically every 30 seconds</label>
+          <div class="meta" style="margin-top:6px">
+            Off is for when you are reading something and do not want it moving
+            under you. Phantom keeps checking either way \u2014 this is only the page.
+          </div>
+        </div>
+        <button id="refresh" type="button">Refresh now</button>
+      </div>
     </div>
 
     <h2>Alerts</h2>
@@ -5412,7 +5434,16 @@ function listChip(label, n, active, onClick, disabled) {
  * *other* filters allow \u2014 the finds rule \u2014 so a chip always tells the
  * truth about what pressing it would give you.
  */
-function chipGroup(filter, field, rows, matches, options, allLabel, onSet) {
+/*
+ * hideEmpty drops options that would match nothing, rather than dimming them.
+ *
+ * Dimming is right inside the Filters panel, where the greyed chip tells you
+ * the category exists and is empty. On the always-visible row it is wrong: an
+ * account with nothing paused and nothing armed would carry two dead chips on
+ * every screen forever, and the decluttering pass that put twelve chips behind
+ * one button exists precisely because that row kept growing.
+ */
+function chipGroup(filter, field, rows, matches, options, allLabel, onSet, hideEmpty) {
   const row = el('div', 'chips');
   const set = (value) => {
     filter[field] = value;
@@ -5430,9 +5461,13 @@ function chipGroup(filter, field, rows, matches, options, allLabel, onSet) {
   row.appendChild(listChip(allLabel, countFor(''), !filter[field], () => set('')));
   for (const o of options) {
     const n = countFor(o.value);
-    row.appendChild(listChip(o.label, n, filter[field] === o.value, () => {
-      set(filter[field] === o.value ? '' : o.value);
-    }, n === 0 && filter[field] !== o.value));
+    const chosen = filter[field] === o.value;
+    // A chosen filter is never hidden, even at zero: it is what is hiding the
+    // rows, and it has to stay pressable to be turned off.
+    if (hideEmpty && n === 0 && !chosen) continue;
+    row.appendChild(listChip(o.label, n, chosen, () => {
+      set(chosen ? '' : o.value);
+    }, n === 0 && !chosen));
   }
   return row;
 }
@@ -5508,6 +5543,8 @@ function renderMissionsBar(all) {
     active.textContent = '';
     f.shop = ''; f.status = ''; f.mode = ''; f.q = '';
     if (box) box.value = '';
+    const modesOff = document.getElementById('flt-missions-modes');
+    if (modesOff) modesOff.textContent = '';
     filterCountLine('flt-missions-count', all.length, all.length, false, 'missions');
     return all;
   }
@@ -5519,13 +5556,22 @@ function renderMissionsBar(all) {
   shops.appendChild(chipGroup(f, 'shop', all, missionMatchesFilter,
     shopOptions(all), 'All shops'));
 
+  // Out here with the shop lens, not behind the button. Whether a mission is
+  // armed, merely watching, or paused is the second question people ask of
+  // this list, and it was two clicks away.
+  const modes = document.getElementById('flt-missions-modes');
+  if (modes) {
+    modes.textContent = '';
+    modes.appendChild(chipGroup(f, 'mode', all, missionMatchesFilter,
+      MODE_OPTIONS, 'Any mode', null, true));
+  }
+
   const extras = document.getElementById('flt-missions-chips');
   const open = FILTERS_OPEN.missions;
   panel.hidden = !open;
   extras.textContent = '';
   if (open) {
     extras.appendChild(chipGroup(f, 'status', all, missionMatchesFilter, STATUS_OPTIONS, 'Any status'));
-    extras.appendChild(chipGroup(f, 'mode', all, missionMatchesFilter, MODE_OPTIONS, 'Any mode'));
   }
 
   // Anything on while the panel is shut comes back out as a chip you can see
@@ -5538,10 +5584,8 @@ function renderMissionsBar(all) {
       const o = STATUS_OPTIONS.find((x) => x.value === f.status);
       if (o) shown.push(['status', o.label]);
     }
-    if (f.mode) {
-      const o = MODE_OPTIONS.find((x) => x.value === f.mode);
-      if (o) shown.push(['mode', o.label]);
-    }
+    // Mode is not pulled back out any more: it is always on screen, so a chip
+    // repeating it would be the same filter shown twice.
     for (const [field, label] of shown) {
       active.appendChild(listChip(label + ' \u2715', null, true, () => {
         f[field] = '';
@@ -5550,7 +5594,7 @@ function renderMissionsBar(all) {
     }
   }
 
-  const on = (f.status ? 1 : 0) + (f.mode ? 1 : 0);
+  const on = f.status ? 1 : 0;
   more.textContent = 'Filters';
   more.setAttribute('aria-expanded', String(open));
   if (on) more.appendChild(el('span', 'fltn', String(on)));
@@ -8688,7 +8732,6 @@ function createHandler(db2, env2) {
             msrp: m.msrp,
             url: m.url,
             imageUrl: m.imageUrl,
-            armed: m.armed,
             seller: m.sellerKind ?? "",
             sellerName: m.sellerName ?? "",
             quantity: m.availableQuantity,
@@ -8871,7 +8914,6 @@ function createHandler(db2, env2) {
               msrp: m ? m.msrp : null,
               url: m ? m.url : "",
               imageUrl: m ? m.imageUrl : "",
-              armed: m ? m.armed : false,
               seller: c.obs.sellerKind ?? "",
               sellerName: c.obs.sellerName ?? (m ? m.sellerName : "") ?? "",
               quantity: c.obs.availableQuantity ?? null,
