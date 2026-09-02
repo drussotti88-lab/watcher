@@ -277,6 +277,7 @@ export function toDiscovered(c: Candidate): {
   isPreOrder: boolean;
   releaseDate: string | null;
   orderLimit: number | null;
+  availableQuantity: number | null;
   signal: string;
   otherOffers: number | null;
 } {
@@ -298,6 +299,10 @@ export function toDiscovered(c: Candidate): {
     isPreOrder: c.isPreOrder,
     releaseDate: c.row.releaseDate,
     orderLimit: c.row.orderLimit,
+    // Read all along, and dropped on the floor at the Hub boundary. A count
+    // beside a listing the shop is not selling is staged stock, and a find
+    // nobody is watching yet is exactly where that is worth knowing.
+    availableQuantity: c.row.availableQuantity,
     signal: c.signal,
     otherOffers: c.otherOffers,
   };

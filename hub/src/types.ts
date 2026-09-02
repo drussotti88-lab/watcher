@@ -38,6 +38,15 @@ export interface Discovered {
   /** Per-customer cap, when the retailer states it. */
   orderLimit?: number | null;
   /**
+   * What the shop said was available when the sweep looked.
+   *
+   * Carried for one reason above all: a count sitting on a listing the shop is
+   * NOT selling is staged stock, the earliest warning of a drop this system
+   * can get — and a find nobody is watching yet is where that warning is worth
+   * the most. Null means the retailer did not say, which is not zero.
+   */
+  availableQuantity?: number | null;
+  /**
    * Other sellers with an offer on the same listing.
    *
    * Walmart's own listing being out of stock does not make the page empty — the

@@ -3892,6 +3892,24 @@ function renderHome() {
 
   const top = Math.max(1, f.watching);
   stage(funnelHost, 'Watching', f.watching, top, 'listings with a mission on them');
+  /*
+   * Staged sits above stock on purpose: it is the only stage in this funnel
+   * that moves while there is still time to do something. Everything below it
+   * is a race that has already started.
+   *
+   * It is drawn even at zero, and zero is what it says today. That is the
+   * finding, not a gap: every non-zero count this system has ever read was on
+   * a listing the shop was already selling. A stage that has never fired is
+   * worth a line on the page, because the alternative is a dashboard that
+   * quietly omits the signal we most want and lets us assume it is working.
+   */
+  const stagedN = f.staged || 0;
+  stage(funnelHost, 'Stock staged, not sellable yet', stagedN, top,
+    stagedN
+      ? 'counted in the warehouse while the shop still said no' +
+        (f.stagedPeak ? ' · biggest load-in ' + f.stagedPeak + ' units' : '')
+      : 'nothing has been counted before it was sellable — the pre-drop signal has not fired');
+
   stage(funnelHost, 'Came in stock at the shop', f.sawStock, top,
     (f.watching ? pct(f.sawStock, f.watching) + ' of what is watched' : '') +
     (f.resellerOnly
@@ -4407,9 +4425,26 @@ function renderFinds() {
     const typical = TYPICAL_PRICE[String(d.kind || '').toLowerCase()];
     if (typical) facts.push('usually ' + money(typical));
     if (d.orderLimit) facts.push('limit ' + d.orderLimit + ' per order');
+    // Same three answers the mission card gives, so a count means the same
+    // thing wherever you read it: a number, a floor, or staged.
+    const dStock = stockLine(d);
+    if (dStock) facts.push(dStock);
     left.appendChild(el('div', 'meta', facts.join(' · ')));
 
     const tags = el('div', 'tags');
+
+    /*
+     * Staged stock leads every other tag on a find, including NEW.
+     *
+     * On a mission card this is a warning about something you already decided
+     * to chase. Here it is the opposite and better thing: units counted in a
+     * warehouse behind a listing NOBODY IS WATCHING YET. That is the whole
+     * value of a discovery list on a drop night, and until now the sweep read
+     * the number and threw it away at the database boundary.
+     */
+    if (isStaged(d)) {
+      tags.appendChild(el('span', 'pill staged', 'STOCK STAGED · DROP NEAR'));
+    }
 
     // The news first: a find that appeared in the last two days is the reason
     // to open this tab today rather than any other day.

@@ -39,8 +39,8 @@ test('AN EMPTY SYSTEM READS AS EMPTY, NOT AS BROKEN', async () => {
   const f = await store.funnel(db, A, 168);
   assert.deepEqual(
     { ...f, outcomes: f.outcomes.length, refusals: f.refusals.length },
-    { watching: 0, sawStock: 0, sawStockArmed: 0, resellerOnly: 0, authorised: 0, bought: 0,
-      outcomes: 0, refusals: 0 },
+    { watching: 0, sawStock: 0, sawStockArmed: 0, resellerOnly: 0, staged: 0, stagedPeak: 0,
+      authorised: 0, bought: 0, outcomes: 0, refusals: 0 },
   );
   const h = await store.health(db, A, 168);
   assert.equal(h.checks, 0);
@@ -397,4 +397,59 @@ test('a release date on an ORDINARY order is not kept — it is not a ship date'
   assert.equal(w!.isPreOrder, false);
   assert.equal(w!.releaseDate, null);
   assert.equal((await store.money(db, A)).upcoming.length, 0);
+});
+
+
+// ── Staged stock: the stage that has never fired ─────────────────────────────
+
+test('STAGED COUNTS A LISTING COUNTED BUT NOT SELLABLE', async () => {
+  // The pre-drop tell. Units against a listing the shop still refuses to sell
+  // is the only signal in this system that arrives while there is time to do
+  // something about it, so it gets its own stage rather than being folded into
+  // "out of stock" — which is what the funnel said about it until now.
+  const { db, listing } = await seeded();
+  await store.recordObservation(db, A, {
+    listingId: listing.id, state: 'out', availableQuantity: 0,
+  });
+  await store.recordObservation(db, A, {
+    listingId: listing.id, state: 'out', availableQuantity: 31000,
+  });
+  const f = await store.funnel(db, A, 168);
+  assert.equal(f.staged, 1);
+  assert.equal(f.stagedPeak, 31000, 'the size of the load-in, not just that there was one');
+  assert.equal(f.sawStock, 0, 'staged is not in stock, and must never be counted as it');
+});
+
+test('a count on something already sellable is stock, not staged', async () => {
+  const { db, listing } = await seeded();
+  await store.recordObservation(db, A, {
+    listingId: listing.id, state: 'in', availableQuantity: 10, sellerKind: 'retailer',
+  });
+  const f = await store.funnel(db, A, 168);
+  assert.equal(f.staged, 0, 'ordinary shelf stock is not a drop warning');
+  assert.equal(f.sawStock, 1);
+});
+
+test('THE LOAD-IN ALARM FIRES ON THE EDGE, NOT ON EVERY READING', async () => {
+  // The whole reason previousQuantity is carried out of recordObservation. An
+  // alarm that fires every ninety seconds for four hours is an alarm that gets
+  // muted before the drop it was warning about.
+  assert.equal(store.stockLoaded(null, 30000), true, 'nothing, then a warehouse');
+  assert.equal(store.stockLoaded(0, 250), true);
+  assert.equal(store.stockLoaded(30000, 31000), false, 'still loaded is not newly loaded');
+  assert.equal(store.stockLoaded(30000, 12000), false, 'draining is not loading');
+  assert.equal(store.stockLoaded(null, 20), false, 'shelf stock is not a load-in');
+});
+
+test('the previous count comes back out, so the edge can be seen', async () => {
+  const { db, listing } = await seeded();
+  const first = await store.recordObservation(db, A, {
+    listingId: listing.id, state: 'out', availableQuantity: 0,
+  });
+  assert.equal(first.previousQuantity, null, 'nothing was known before the first reading');
+  const second = await store.recordObservation(db, A, {
+    listingId: listing.id, state: 'out', availableQuantity: 31000,
+  });
+  assert.equal(second.previousQuantity, 0);
+  assert.equal(store.stockLoaded(second.previousQuantity, 31000), true);
 });

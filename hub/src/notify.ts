@@ -8,6 +8,7 @@ import type { Discovered, SweepResult } from './types.ts';
 
 const COLOR_NEW = 0x1f6b4f;
 const COLOR_OPS = 0x8a6410;
+const COLOR_STAGED = 0xc0392b;
 
 /** Discord caps embeds at 10 per message and 25 fields per embed. */
 const MAX_FIELDS = 20;
@@ -88,6 +89,50 @@ async function post(url: string, embeds: Embed[]): Promise<void> {
   } catch (err) {
     console.warn('discord unreachable', err instanceof Error ? err.message : String(err));
   }
+}
+
+/**
+ * Stock counted in a warehouse behind a listing the shop still refuses to sell.
+ *
+ * The one message in this file that is worth waking up for. Everything else
+ * here reports something that already happened; this reports something that
+ * has not happened yet, which is the only kind of warning you can act on.
+ *
+ * Red, and it says the number. "A drop looks near" without the size of the
+ * load-in is a nudge; "31,000 units" is a decision.
+ */
+export function buildStagedEmbed(
+  items: { name: string; retailer: string; quantity: number; url: string }[],
+  now: string,
+): Embed | null {
+  if (items.length === 0) return null;
+  return {
+    title: `🚨 STOCK LOADED — a drop looks near`,
+    description:
+      items.length === 1
+        ? 'Counted in the warehouse, and the shop is still saying no.'
+        : `${items.length} listings are counted and not sellable yet.`,
+    color: COLOR_STAGED,
+    fields: items.slice(0, MAX_FIELDS).map((i) => ({
+      name: clip(i.name || 'a watched listing', 240),
+      value: clip(
+        `**~${i.quantity.toLocaleString('en-US')} units** at ${i.retailer || 'the shop'}` +
+          (i.url ? `\n[open the listing](${i.url})` : ''),
+        1000,
+      ),
+    })),
+    footer: { text: 'not buyable yet — this is the warning, not the drop' },
+    timestamp: now,
+  };
+}
+
+export async function announceStaged(
+  webhookUrl: string,
+  items: { name: string; retailer: string; quantity: number; url: string }[],
+  now: string,
+): Promise<void> {
+  const embed = buildStagedEmbed(items, now);
+  if (embed) await post(webhookUrl, [embed]);
 }
 
 export async function announce(

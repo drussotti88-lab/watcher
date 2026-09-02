@@ -383,9 +383,9 @@ async function recordDiscoveries(db2, userId, sourceId, items, announce2) {
     text: `INSERT INTO discoveries
              (user_id, source_id, external_id, url, name, price, announced, kind, confidence,
               found_by, image_url, retailer, state, is_pre_order, release_date, order_limit,
-              signal, other_offers)
+              signal, other_offers, available_quantity)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
-                   $18)
+                   $18, $19)
            ON CONFLICT (source_id, external_id) DO UPDATE SET
              found_by = CASE
                WHEN EXCLUDED.found_by = '' THEN discoveries.found_by
@@ -418,6 +418,10 @@ async function recordDiscoveries(db2, userId, sourceId, items, announce2) {
              other_offers = EXCLUDED.other_offers,
              price = COALESCE(EXCLUDED.price, discoveries.price),
              order_limit = COALESCE(EXCLUDED.order_limit, discoveries.order_limit),
+             -- Newest wins, blanks included. This one describes the shelf at
+             -- the moment of the sweep, so keeping an older number because it
+             -- was bigger would turn a drained drop into a standing alarm.
+             available_quantity = EXCLUDED.available_quantity,
              retailer = CASE
                WHEN discoveries.retailer = '' THEN EXCLUDED.retailer
                ELSE discoveries.retailer
@@ -440,7 +444,8 @@ async function recordDiscoveries(db2, userId, sourceId, items, announce2) {
       item.releaseDate ?? "",
       item.orderLimit ?? null,
       item.signal ?? "",
-      item.otherOffers ?? null
+      item.otherOffers ?? null,
+      Number.isFinite(item.availableQuantity) ? item.availableQuantity : null
     ]
   }));
   await db2.batch(statements);
@@ -1396,6 +1401,11 @@ async function recentRuns(db2, userId, limit = 50) {
   );
   return rows.map(toRun);
 }
+var STOCK_LOADED_MIN = 100;
+var STOCK_LOADED_PRIOR_MAX = 50;
+function stockLoaded(prev, next) {
+  return (next ?? 0) >= STOCK_LOADED_MIN && (prev ?? 0) <= STOCK_LOADED_PRIOR_MAX;
+}
 async function recordObservation(db2, userId, obs) {
   if (!await canWriteCatalogue(db2, userId)) {
     throw new Error("this account may not write readings to the catalogue");
@@ -1503,7 +1513,13 @@ async function recordObservation(db2, userId, obs) {
       ]
     );
   }
-  return { changed, isFirst, previousState: before?.state ?? null, previousPrice };
+  return {
+    changed,
+    isFirst,
+    previousState: before?.state ?? null,
+    previousPrice,
+    previousQuantity
+  };
 }
 async function recentObservations(db2, userId, limit = 50) {
   const rows = await db2.query(
@@ -1661,6 +1677,7 @@ function toDiscovery(r) {
     isPreOrder: Boolean(r.is_pre_order),
     releaseDate: String(r.release_date ?? ""),
     orderLimit: r.order_limit === null || r.order_limit === void 0 ? null : Number(r.order_limit),
+    availableQuantity: r.available_quantity === null || r.available_quantity === void 0 ? null : Number(r.available_quantity),
     signal: String(r.signal ?? ""),
     otherOffers: r.other_offers === null || r.other_offers === void 0 ? null : Number(r.other_offers)
   };
@@ -1914,6 +1931,17 @@ async function funnel(db2, userId, hours) {
        FROM sightings`,
     [userId, since]
   );
+  const [loaded] = await db2.query(
+    `SELECT count(DISTINCT o.listing_id)::text AS n,
+            COALESCE(max(o.available_quantity), 0)::text AS peak
+       FROM missions m
+       JOIN observations o ON o.listing_id = m.listing_id
+      WHERE m.user_id = $1 AND m.enabled
+        AND o.state <> 'in'
+        AND o.available_quantity > 0
+        AND o.at > now() - $2::interval`,
+    [userId, since]
+  );
   const [grants] = await db2.query(
     `SELECT count(*)::text AS n FROM authorisations
       WHERE user_id = $1 AND granted_at > now() - $2::interval`,
@@ -1955,6 +1983,8 @@ async function funnel(db2, userId, hours) {
     sawStock: Number(seen?.seen ?? 0),
     sawStockArmed: Number(seen?.armed ?? 0),
     resellerOnly: Number(seen?.reseller ?? 0),
+    staged: Number(loaded?.n ?? 0),
+    stagedPeak: Number(loaded?.peak ?? 0),
     authorised: n([grants ?? { n: "0" }]),
     bought: Number(outcomes.find((o) => o.outcome === "bought")?.n ?? 0),
     outcomes: outcomes.map((o) => ({ outcome: String(o.outcome), n: Number(o.n) })),
@@ -2197,6 +2227,7 @@ async function sweepAll(db2, userId, fetchText2 = fetchText) {
 // src/notify.ts
 var COLOR_NEW = 2059087;
 var COLOR_OPS = 9069584;
+var COLOR_STAGED = 12597547;
 var MAX_FIELDS = 20;
 function clip(s, n) {
   return s.length <= n ? s : `${s.slice(0, n - 1)}\u2026`;
@@ -2246,6 +2277,28 @@ async function post(url, embeds) {
   } catch (err) {
     console.warn("discord unreachable", err instanceof Error ? err.message : String(err));
   }
+}
+function buildStagedEmbed(items, now) {
+  if (items.length === 0) return null;
+  return {
+    title: `\u{1F6A8} STOCK LOADED \u2014 a drop looks near`,
+    description: items.length === 1 ? "Counted in the warehouse, and the shop is still saying no." : `${items.length} listings are counted and not sellable yet.`,
+    color: COLOR_STAGED,
+    fields: items.slice(0, MAX_FIELDS).map((i) => ({
+      name: clip(i.name || "a watched listing", 240),
+      value: clip(
+        `**~${i.quantity.toLocaleString("en-US")} units** at ${i.retailer || "the shop"}` + (i.url ? `
+[open the listing](${i.url})` : ""),
+        1e3
+      )
+    })),
+    footer: { text: "not buyable yet \u2014 this is the warning, not the drop" },
+    timestamp: now
+  };
+}
+async function announceStaged(webhookUrl, items, now) {
+  const embed = buildStagedEmbed(items, now);
+  if (embed) await post(webhookUrl, [embed]);
 }
 async function announce(webhookUrl, label, retailer, items, now) {
   if (items.length === 0) return;
@@ -6407,6 +6460,24 @@ function renderHome() {
 
   const top = Math.max(1, f.watching);
   stage(funnelHost, 'Watching', f.watching, top, 'listings with a mission on them');
+  /*
+   * Staged sits above stock on purpose: it is the only stage in this funnel
+   * that moves while there is still time to do something. Everything below it
+   * is a race that has already started.
+   *
+   * It is drawn even at zero, and zero is what it says today. That is the
+   * finding, not a gap: every non-zero count this system has ever read was on
+   * a listing the shop was already selling. A stage that has never fired is
+   * worth a line on the page, because the alternative is a dashboard that
+   * quietly omits the signal we most want and lets us assume it is working.
+   */
+  const stagedN = f.staged || 0;
+  stage(funnelHost, 'Stock staged, not sellable yet', stagedN, top,
+    stagedN
+      ? 'counted in the warehouse while the shop still said no' +
+        (f.stagedPeak ? ' \xB7 biggest load-in ' + f.stagedPeak + ' units' : '')
+      : 'nothing has been counted before it was sellable \u2014 the pre-drop signal has not fired');
+
   stage(funnelHost, 'Came in stock at the shop', f.sawStock, top,
     (f.watching ? pct(f.sawStock, f.watching) + ' of what is watched' : '') +
     (f.resellerOnly
@@ -6922,9 +6993,26 @@ function renderFinds() {
     const typical = TYPICAL_PRICE[String(d.kind || '').toLowerCase()];
     if (typical) facts.push('usually ' + money(typical));
     if (d.orderLimit) facts.push('limit ' + d.orderLimit + ' per order');
+    // Same three answers the mission card gives, so a count means the same
+    // thing wherever you read it: a number, a floor, or staged.
+    const dStock = stockLine(d);
+    if (dStock) facts.push(dStock);
     left.appendChild(el('div', 'meta', facts.join(' \xB7 ')));
 
     const tags = el('div', 'tags');
+
+    /*
+     * Staged stock leads every other tag on a find, including NEW.
+     *
+     * On a mission card this is a warning about something you already decided
+     * to chase. Here it is the opposite and better thing: units counted in a
+     * warehouse behind a listing NOBODY IS WATCHING YET. That is the whole
+     * value of a discovery list on a drop night, and until now the sweep read
+     * the number and threw it away at the database boundary.
+     */
+    if (isStaged(d)) {
+      tags.appendChild(el('span', 'pill staged', 'STOCK STAGED \xB7 DROP NEAR'));
+    }
 
     // The news first: a find that appeared in the last two days is the reason
     // to open this tab today rather than any other day.
@@ -8461,6 +8549,7 @@ function createHandler(db2, env2) {
       }
       const results = [];
       const changes = [];
+      const loaded = [];
       for (const obs of body2.observations) {
         if (!obs?.listingId || !obs?.state) {
           results.push({
@@ -8474,6 +8563,9 @@ function createHandler(db2, env2) {
           const outcome = await recordObservation(db2, userId, obs);
           results.push({ listingId: obs.listingId, changed: outcome.changed });
           if (outcome.changed) changes.push({ obs, was: outcome.previousState });
+          if (obs.state !== "in" && stockLoaded(outcome.previousQuantity, obs.availableQuantity ?? null)) {
+            loaded.push({ listingId: obs.listingId, quantity: obs.availableQuantity ?? 0 });
+          }
         } catch (err) {
           results.push({ listingId: obs.listingId, changed: false, error: err.message });
         }
@@ -8490,6 +8582,23 @@ function createHandler(db2, env2) {
             url: "",
             price: c.obs.price ?? null
           })),
+          now
+        );
+      }
+      if (loaded.length > 0 && env2.DISCORD_WEBHOOK_URL) {
+        const rows = await listMissions(db2, userId).catch(() => []);
+        const by = new Map(rows.map((m) => [m.listingId, m]));
+        await announceStaged(
+          env2.DISCORD_WEBHOOK_URL,
+          loaded.map((l) => {
+            const m = by.get(l.listingId);
+            return {
+              name: m ? m.productName : `listing ${l.listingId}`,
+              retailer: m ? m.retailer : "",
+              quantity: l.quantity,
+              url: m ? m.url : ""
+            };
+          }),
           now
         );
       }

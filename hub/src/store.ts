@@ -160,9 +160,9 @@ export async function recordDiscoveries(
     text: `INSERT INTO discoveries
              (user_id, source_id, external_id, url, name, price, announced, kind, confidence,
               found_by, image_url, retailer, state, is_pre_order, release_date, order_limit,
-              signal, other_offers)
+              signal, other_offers, available_quantity)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
-                   $18)
+                   $18, $19)
            ON CONFLICT (source_id, external_id) DO UPDATE SET
              found_by = CASE
                WHEN EXCLUDED.found_by = '' THEN discoveries.found_by
@@ -195,6 +195,10 @@ export async function recordDiscoveries(
              other_offers = EXCLUDED.other_offers,
              price = COALESCE(EXCLUDED.price, discoveries.price),
              order_limit = COALESCE(EXCLUDED.order_limit, discoveries.order_limit),
+             -- Newest wins, blanks included. This one describes the shelf at
+             -- the moment of the sweep, so keeping an older number because it
+             -- was bigger would turn a drained drop into a standing alarm.
+             available_quantity = EXCLUDED.available_quantity,
              retailer = CASE
                WHEN discoveries.retailer = '' THEN EXCLUDED.retailer
                ELSE discoveries.retailer
@@ -218,6 +222,7 @@ export async function recordDiscoveries(
       item.orderLimit ?? null,
       item.signal ?? '',
       item.otherOffers ?? null,
+      Number.isFinite(item.availableQuantity as number) ? item.availableQuantity : null,
     ],
   }));
   await db.batch(statements);
@@ -2117,11 +2122,41 @@ export interface ObservationIn {
   note?: string;
 }
 
+/**
+ * The trip line for a load-in, mirrored from the watcher on purpose.
+ *
+ * 100, not 1: counts of 8 to 20 are ordinary shelf stock, and alerting on
+ * those would cry wolf weekly. A drop load-in arrives as hundreds to tens of
+ * thousands. The prior must be small so a live drop draining 30k to 20k to 90
+ * to 0 fires nothing on the way down and once, at most, on the way up.
+ *
+ * Two copies of a constant is a smell, and this one is deliberate: the watcher
+ * raises the alarm on the machine that saw it, and the Hub raises it for
+ * everyone who did not. Neither can rely on the other being present.
+ */
+export const STOCK_LOADED_MIN = 100;
+export const STOCK_LOADED_PRIOR_MAX = 50;
+
+/** Did warehouse stock just appear where there was none? The drop precursor. */
+export function stockLoaded(
+  prev: number | null | undefined,
+  next: number | null | undefined,
+): boolean {
+  return (next ?? 0) >= STOCK_LOADED_MIN && (prev ?? 0) <= STOCK_LOADED_PRIOR_MAX;
+}
+
 export interface RecordedObservation {
   /** Did anything material change? Drives runs and alerts. */
   changed: boolean;
   previousState: string | null;
   previousPrice: number | null;
+  /**
+   * What the shop said was available at the PREVIOUS reading. Null means it
+   * had not said. Carried out of here so a load-in can be detected on the
+   * edge — the difference between two readings — rather than by alerting on
+   * every reading above the line and then trying to deduplicate it.
+   */
+  previousQuantity: number | null;
   /** True the first time we ever see this listing. Not a change to shout about. */
   isFirst: boolean;
 }
@@ -2305,7 +2340,13 @@ export async function recordObservation(
     );
   }
 
-  return { changed, isFirst, previousState: before?.state ?? null, previousPrice };
+  return {
+    changed,
+    isFirst,
+    previousState: before?.state ?? null,
+    previousPrice,
+    previousQuantity,
+  };
 }
 
 /** Recent readings that actually changed. The "what happened" feed. */
@@ -2575,6 +2616,11 @@ export interface DiscoveryRow {
   isPreOrder: boolean;
   releaseDate: string;
   orderLimit: number | null;
+  /**
+   * What the shop said was available at the last sweep. Null means it did not
+   * say. Beside a state that is not 'in', a positive number is staged stock.
+   */
+  availableQuantity: number | null;
   /** 'buyable' | 'scheduled' | 'recent' — why it was surfaced. */
   signal: string;
   /** Other sellers with an offer on the same listing. Null when unknown. */
@@ -2601,6 +2647,10 @@ function toDiscovery(r: Record<string, unknown>): DiscoveryRow {
     isPreOrder: Boolean(r.is_pre_order),
     releaseDate: String(r.release_date ?? ''),
     orderLimit: r.order_limit === null || r.order_limit === undefined ? null : Number(r.order_limit),
+    availableQuantity:
+      r.available_quantity === null || r.available_quantity === undefined
+        ? null
+        : Number(r.available_quantity),
     signal: String(r.signal ?? ''),
     otherOffers:
       r.other_offers === null || r.other_offers === undefined ? null : Number(r.other_offers),
@@ -3126,6 +3176,18 @@ export interface Funnel {
    * asleep".
    */
   resellerOnly: number;
+  /**
+   * Listings that read COUNTED BUT NOT SELLABLE in the window.
+   *
+   * The pre-drop tell, and the only stage of this funnel that can move before
+   * a race starts rather than after it. Reported even when it is zero, because
+   * zero is the finding: across 3,671 readings carrying a count, every single
+   * non-zero one was already sellable. A stage that has never once fired
+   * should say so on the page rather than be quietly left off it.
+   */
+  staged: number;
+  /** The largest staged count seen in the window. The size of the load-in. */
+  stagedPeak: number;
   /** Grants issued in the window — the Hub said yes to spending. */
   authorised: number;
   /** Orders the retailer confirmed. */
@@ -3171,6 +3233,21 @@ export async function funnel(db: Sql, userId: number, hours: number): Promise<Fu
             count(*) FILTER (WHERE from_shop AND armed)::text AS armed,
             count(*) FILTER (WHERE NOT from_shop)::text AS reseller
        FROM sightings`,
+    [userId, since],
+  );
+
+  // Counted, and the shop still saying no. Same definition the mission card
+  // paints STOCK STAGED on, asked of the window rather than of right now, and
+  // scoped through this user's missions like every other stage here.
+  const [loaded] = await db.query<{ n: string; peak: string }>(
+    `SELECT count(DISTINCT o.listing_id)::text AS n,
+            COALESCE(max(o.available_quantity), 0)::text AS peak
+       FROM missions m
+       JOIN observations o ON o.listing_id = m.listing_id
+      WHERE m.user_id = $1 AND m.enabled
+        AND o.state <> 'in'
+        AND o.available_quantity > 0
+        AND o.at > now() - $2::interval`,
     [userId, since],
   );
 
@@ -3232,6 +3309,8 @@ export async function funnel(db: Sql, userId: number, hours: number): Promise<Fu
     sawStock: Number(seen?.seen ?? 0),
     sawStockArmed: Number(seen?.armed ?? 0),
     resellerOnly: Number(seen?.reseller ?? 0),
+    staged: Number(loaded?.n ?? 0),
+    stagedPeak: Number(loaded?.peak ?? 0),
     authorised: n([grants ?? { n: '0' }]),
     bought: Number(outcomes.find((o) => o.outcome === 'bought')?.n ?? 0),
     outcomes: outcomes.map((o) => ({ outcome: String(o.outcome), n: Number(o.n) })),

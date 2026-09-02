@@ -24,7 +24,7 @@ import type { Env, Discovered, SweepResult } from './types.ts';
 import type { Sql } from './db.ts';
 import { sweepAll, sweepSource } from './discover.ts';
 import * as store from './store.ts';
-import { announce, reportOps } from './notify.ts';
+import { announce, announceStaged, reportOps } from './notify.ts';
 import { applyFilters, dedupe } from './filter.ts';
 import { probeUrl } from './fetcher.ts';
 import {
@@ -1065,6 +1065,8 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
 
       const results: { listingId: number; changed: boolean; error?: string }[] = [];
       const changes: { obs: store.ObservationIn; was: string | null }[] = [];
+      // Load-ins, caught on the edge between two readings. See below.
+      const loaded: { listingId: number; quantity: number }[] = [];
 
       for (const obs of body.observations) {
         if (!obs?.listingId || !obs?.state) {
@@ -1079,6 +1081,32 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
           const outcome = await store.recordObservation(db, userId, obs);
           results.push({ listingId: obs.listingId, changed: outcome.changed });
           if (outcome.changed) changes.push({ obs, was: outcome.previousState });
+
+          /*
+           * The drop precursor, raised here rather than only on the machine
+           * that saw it.
+           *
+           * Phantom already logs STOCK LOADED locally. That is the right place
+           * for the machine's own record and the wrong place to be the only
+           * one: the alarm exists to reach a person who is not sitting in
+           * front of a console at 11pm, and one read serves everyone, so the
+           * member who is asleep should be woken by the owner's reading.
+           *
+           * Edge-triggered by construction — it compares the previous reading
+           * to this one — so a load-in that sits at 30,000 for four hours
+           * announces once and then goes quiet, and a drop draining back down
+           * announces nothing at all.
+           *
+           * And it must still be UNSELLABLE. A count arriving on something the
+           * shop is already selling is not a warning, it is a restock, and the
+           * in-stock announcement below is the message for that.
+           */
+          if (
+            obs.state !== 'in' &&
+            store.stockLoaded(outcome.previousQuantity, obs.availableQuantity ?? null)
+          ) {
+            loaded.push({ listingId: obs.listingId, quantity: obs.availableQuantity ?? 0 });
+          }
         } catch (err) {
           results.push({ listingId: obs.listingId, changed: false, error: (err as Error).message });
         }
@@ -1098,6 +1126,27 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
             url: '',
             price: c.obs.price ?? null,
           })),
+          now,
+        );
+      }
+
+      // Named from the watchlist rather than from the reading: the observation
+      // knows a listing id, and a message that says "listing 36" at midnight is
+      // a message that gets ignored.
+      if (loaded.length > 0 && env.DISCORD_WEBHOOK_URL) {
+        const rows = await store.listMissions(db, userId).catch(() => []);
+        const by = new Map(rows.map((m) => [m.listingId, m]));
+        await announceStaged(
+          env.DISCORD_WEBHOOK_URL,
+          loaded.map((l) => {
+            const m = by.get(l.listingId);
+            return {
+              name: m ? m.productName : `listing ${l.listingId}`,
+              retailer: m ? m.retailer : '',
+              quantity: l.quantity,
+              url: m ? m.url : '',
+            };
+          }),
           now,
         );
       }

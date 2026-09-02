@@ -893,3 +893,17 @@ CREATE INDEX IF NOT EXISTS product_requests_pending_idx
 -- budget that counts the two the same is a budget that is wrong twice.
 ALTER TABLE mission_runs ADD COLUMN IF NOT EXISTS is_preorder BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE mission_runs ADD COLUMN IF NOT EXISTS release_date DATE;
+
+-- ---------------------------------------------------------------------------
+-- Staged stock on a find  (2 Sep 2026)
+-- ---------------------------------------------------------------------------
+--
+-- Discovery stored the per-order limit but not the count beside it, so a find
+-- could say "limit 12 per order" and stay silent about the twelve thousand
+-- units behind it. A count on a listing the shop is NOT selling is staged
+-- stock — the earliest warning this system can get — and the finds list is
+-- where it is worth the most, because an item nobody is watching yet is the
+-- one you most need telling about.
+--
+-- The sweep has been reading this number all along and dropping it here.
+ALTER TABLE discoveries ADD COLUMN IF NOT EXISTS available_quantity INTEGER;

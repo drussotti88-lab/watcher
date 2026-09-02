@@ -3298,3 +3298,47 @@ test('THE ART FILLS ITS FRAME', async () => {
   assert.match(thumb, /object-fit: cover/);
   assert.doesNotMatch(thumb, /object-fit: contain/);
 });
+
+
+// ── Staged stock on a find ───────────────────────────────────────────────────
+
+test('A FIND WITH STAGED STOCK SAYS SO LOUDER THAN ANYTHING ELSE ON THE CARD', async () => {
+  // The best thing Discovery can tell you: units counted in a warehouse behind
+  // a listing NOBODY IS WATCHING YET. The sweep has been reading this number
+  // all along and dropping it at the database boundary.
+  const staged = [{
+    id: 9, sourceId: 'target-tcg', externalId: '1012644666',
+    name: 'Pokemon TCG: Pitch Black Elite Trainer Box',
+    url: 'https://www.target.com/p/-/A-1012644666', price: 49.99,
+    kind: 'elite trainer box', confidence: 'sealed', foundBy: 'pokemon elite trainer box',
+    status: 'new', firstSeenAt: new Date().toISOString(), alreadyHave: false,
+    retailer: 'Target', state: 'out', availableQuantity: 31000, orderLimit: 12,
+  }];
+  const h = await boot(withFinds(staged));
+  const text = $(h, '#finds-list').textContent;
+  assert.match(text, /STOCK STAGED · DROP NEAR/);
+  assert.match(text, /31000 staged/);
+  assert.match(text, /not sellable yet/);
+  assert.doesNotMatch(text, /31000 available/, 'staged is never available');
+});
+
+test('a find with ordinary shelf stock gets no drop warning', async () => {
+  const ordinary = [{
+    id: 10, sourceId: 'target-tcg', externalId: '1012644667', name: 'A box',
+    url: 'https://www.target.com/p/-/A-1012644667', price: 49.99,
+    kind: 'elite trainer box', confidence: 'sealed', foundBy: 'q',
+    status: 'new', firstSeenAt: new Date().toISOString(), alreadyHave: false,
+    retailer: 'Target', state: 'in', availableQuantity: 10, orderLimit: 10,
+  }];
+  const h = await boot(withFinds(ordinary));
+  const text = $(h, '#finds-list').textContent;
+  assert.doesNotMatch(text, /STOCK STAGED/);
+  assert.match(text, /10\+ available/, 'and the count still wears its ceiling');
+});
+
+test('a find from a retailer that states no count says nothing about one', async () => {
+  const h = await boot(withFinds());
+  const text = $(h, '#finds-list').textContent;
+  assert.doesNotMatch(text, /available/);
+  assert.doesNotMatch(text, /staged/);
+});
