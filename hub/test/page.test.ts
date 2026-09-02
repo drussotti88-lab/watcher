@@ -3626,3 +3626,64 @@ test('AN OLDER HUB THAT SENDS NO FLAG FAILS CLOSED', async () => {
   const h = await boot(d);
   assert.equal(($(h, '#machine-settings') as any).hidden, true);
 });
+
+// ── Discovery for a curator, Requests for a member ───────────────────────────
+
+test('A MEMBER GETS REQUESTS WHERE A CURATOR GETS THE SWEEP QUEUE', async () => {
+  // Same tab, opposite ends of the same question. The queue is a decision only
+  // a curator can make, so a member gets the other half: what they sent in.
+  const member = await boot({ ...DASHBOARD, canCurate: false, canArm: false });
+  assert.equal($(member, '#finds-tab-label').textContent, 'Requests');
+  assert.match($(member, '#finds-head').textContent, /links you sent in/i);
+  assert.equal(($(member, '#finds-list') as any).hidden, true, 'no queue they cannot work');
+  assert.equal(($(member, '#finds-filters') as any).hidden, true);
+  assert.equal(($(member, '#finds-tools') as any).hidden, true);
+
+  const owner = await boot({ ...DASHBOARD, canCurate: true, canArm: true });
+  assert.equal($(owner, '#finds-tab-label').textContent, 'Discovery');
+  assert.equal(($(owner, '#finds-list') as any).hidden, false);
+});
+
+test('KEEP AND FORGET ARE NOT BUILT FOR SOMEBODY THE SERVER WILL REFUSE', async () => {
+  // They were rendered for everyone and refused by the server for anyone
+  // without curation rights, so a member's Discovery tab was a page of
+  // controls that threw errors. A control that exists and fails is worse than
+  // one that was never offered.
+  const finds = [{
+    id: 9, sourceId: 'target-tcg', externalId: '1', name: 'A find',
+    url: 'https://t.test/x', price: 49.99, kind: 'elite trainer box',
+    confidence: 'sealed', foundBy: 'q', status: 'new',
+    firstSeenAt: new Date().toISOString(), alreadyHave: false, retailer: 'Target',
+  }];
+  const member = await boot({ ...withFinds(finds), canCurate: false });
+  const labels = [...member.doc.querySelectorAll('#finds-list button')].map((b) => b.textContent);
+  assert.ok(!labels.includes('Keep'));
+  assert.ok(!labels.includes('Forget'));
+
+  const owner = await boot({ ...withFinds(finds), canCurate: true });
+  const ownerLabels = [...owner.doc.querySelectorAll('#finds-list button')].map((b) => b.textContent);
+  assert.ok(ownerLabels.includes('Keep'));
+  assert.ok(ownerLabels.includes('Forget'));
+});
+
+test('the tab count is what is still waiting on somebody', async () => {
+  // A member's badge counting finds they cannot act on is a number that never
+  // goes down.
+  const d = JSON.parse(JSON.stringify(DASHBOARD));
+  d.canCurate = false;
+  d.discoveries = [{ id: 1, sourceId: 's', externalId: 'x', name: 'n', url: 'u',
+    status: 'new', firstSeenAt: new Date().toISOString(), alreadyHave: false }];
+  d.requests = [
+    { id: 1, url: 'a', status: 'pending' },
+    { id: 2, url: 'b', status: 'approved' },
+  ];
+  const h = await boot(d);
+  assert.equal($(h, '#c-finds').textContent, '1', 'the one still waiting, not the find');
+});
+
+test('WHAT IS COMING STAYS ON SCREEN FOR EVERYONE', async () => {
+  // The release radar is a fact about the world, not a decision, so it is not
+  // curation and it does not go away with the queue.
+  const member = await boot({ ...DASHBOARD, canCurate: false });
+  assert.ok(member.doc.getElementById('release-radar'), 'still there to be filled');
+});

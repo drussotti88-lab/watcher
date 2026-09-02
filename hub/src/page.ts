@@ -1050,7 +1050,7 @@ ${FONTS}<style>${STYLE}</style></head>
     <button class="tab" data-tab="missions">${ICONS.missions}<span>Missions</span><span class="count" id="c-missions"></span></button>
     <button class="tab" data-tab="products">${ICONS.products}<span>Products</span><span class="count" id="c-products"></span></button>
     <button class="tab" data-tab="activity">${ICONS.activity}<span>Activity</span><span class="count" id="c-activity"></span></button>
-    <button class="tab" data-tab="finds">${ICONS.finds}<span>Discovery</span><span class="count" id="c-finds"></span></button>
+    <button class="tab" data-tab="finds">${ICONS.finds}<span id="finds-tab-label">Discovery</span><span class="count" id="c-finds"></span></button>
     <button class="tab" data-tab="wins">${ICONS.wins}<span>Wins</span><span class="count" id="c-vault"></span></button>
     <button class="tab" data-tab="settings">${ICONS.settings}<span>Settings</span></button>
   </nav>
@@ -1272,9 +1272,18 @@ ${FONTS}<style>${STYLE}</style></head>
     <div class="card" id="changes-card"></div>
   </section>
 
+  <!-- ── One tab, two jobs ──────────────────────────────────────────────────
+       For a curator this is the sweep's decision queue: keep it or forget it.
+       For a member it is where the links they sent in went. Both belong on the
+       same tab because both answer "what is coming into the catalogue" — they
+       just answer it from opposite ends.
+       The queue itself is hidden from a member rather than shown with dead
+       buttons. Keep and Forget were rendered for everyone and refused by the
+       server for anybody without curation rights, so a member's Discovery tab
+       was a page of controls that threw errors. -->
   <section id="tab-finds" hidden>
-    <h2 style="margin-top:0">Discovery — what the sweep turned up</h2>
-    <p class="sub" style="margin:-6px 0 14px">
+    <h2 style="margin-top:0" id="finds-head">Discovery — what the sweep turned up</h2>
+    <p class="sub" style="margin:-6px 0 14px" id="finds-blurb">
       A sweep proposes; you decide. <strong>Keep</strong> starts watching it —
       a product, a listing, and a mission with eyes on the page. It does not
       arm anything, and it never will: a machine's guess and a decision about
@@ -1282,9 +1291,11 @@ ${FONTS}<style>${STYLE}</style></head>
       <strong>Forget</strong> means never offer this again, and is remembered,
       so the next sweep will not re-suggest it.
     </p>
+    <!-- What is coming, whoever you are: a fact about the world rather than a
+         decision, so it stays for members. -->
     <div class="card radar" id="release-radar" hidden></div>
     <div class="card" id="requests-card" hidden></div>
-  <div class="listtools"><div class="vt" data-list="finds"><button type="button" data-view="list" title="List view">☰</button><button type="button" data-view="grid" title="Grid view">▦</button></div></div>
+  <div class="listtools" id="finds-tools"><div class="vt" data-list="finds"><button type="button" data-view="list" title="List view">☰</button><button type="button" data-view="grid" title="Grid view">▦</button></div></div>
     <div class="filters" id="finds-filters">
       <div class="chips seg" id="find-shops"></div>
       <input type="search" id="find-q" placeholder="Search discoveries"
@@ -3405,7 +3416,39 @@ function render() {
   document.getElementById('c-missions').textContent = DATA.missions.length || '';
   document.getElementById('c-products').textContent = DATA.products.length || '';
   document.getElementById('c-activity').textContent = DATA.runs.length || '';
-  document.getElementById('c-finds').textContent = (DATA.discoveries || []).length || '';
+  /*
+   * Discovery for a curator; Requests for everyone else.
+   *
+   * The sweep's queue is a decision only a curator can make — Keep and Forget
+   * both fail closed at the server — so a member gets the other half of the
+   * same question instead: the links THEY sent in, and what happened to each.
+   * Their count is what is still waiting on somebody, because a number that
+   * counts finds they cannot act on is a badge that never goes down.
+   */
+  const curates = DATA.canCurate === true;
+  const finds = DATA.discoveries || [];
+  const requests = DATA.requests || [];
+  const label = document.getElementById('finds-tab-label');
+  if (label) label.textContent = curates ? 'Discovery' : 'Requests';
+  document.getElementById('c-finds').textContent = curates
+    ? finds.length || ''
+    : requests.filter((r) => r.status === 'pending').length || '';
+
+  const fhead = document.getElementById('finds-head');
+  const fblurb = document.getElementById('finds-blurb');
+  if (fhead && fblurb && !curates) {
+    fhead.textContent = 'Requests — links you sent in';
+    fblurb.textContent =
+      'Paste a link from Add product and it comes here. The catalogue owner ' +
+      'decides; once a product is added you will find it on your watchlist, ' +
+      'and anything still waiting says so below.';
+  }
+  // The queue itself, and the tools for working it. Hidden rather than shown
+  // with buttons the server will refuse.
+  for (const id of ['finds-tools', 'finds-filters', 'finds-list']) {
+    const node = document.getElementById(id);
+    if (node) node.hidden = !curates;
+  }
   document.getElementById('c-vault').textContent =
     (DATA.acquisitions || []).filter((a) => a.status === 'queued').length || '';
 
@@ -4875,9 +4918,14 @@ function renderFinds() {
       });
     });
 
-    actions.appendChild(keep);
-    actions.appendChild(forget);
-    left.appendChild(actions);
+    // Belt and braces: the whole list is hidden from a member, and the two
+    // buttons that only a curator may press are not built either. A control
+    // that exists and fails is worse than one that was never offered.
+    if (DATA.canCurate === true) {
+      actions.appendChild(keep);
+      actions.appendChild(forget);
+      left.appendChild(actions);
+    }
 
     row.appendChild(left);
     card.appendChild(row);
