@@ -1128,8 +1128,11 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
 
       const results: { listingId: number; changed: boolean; error?: string }[] = [];
       const changes: { obs: store.ObservationIn; was: string | null }[] = [];
-      // Load-ins, caught on the edge between two readings. See below.
+      // Load-ins worth announcing. See the claim below for when that is.
       const loaded: { listingId: number; quantity: number }[] = [];
+      // Read once for the batch: the repeat interval is a setting, and this
+      // endpoint runs on every pass.
+      const cfg = await store.getSettings(db, userId).catch(() => null);
 
       for (const obs of body.observations) {
         if (!obs?.listingId || !obs?.state) {
@@ -1164,11 +1167,33 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
            * shop is already selling is not a warning, it is a restock, and the
            * in-stock announcement below is the message for that.
            */
-          if (
-            obs.state !== 'in' &&
-            store.stockLoaded(outcome.previousQuantity, obs.availableQuantity ?? null)
-          ) {
-            loaded.push({ listingId: obs.listingId, quantity: obs.availableQuantity ?? 0 });
+          const stagedNow =
+            obs.state !== 'in' && (obs.availableQuantity ?? 0) >= store.STOCK_LOADED_MIN;
+
+          if (stagedNow) {
+            /*
+             * Announce on the edge, and again on the owner's interval.
+             *
+             * The edge alone was right for a machine and wrong for a person: a
+             * load-in that lands at 11pm for a 3am drop announces once, into a
+             * room where everyone is asleep. `stagedRepeatMinutes` is how
+             * often to say it again while the stock is still sitting there —
+             * zero, the default, keeps the old behaviour exactly.
+             *
+             * The database decides whether this reading has earned a message.
+             * Doing it here would mean read, decide, write, with a gap in the
+             * middle that two readings in the same batch would both walk
+             * through.
+             */
+            const repeat = Number(cfg?.stagedRepeatMinutes ?? 0);
+            if (await store.claimStagedAnnounce(db, userId, obs.listingId, repeat)) {
+              loaded.push({ listingId: obs.listingId, quantity: obs.availableQuantity ?? 0 });
+            }
+          } else {
+            // Sold through, or back to nothing. Forget we ever said it, so the
+            // next load-in on this listing is judged fresh rather than against
+            // a timestamp from the last one.
+            await store.clearStagedAnnounce(db, userId, obs.listingId).catch(() => {});
           }
         } catch (err) {
           results.push({ listingId: obs.listingId, changed: false, error: (err as Error).message });

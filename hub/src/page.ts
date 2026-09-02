@@ -1427,6 +1427,10 @@ ${FONTS}<style>${STYLE}</style></head>
             <span class="hint">seconds between checks while a window is open — blank or 0 keeps the ordinary 20s</span>
             <input type="number" name="burstSpacingSeconds" step="1" min="5" max="60" placeholder="0">
           </label>
+          <label class="f">Repeat the load-in alert
+            <span class="hint">minutes between reminders while stock sits staged — 0 says it once</span>
+            <input type="number" name="stagedRepeatMinutes" step="5" min="0" max="1440" placeholder="0">
+          </label>
           <label class="f">Open a drop window for
             <span class="hint">it closes itself when the time is up</span>
             <select id="drop-minutes">
@@ -3241,6 +3245,8 @@ function renderShops(st) {
   const sform = document.getElementById('shops-form');
   const burst = sform.querySelector('[name=burstSpacingSeconds]');
   if (document.activeElement !== burst) burst.value = st.burstSpacingSeconds || '';
+  const repeat = sform.querySelector('[name=stagedRepeatMinutes]');
+  if (repeat && document.activeElement !== repeat) repeat.value = st.stagedRepeatMinutes || '';
 
   // Is a window open, and how long is left? Said in words, because "true" is
   // not an answer to "am I about to be checking Target every 8 seconds".
@@ -4918,6 +4924,7 @@ document.getElementById('shops-form').addEventListener('submit', async (e) => {
   await withButton(form.querySelector('button[type=submit]'), 'Saving…', msg, async () => {
     await api('POST', '/api/settings', {
       burstSpacingSeconds: f.burstSpacingSeconds === '' ? 0 : Number(f.burstSpacingSeconds),
+      stagedRepeatMinutes: f.stagedRepeatMinutes === '' ? 0 : Number(f.stagedRepeatMinutes),
     });
     load();
     return 'saved';

@@ -919,6 +919,21 @@ export interface Settings {
    */
   sweepEveryHours: number;
   /**
+   * How often to say it again while stock stays staged, in minutes.
+   *
+   * The load-in alert is edge-triggered: it fires once, when a listing goes
+   * from nothing counted to a warehouse behind it. That is right for a machine
+   * and wrong for a person, because the whole point of the alarm is that it
+   * lands at eleven at night for a three in the morning drop, and the one
+   * message that matters most is the one you were asleep for.
+   *
+   * Zero means once only, which is the old behaviour and the default — nobody
+   * gets a new stream of messages because they upgraded. Set it and Phantom
+   * repeats the same warning on that interval for as long as the stock is
+   * still sitting there unsellable, and stops the moment it is not.
+   */
+  stagedRepeatMinutes: number;
+  /**
    * The most that may be authorised in any rolling 24 hours, in dollars.
    *
    * Null means unset, and unset means nothing can be armed. The cap is checked
@@ -983,6 +998,7 @@ export const DEFAULT_SETTINGS: Settings = {
   timezone: '',
   paused: false,
   sweepEveryHours: 24,
+  stagedRepeatMinutes: 0,
   spendCapDay: null,
   budgetTotal: 0,
   pausedRetailers: [],
@@ -1069,6 +1085,16 @@ export function validateSettings(s: Partial<Settings>): string | null {
       return `"${s.timezone}" is not a timezone this server knows`;
     }
   }
+  if (s.stagedRepeatMinutes !== undefined) {
+    const n = Number(s.stagedRepeatMinutes);
+    if (!Number.isFinite(n) || n < 0) return 'a repeat interval cannot be negative';
+    // Under five minutes is not a reminder, it is a stream. The check cadence
+    // during a drop window is faster than that on purpose; the ALERT does not
+    // need to be, and an alarm that fires every minute gets muted before the
+    // drop it was warning about.
+    if (n > 0 && n < 5) return 'repeat the load-in alert no more often than every 5 minutes';
+    if (n > 24 * 60) return 'a repeat interval longer than a day is the same as off';
+  }
   if (s.sweepEveryHours !== undefined) {
     if (!Number.isFinite(s.sweepEveryHours) || s.sweepEveryHours < 0) {
       return 'a sweep interval cannot be negative — use 0 to stop sweeping';
@@ -1113,6 +1139,7 @@ export async function getSettings(db: Sql, userId: number): Promise<Settings> {
     timezone: text('timezone', ''),
     paused: text('paused', '') === 'true',
     sweepEveryHours: num('sweepEveryHours', DEFAULT_SETTINGS.sweepEveryHours),
+    stagedRepeatMinutes: num('stagedRepeatMinutes', DEFAULT_SETTINGS.stagedRepeatMinutes),
     budgetTotal: num('budgetTotal', DEFAULT_SETTINGS.budgetTotal),
     spendCapDay: map.has('spendCapDay') && Number.isFinite(Number(map.get('spendCapDay'))) && Number(map.get('spendCapDay')) > 0
       ? Number(map.get('spendCapDay'))
@@ -1145,6 +1172,7 @@ export async function setSettings(
     'timezone',
     'paused',
     'sweepEveryHours',
+    'stagedRepeatMinutes',
     'budgetTotal',
     'spendCapDay',
     'pausedRetailers',
@@ -2120,6 +2148,55 @@ export interface ObservationIn {
   releaseDate?: string | null;
   imageUrl?: string;
   note?: string;
+}
+
+/**
+ * Claim the right to announce staged stock on this listing, once.
+ *
+ * The whole repeat rule lives in one UPDATE, on purpose. Reading a timestamp,
+ * deciding in JavaScript and writing it back is three steps with a gap in the
+ * middle, and two readings arriving together — which is exactly what happens
+ * when a pass reports a batch — would both pass the check and both announce.
+ * The database decides, atomically, and returning a row IS the permission.
+ *
+ * A null timestamp means nothing has been said about this listing yet, so the
+ * first sighting always announces however the interval is set.
+ */
+export async function claimStagedAnnounce(
+  db: Sql,
+  userId: number,
+  listingId: number,
+  repeatMinutes: number,
+): Promise<boolean> {
+  const rows = await db.query<{ listing_id: number }>(
+    `UPDATE watch_state SET staged_notified_at = now()
+      WHERE user_id = $1 AND listing_id = $2
+        AND (staged_notified_at IS NULL
+             OR ($3 > 0 AND staged_notified_at < now() - ($3 || ' minutes')::interval))
+      RETURNING listing_id`,
+    [userId, listingId, Math.max(0, Math.round(repeatMinutes))],
+  );
+  return rows.length > 0;
+}
+
+/**
+ * Forget that we ever announced this listing.
+ *
+ * Called the moment it stops being staged — sold through, or gone back to
+ * nothing. Without this the NEXT load-in on the same listing would be judged
+ * against a timestamp from the last one, and a drop two weeks later would
+ * announce late or not at all.
+ */
+export async function clearStagedAnnounce(
+  db: Sql,
+  userId: number,
+  listingId: number,
+): Promise<void> {
+  await db.query(
+    `UPDATE watch_state SET staged_notified_at = NULL
+      WHERE user_id = $1 AND listing_id = $2 AND staged_notified_at IS NOT NULL`,
+    [userId, listingId],
+  );
 }
 
 /**

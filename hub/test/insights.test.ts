@@ -453,3 +453,48 @@ test('the previous count comes back out, so the edge can be seen', async () => {
   assert.equal(second.previousQuantity, 0);
   assert.equal(store.stockLoaded(second.previousQuantity, 31000), true);
 });
+
+// ── Repeating the load-in alert ──────────────────────────────────────────────
+
+test('THE FIRST SIGHTING ALWAYS ANNOUNCES, WHATEVER THE INTERVAL', async () => {
+  // A null timestamp means nothing has been said about this listing. Making a
+  // first load-in wait for an interval would silence the one message the whole
+  // alarm exists to send.
+  const { db, listing } = await seeded();
+  await store.recordObservation(db, A, { listingId: listing.id, state: 'out', availableQuantity: 0 });
+  assert.equal(await store.claimStagedAnnounce(db, A, listing.id, 60), true);
+});
+
+test('once only is the default, and it means once', async () => {
+  const { db, listing } = await seeded();
+  await store.recordObservation(db, A, { listingId: listing.id, state: 'out', availableQuantity: 0 });
+  assert.equal(await store.claimStagedAnnounce(db, A, listing.id, 0), true, 'the edge');
+  assert.equal(await store.claimStagedAnnounce(db, A, listing.id, 0), false, 'and never again');
+  assert.equal(await store.claimStagedAnnounce(db, A, listing.id, 0), false);
+});
+
+test('a repeat interval that has not elapsed stays quiet', async () => {
+  const { db, listing } = await seeded();
+  await store.recordObservation(db, A, { listingId: listing.id, state: 'out', availableQuantity: 0 });
+  assert.equal(await store.claimStagedAnnounce(db, A, listing.id, 30), true);
+  assert.equal(await store.claimStagedAnnounce(db, A, listing.id, 30), false, 'not 30 minutes later yet');
+});
+
+test('STOCK GOING AWAY FORGETS THE ALERT, SO THE NEXT LOAD-IN IS JUDGED FRESH', async () => {
+  // Without this, a drop two weeks from now would be measured against a
+  // timestamp from this one and announce late, or not at all.
+  const { db, listing } = await seeded();
+  await store.recordObservation(db, A, { listingId: listing.id, state: 'out', availableQuantity: 0 });
+  assert.equal(await store.claimStagedAnnounce(db, A, listing.id, 0), true);
+  assert.equal(await store.claimStagedAnnounce(db, A, listing.id, 0), false);
+  await store.clearStagedAnnounce(db, A, listing.id);
+  assert.equal(await store.claimStagedAnnounce(db, A, listing.id, 0), true, 'a new load-in speaks again');
+});
+
+test('the repeat interval refuses to become a stream', async () => {
+  // A drop window checks every few seconds on purpose. An ALERT that fires
+  // every minute gets muted before the drop it was warning about.
+  assert.match(String(store.validateSettings({ stagedRepeatMinutes: 1 })), /no more often/);
+  assert.equal(store.validateSettings({ stagedRepeatMinutes: 0 }), null, 'off is always allowed');
+  assert.equal(store.validateSettings({ stagedRepeatMinutes: 30 }), null);
+});

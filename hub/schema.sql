@@ -907,3 +907,19 @@ ALTER TABLE mission_runs ADD COLUMN IF NOT EXISTS release_date DATE;
 --
 -- The sweep has been reading this number all along and dropping it here.
 ALTER TABLE discoveries ADD COLUMN IF NOT EXISTS available_quantity INTEGER;
+
+-- ---------------------------------------------------------------------------
+-- Repeating the load-in alert  (2 Sep 2026)
+-- ---------------------------------------------------------------------------
+--
+-- The staged-stock alarm is edge-triggered: it fires once, when a listing goes
+-- from nothing counted to a warehouse behind it. Right for a machine, wrong
+-- for a person — the whole point is that it lands at eleven at night for a
+-- three in the morning drop, and the message that matters most is the one you
+-- were asleep for.
+--
+-- This is when we last said it, per listing, so a repeat interval has
+-- something to measure against. NULL means nothing has been said, which is why
+-- a first sighting always announces. It is cleared the moment a listing stops
+-- being staged, so the next load-in is judged fresh.
+ALTER TABLE watch_state ADD COLUMN IF NOT EXISTS staged_notified_at TIMESTAMPTZ;

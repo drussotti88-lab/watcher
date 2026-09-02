@@ -715,6 +715,7 @@ var DEFAULT_SETTINGS = {
   timezone: "",
   paused: false,
   sweepEveryHours: 24,
+  stagedRepeatMinutes: 0,
   spendCapDay: null,
   budgetTotal: 0,
   pausedRetailers: [],
@@ -788,6 +789,12 @@ function validateSettings(s) {
       return `"${s.timezone}" is not a timezone this server knows`;
     }
   }
+  if (s.stagedRepeatMinutes !== void 0) {
+    const n = Number(s.stagedRepeatMinutes);
+    if (!Number.isFinite(n) || n < 0) return "a repeat interval cannot be negative";
+    if (n > 0 && n < 5) return "repeat the load-in alert no more often than every 5 minutes";
+    if (n > 24 * 60) return "a repeat interval longer than a day is the same as off";
+  }
   if (s.sweepEveryHours !== void 0) {
     if (!Number.isFinite(s.sweepEveryHours) || s.sweepEveryHours < 0) {
       return "a sweep interval cannot be negative \u2014 use 0 to stop sweeping";
@@ -827,6 +834,7 @@ async function getSettings(db2, userId) {
     timezone: text("timezone", ""),
     paused: text("paused", "") === "true",
     sweepEveryHours: num2("sweepEveryHours", DEFAULT_SETTINGS.sweepEveryHours),
+    stagedRepeatMinutes: num2("stagedRepeatMinutes", DEFAULT_SETTINGS.stagedRepeatMinutes),
     budgetTotal: num2("budgetTotal", DEFAULT_SETTINGS.budgetTotal),
     spendCapDay: map.has("spendCapDay") && Number.isFinite(Number(map.get("spendCapDay"))) && Number(map.get("spendCapDay")) > 0 ? Number(map.get("spendCapDay")) : null,
     // Stored as one comma-separated string: the set is three names, and a
@@ -848,6 +856,7 @@ async function setSettings(db2, userId, patch) {
     "timezone",
     "paused",
     "sweepEveryHours",
+    "stagedRepeatMinutes",
     "budgetTotal",
     "spendCapDay",
     "pausedRetailers",
@@ -1401,11 +1410,25 @@ async function recentRuns(db2, userId, limit = 50) {
   );
   return rows.map(toRun);
 }
-var STOCK_LOADED_MIN = 100;
-var STOCK_LOADED_PRIOR_MAX = 50;
-function stockLoaded(prev, next) {
-  return (next ?? 0) >= STOCK_LOADED_MIN && (prev ?? 0) <= STOCK_LOADED_PRIOR_MAX;
+async function claimStagedAnnounce(db2, userId, listingId, repeatMinutes) {
+  const rows = await db2.query(
+    `UPDATE watch_state SET staged_notified_at = now()
+      WHERE user_id = $1 AND listing_id = $2
+        AND (staged_notified_at IS NULL
+             OR ($3 > 0 AND staged_notified_at < now() - ($3 || ' minutes')::interval))
+      RETURNING listing_id`,
+    [userId, listingId, Math.max(0, Math.round(repeatMinutes))]
+  );
+  return rows.length > 0;
 }
+async function clearStagedAnnounce(db2, userId, listingId) {
+  await db2.query(
+    `UPDATE watch_state SET staged_notified_at = NULL
+      WHERE user_id = $1 AND listing_id = $2 AND staged_notified_at IS NOT NULL`,
+    [userId, listingId]
+  );
+}
+var STOCK_LOADED_MIN = 100;
 async function recordObservation(db2, userId, obs) {
   if (!await canWriteCatalogue(db2, userId)) {
     throw new Error("this account may not write readings to the catalogue");
@@ -4039,6 +4062,10 @@ ${FONTS}<style>${STYLE}</style></head>
             <span class="hint">seconds between checks while a window is open \u2014 blank or 0 keeps the ordinary 20s</span>
             <input type="number" name="burstSpacingSeconds" step="1" min="5" max="60" placeholder="0">
           </label>
+          <label class="f">Repeat the load-in alert
+            <span class="hint">minutes between reminders while stock sits staged \u2014 0 says it once</span>
+            <input type="number" name="stagedRepeatMinutes" step="5" min="0" max="1440" placeholder="0">
+          </label>
           <label class="f">Open a drop window for
             <span class="hint">it closes itself when the time is up</span>
             <select id="drop-minutes">
@@ -5853,6 +5880,8 @@ function renderShops(st) {
   const sform = document.getElementById('shops-form');
   const burst = sform.querySelector('[name=burstSpacingSeconds]');
   if (document.activeElement !== burst) burst.value = st.burstSpacingSeconds || '';
+  const repeat = sform.querySelector('[name=stagedRepeatMinutes]');
+  if (repeat && document.activeElement !== repeat) repeat.value = st.stagedRepeatMinutes || '';
 
   // Is a window open, and how long is left? Said in words, because "true" is
   // not an answer to "am I about to be checking Target every 8 seconds".
@@ -7530,6 +7559,7 @@ document.getElementById('shops-form').addEventListener('submit', async (e) => {
   await withButton(form.querySelector('button[type=submit]'), 'Saving\u2026', msg, async () => {
     await api('POST', '/api/settings', {
       burstSpacingSeconds: f.burstSpacingSeconds === '' ? 0 : Number(f.burstSpacingSeconds),
+      stagedRepeatMinutes: f.stagedRepeatMinutes === '' ? 0 : Number(f.stagedRepeatMinutes),
     });
     load();
     return 'saved';
@@ -8780,6 +8810,7 @@ function createHandler(db2, env2) {
       const results = [];
       const changes = [];
       const loaded = [];
+      const cfg = await getSettings(db2, userId).catch(() => null);
       for (const obs of body2.observations) {
         if (!obs?.listingId || !obs?.state) {
           results.push({
@@ -8793,8 +8824,15 @@ function createHandler(db2, env2) {
           const outcome = await recordObservation(db2, userId, obs);
           results.push({ listingId: obs.listingId, changed: outcome.changed });
           if (outcome.changed) changes.push({ obs, was: outcome.previousState });
-          if (obs.state !== "in" && stockLoaded(outcome.previousQuantity, obs.availableQuantity ?? null)) {
-            loaded.push({ listingId: obs.listingId, quantity: obs.availableQuantity ?? 0 });
+          const stagedNow = obs.state !== "in" && (obs.availableQuantity ?? 0) >= STOCK_LOADED_MIN;
+          if (stagedNow) {
+            const repeat = Number(cfg?.stagedRepeatMinutes ?? 0);
+            if (await claimStagedAnnounce(db2, userId, obs.listingId, repeat)) {
+              loaded.push({ listingId: obs.listingId, quantity: obs.availableQuantity ?? 0 });
+            }
+          } else {
+            await clearStagedAnnounce(db2, userId, obs.listingId).catch(() => {
+            });
           }
         } catch (err) {
           results.push({ listingId: obs.listingId, changed: false, error: err.message });
