@@ -3355,10 +3355,29 @@ button.small { padding: 4px 10px; font-size: 12px; border-radius: var(--r-sm); b
 /* The hero figure. Exactly one on the page: the number you opened it for.
    Proportional figures, not tabular \u2014 at this size tabular-nums gives every
    digit the width of a zero and a small number looks loose. */
+.livehead { display: flex; align-items: center; gap: 14px; }
 .hero { font: 700 46px/1 var(--display); color: var(--ink); letter-spacing: -.02em; }
-.hero.none { color: var(--muted); }
 .herolabel { font: 500 12px/1.3 var(--sans); letter-spacing: .06em;
-             text-transform: uppercase; color: var(--muted); margin-top: 6px; }
+             text-transform: uppercase; color: var(--muted); margin-top: 5px; }
+
+/* \u2500\u2500 The headline \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+   The panel had a number and a small grey caption, and read as one more tile
+   on a page of tiles. This is the only thing on the dashboard you can act on
+   in the next minute, so it says so in the app's own IN STOCK green \u2014 the same
+   green as the pill on a card, because a colour that means one thing here and
+   another thing there is a colour nobody trusts.
+
+   It is a status colour, so it never appears without its word: the word IS the
+   headline. And at zero it goes grey, because a bright green heading over
+   "nothing is in stock" would be the interface lying for the sake of looking
+   lively. */
+.livetitle { font: 800 30px/1 var(--display); letter-spacing: .06em;
+             text-transform: uppercase; color: var(--in);
+             text-shadow: 0 0 22px rgba(95, 211, 160, .35); }
+.livetitle.none { color: var(--muted); text-shadow: none; }
+.hero { color: var(--in); }
+.hero.none { color: var(--muted); }
+@media (max-width: 520px) { .livetitle { font-size: 24px; } .hero { font-size: 38px; } }
 
 /* One buyable listing. A row, not a card: the point is to scan several and
    click one, and a grid of tiles here would out-shout the number above it. */
@@ -4064,9 +4083,12 @@ ${FONTS}<style>${STYLE}</style></head>
       <!-- The hero. Exactly one per view, and it is the thing you came for. -->
       <div class="card span2" id="live-card">
         <div class="wizhead">
-          <div>
+          <div class="livehead">
             <div class="hero" id="live-n">\u2014</div>
-            <div class="herolabel" id="live-label">buyable right now</div>
+            <div>
+              <div class="livetitle" id="live-title">In stock</div>
+              <div class="herolabel" id="live-label">buyable right now</div>
+            </div>
           </div>
           <button type="button" class="small" id="live-all">See the watchlist</button>
         </div>
@@ -7196,8 +7218,13 @@ function renderLive() {
   const shop = rows.filter((m) => m.sellerKind !== 'marketplace');
   list.textContent = '';
 
+  const title = document.getElementById('live-title');
   n.textContent = String(shop.length);
   n.className = shop.length ? 'hero' : 'hero none';
+  if (title) {
+    title.textContent = shop.length ? 'In stock' : 'Nothing in stock';
+    title.className = shop.length ? 'livetitle' : 'livetitle none';
+  }
   label.textContent = shop.length === 1
     ? 'buyable right now, from the shop itself'
     : 'buyable right now, from the shops themselves';

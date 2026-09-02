@@ -3866,3 +3866,25 @@ test('THERE IS EXACTLY ONE HERO FIGURE ON THE DASHBOARD', async () => {
   const h = await boot(DASHBOARD);
   assert.equal(h.doc.querySelectorAll('#tab-home .hero').length, 1);
 });
+
+test('THE IN-STOCK HEADLINE IS BRIGHT WHEN THERE IS STOCK, AND GREY WHEN THERE IS NOT', async () => {
+  // A status colour never appears without its word, and it never appears over
+  // a fact it contradicts: a green "In stock" heading above "nothing is in
+  // stock" would be the interface being lively at the cost of being true.
+  const some = JSON.parse(JSON.stringify(DASHBOARD));
+  some.missions = [{ ...DASHBOARD.missions[0], state: 'in', sellerKind: 'retailer',
+    price: 59.99, enabled: true }];
+  const on = await boot(some);
+  assert.equal($(on, '#live-title').textContent, 'In stock');
+  assert.equal($(on, '#live-title').className, 'livetitle');
+
+  const none = JSON.parse(JSON.stringify(DASHBOARD));
+  none.missions = none.missions.map((m) => ({ ...m, state: 'out' }));
+  const off = await boot(none);
+  assert.equal($(off, '#live-title').textContent, 'Nothing in stock');
+  assert.match($(off, '#live-title').className, /none/);
+
+  const css = on.doc.querySelector('style').textContent;
+  assert.match(css, /\.livetitle \{[^}]*color: var\(--in\)/, 'the app\'s own in-stock green');
+  assert.match(css, /\.livetitle\.none \{[^}]*color: var\(--muted\)/);
+});
