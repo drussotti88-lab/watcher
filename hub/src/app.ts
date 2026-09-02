@@ -880,6 +880,47 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       if (!env.DISCORD_WEBHOOK_URL) {
         return json({ sent: false, configured: false }, 200);
       }
+      const kind = url.searchParams.get('kind') ?? 'hello';
+
+      /*
+       * A rehearsal of the real alert, with real data.
+       *
+       * The in-stock alert is edge-triggered — state is 'in' AND the last
+       * reading was not — which is what stops it re-announcing the same
+       * listing every six minutes forever. The consequence is that you cannot
+       * see it work by waiting when the things you want to see are ALREADY in
+       * stock: nothing transitions, so nothing sends, and an empty channel
+       * looks exactly like a broken one.
+       *
+       * So this builds the genuine embed from the genuine watchlist and sends
+       * it, footered as a preview. Nothing is written: no observation, no run,
+       * no faked transition. Inventing an out-of-stock reading to trigger a
+       * real alert would put a lie in the history to make a demo work, and the
+       * history is the thing this system is for.
+       */
+      if (kind === 'stock') {
+        const rows = await store.listMissions(db, userId).catch(() => []);
+        const live = rows.filter((m) => m.state === 'in' && m.enabled).slice(0, 3);
+        if (live.length === 0) {
+          return json({ sent: false, configured: true, reason: 'nothing is in stock right now' });
+        }
+        await announceStock(
+          env.DISCORD_WEBHOOK_URL,
+          live.map((m) => ({
+            name: m.productName,
+            retailer: m.retailer,
+            price: m.price,
+            msrp: m.msrp,
+            url: m.url,
+            armed: m.armed,
+            seller: m.sellerKind ?? '',
+          })),
+          now,
+          'PREVIEW — sent from Settings. The real one fires the moment something goes from out of stock to in.',
+        );
+        return json({ sent: true, configured: true, items: live.map((m) => m.productName) });
+      }
+
       await announceTest(env.DISCORD_WEBHOOK_URL, now);
       return json({ sent: true, configured: true });
     }

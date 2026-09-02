@@ -1305,6 +1305,7 @@ ${FONTS}<style>${STYLE}</style></head>
           <div class="name">Discord</div>
           <div class="meta" id="discord-state">Checking…</div>
         </div>
+        <button id="discord-preview" type="button">Preview an in-stock alert</button>
         <button id="discord-test" type="button">Send a test message</button>
       </div>
       <div class="meta" id="discord-result" style="margin-top:8px" hidden></div>
@@ -2983,6 +2984,7 @@ function render() {
       ? 'Connected. In-stock, staged stock and source failures are posted here.'
       : 'Not connected. Add DISCORD_WEBHOOK_URL to the Hub and redeploy, then test.';
     document.getElementById('discord-test').disabled = !on;
+    document.getElementById('discord-preview').disabled = !on;
   }
 
   const st = DATA.settings || { taxRate: 0, shippingAllowance: 0 };
@@ -4775,23 +4777,32 @@ addDialog.addEventListener('click', (e) => { if (e.target === addDialog) closeAd
  * error. "Nothing appeared in Discord" is the one outcome this exists to make
  * impossible to misread.
  */
-document.getElementById('discord-test').addEventListener('click', async () => {
-  const btn = document.getElementById('discord-test');
+async function sendTest(kind) {
+  const btns = [document.getElementById('discord-test'), document.getElementById('discord-preview')];
   const out = document.getElementById('discord-result');
-  btn.disabled = true;
+  btns.forEach((b) => { b.disabled = true; });
   out.hidden = false;
   out.textContent = 'Sending…';
   try {
-    const res = await fetch('/api/notify/test', { method: 'POST' });
+    const res = await fetch('/api/notify/test?kind=' + kind, { method: 'POST' });
     const body = await res.json();
-    if (body.sent) out.textContent = 'Sent. It should be in your channel now.';
-    else if (!body.configured) out.textContent = 'No webhook is configured on the Hub.';
+    if (body.sent) {
+      out.textContent = body.items
+        ? 'Sent, using ' + body.items.join(', ') + '. Check your channel.'
+        : 'Sent. It should be in your channel now.';
+    } else if (!body.configured) out.textContent = 'No webhook is configured on the Hub.';
+    else if (body.reason) out.textContent = 'Nothing to preview: ' + body.reason + '.';
     else out.textContent = 'The Hub accepted it but reported nothing sent.';
   } catch (err) {
     out.textContent = 'Could not reach the Hub: ' + err.message;
   }
-  btn.disabled = false;
-});
+  btns.forEach((b) => { b.disabled = false; });
+}
+
+document.getElementById('discord-test').addEventListener('click', () => sendTest('hello'));
+// The real alert, with real data, footered as a rehearsal. See the endpoint for
+// why waiting cannot show you this when the thing is already in stock.
+document.getElementById('discord-preview').addEventListener('click', () => sendTest('stock'));
 
 document.getElementById('settings-form').addEventListener('submit', async (e) => {
   e.preventDefault();

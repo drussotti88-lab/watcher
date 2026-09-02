@@ -152,12 +152,15 @@ export function buildStockEmbed(
     seller: string;
   }[],
   now: string,
+  /** Set on a preview, so a rehearsal is never mistaken for the real thing. */
+  note?: string,
 ): Embed | null {
   if (items.length === 0) return null;
   const one = items.length === 1;
   return {
     title: one ? `🟢 IN STOCK — ${clip(items[0]!.name, 200)}` : `🟢 ${items.length} items came in stock`,
     description: one ? undefined : 'Everything below became buyable in the last check.',
+    ...(note ? { footer: { text: note } } : {}),
     color: COLOR_IN,
     fields: items.slice(0, MAX_FIELDS).map((i) => {
       const bits: string[] = [];
@@ -186,8 +189,9 @@ export async function announceStock(
   webhookUrl: string,
   items: Parameters<typeof buildStockEmbed>[0],
   now: string,
+  note?: string,
 ): Promise<void> {
-  const embed = buildStockEmbed(items, now);
+  const embed = buildStockEmbed(items, now, note);
   if (embed) await post(webhookUrl, [embed]);
 }
 

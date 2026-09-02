@@ -2297,12 +2297,13 @@ function buildStagedEmbed(items, now) {
     timestamp: now
   };
 }
-function buildStockEmbed(items, now) {
+function buildStockEmbed(items, now, note) {
   if (items.length === 0) return null;
   const one = items.length === 1;
   return {
     title: one ? `\u{1F7E2} IN STOCK \u2014 ${clip(items[0].name, 200)}` : `\u{1F7E2} ${items.length} items came in stock`,
     description: one ? void 0 : "Everything below became buyable in the last check.",
+    ...note ? { footer: { text: note } } : {},
     color: COLOR_IN,
     fields: items.slice(0, MAX_FIELDS).map((i) => {
       const bits = [];
@@ -2324,8 +2325,8 @@ function buildStockEmbed(items, now) {
     timestamp: now
   };
 }
-async function announceStock(webhookUrl, items, now) {
-  const embed = buildStockEmbed(items, now);
+async function announceStock(webhookUrl, items, now, note) {
+  const embed = buildStockEmbed(items, now, note);
   if (embed) await post(webhookUrl, [embed]);
 }
 async function announceTest(webhookUrl, now) {
@@ -3916,6 +3917,7 @@ ${FONTS}<style>${STYLE}</style></head>
           <div class="name">Discord</div>
           <div class="meta" id="discord-state">Checking\u2026</div>
         </div>
+        <button id="discord-preview" type="button">Preview an in-stock alert</button>
         <button id="discord-test" type="button">Send a test message</button>
       </div>
       <div class="meta" id="discord-result" style="margin-top:8px" hidden></div>
@@ -5594,6 +5596,7 @@ function render() {
       ? 'Connected. In-stock, staged stock and source failures are posted here.'
       : 'Not connected. Add DISCORD_WEBHOOK_URL to the Hub and redeploy, then test.';
     document.getElementById('discord-test').disabled = !on;
+    document.getElementById('discord-preview').disabled = !on;
   }
 
   const st = DATA.settings || { taxRate: 0, shippingAllowance: 0 };
@@ -7386,23 +7389,32 @@ addDialog.addEventListener('click', (e) => { if (e.target === addDialog) closeAd
  * error. "Nothing appeared in Discord" is the one outcome this exists to make
  * impossible to misread.
  */
-document.getElementById('discord-test').addEventListener('click', async () => {
-  const btn = document.getElementById('discord-test');
+async function sendTest(kind) {
+  const btns = [document.getElementById('discord-test'), document.getElementById('discord-preview')];
   const out = document.getElementById('discord-result');
-  btn.disabled = true;
+  btns.forEach((b) => { b.disabled = true; });
   out.hidden = false;
   out.textContent = 'Sending\u2026';
   try {
-    const res = await fetch('/api/notify/test', { method: 'POST' });
+    const res = await fetch('/api/notify/test?kind=' + kind, { method: 'POST' });
     const body = await res.json();
-    if (body.sent) out.textContent = 'Sent. It should be in your channel now.';
-    else if (!body.configured) out.textContent = 'No webhook is configured on the Hub.';
+    if (body.sent) {
+      out.textContent = body.items
+        ? 'Sent, using ' + body.items.join(', ') + '. Check your channel.'
+        : 'Sent. It should be in your channel now.';
+    } else if (!body.configured) out.textContent = 'No webhook is configured on the Hub.';
+    else if (body.reason) out.textContent = 'Nothing to preview: ' + body.reason + '.';
     else out.textContent = 'The Hub accepted it but reported nothing sent.';
   } catch (err) {
     out.textContent = 'Could not reach the Hub: ' + err.message;
   }
-  btn.disabled = false;
-});
+  btns.forEach((b) => { b.disabled = false; });
+}
+
+document.getElementById('discord-test').addEventListener('click', () => sendTest('hello'));
+// The real alert, with real data, footered as a rehearsal. See the endpoint for
+// why waiting cannot show you this when the thing is already in stock.
+document.getElementById('discord-preview').addEventListener('click', () => sendTest('stock'));
 
 document.getElementById('settings-form').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -8531,6 +8543,29 @@ function createHandler(db2, env2) {
     if (request.method === "POST" && path === "/api/notify/test") {
       if (!env2.DISCORD_WEBHOOK_URL) {
         return json({ sent: false, configured: false }, 200);
+      }
+      const kind = url.searchParams.get("kind") ?? "hello";
+      if (kind === "stock") {
+        const rows = await listMissions(db2, userId).catch(() => []);
+        const live = rows.filter((m) => m.state === "in" && m.enabled).slice(0, 3);
+        if (live.length === 0) {
+          return json({ sent: false, configured: true, reason: "nothing is in stock right now" });
+        }
+        await announceStock(
+          env2.DISCORD_WEBHOOK_URL,
+          live.map((m) => ({
+            name: m.productName,
+            retailer: m.retailer,
+            price: m.price,
+            msrp: m.msrp,
+            url: m.url,
+            armed: m.armed,
+            seller: m.sellerKind ?? ""
+          })),
+          now,
+          "PREVIEW \u2014 sent from Settings. The real one fires the moment something goes from out of stock to in."
+        );
+        return json({ sent: true, configured: true, items: live.map((m) => m.productName) });
       }
       await announceTest(env2.DISCORD_WEBHOOK_URL, now);
       return json({ sent: true, configured: true });

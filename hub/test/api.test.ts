@@ -408,3 +408,24 @@ test('THE TEST ENDPOINT SAYS "NOT CONFIGURED" RATHER THAN PRETENDING', async () 
   assert.equal(res.body.sent, false);
   assert.equal(res.body.configured, false);
 });
+
+test('THE PREVIEW REFUSES RATHER THAN INVENTING A TRANSITION', async () => {
+  // Wanting to see the alert work is not a reason to write a false reading.
+  // With nothing in stock the preview says so plainly instead of manufacturing
+  // an out-of-stock row to trigger a real one.
+  const db = await TestDb.create();
+  // A webhook has to be configured or the endpoint answers the earlier
+  // question ("nowhere to send it") and never reaches the preview at all.
+  // Nothing is posted: with no in-stock mission the endpoint returns first.
+  const was = env.DISCORD_WEBHOOK_URL;
+  env.DISCORD_WEBHOOK_URL = 'https://discord.test/hook';
+  try {
+    const res = await call(db, 'POST', '/api/notify/test?kind=stock', { token: TOKEN });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.sent, false);
+    assert.equal(res.body.configured, true);
+    assert.match(res.body.reason, /nothing is in stock/);
+  } finally {
+    env.DISCORD_WEBHOOK_URL = was;
+  }
+});
