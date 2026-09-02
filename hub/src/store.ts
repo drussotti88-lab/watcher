@@ -954,6 +954,17 @@ export interface Settings {
    */
   inStockRepeatAfter: number[];
   /**
+   * The Discord server people are invited to, as a link.
+   *
+   * Deliberately NOT derived from the webhook. A webhook is a credential that
+   * posts as Phantom; an invite is a public address anybody may hold. They
+   * belong to the same server and are not the same secret, and building one
+   * from the other would put a credential behind a link people click.
+   *
+   * Blank hides the button rather than showing one that goes nowhere.
+   */
+  discordInvite: string;
+  /**
    * The most that may be authorised in any rolling 24 hours, in dollars.
    *
    * Null means unset, and unset means nothing can be armed. The cap is checked
@@ -1020,6 +1031,7 @@ export const DEFAULT_SETTINGS: Settings = {
   sweepEveryHours: 24,
   stagedRepeatMinutes: 0,
   inStockRepeatAfter: [],
+  discordInvite: '',
   spendCapDay: null,
   budgetTotal: 0,
   pausedRetailers: [],
@@ -1116,6 +1128,17 @@ export function validateSettings(s: Partial<Settings>): string | null {
     if (n > 0 && n < 5) return 'repeat the load-in alert no more often than every 5 minutes';
     if (n > 24 * 60) return 'a repeat interval longer than a day is the same as off';
   }
+  if (s.discordInvite !== undefined && s.discordInvite !== '') {
+    const v = String(s.discordInvite).trim();
+    // Only Discord's own hosts, and only https. This value becomes a link in
+    // a header that members click, so "a URL somebody typed" is not good
+    // enough — an invite that quietly points elsewhere is a phishing link
+    // wearing our chrome.
+    if (!/^https:\/\/(discord\.gg|discord\.com|www\.discord\.com)\//i.test(v)) {
+      return 'a Discord invite looks like https://discord.gg/… — other links are not accepted here';
+    }
+    if (v.length > 200) return 'that does not look like an invite link';
+  }
   if (s.inStockRepeatAfter !== undefined) {
     const list = s.inStockRepeatAfter;
     if (!Array.isArray(list)) return 'the follow-up times must be a list of minutes';
@@ -1180,6 +1203,7 @@ export async function getSettings(db: Sql, userId: number): Promise<Settings> {
     // Same comma-separated storage as pausedRetailers. A malformed entry is
     // dropped rather than made NaN: a schedule that half-parses should send
     // fewer messages, never a message at an unknown time.
+    discordInvite: text('discordInvite', ''),
     inStockRepeatAfter: text('inStockRepeatAfter', '')
       .split(',')
       .map((v) => Number(v.trim()))
@@ -1219,6 +1243,7 @@ export async function setSettings(
     'sweepEveryHours',
     'stagedRepeatMinutes',
     'inStockRepeatAfter',
+    'discordInvite',
     'budgetTotal',
     'spendCapDay',
     'pausedRetailers',

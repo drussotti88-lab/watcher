@@ -508,3 +508,39 @@ test('STAGED STOCK IS ITS OWN CARD, IN ITS OWN COLOUR', async () => {
   );
   assert.notEqual(staged.color, inStock.color);
 });
+
+// ── Feedback ─────────────────────────────────────────────────────────────────
+
+test('FEEDBACK WITH NOWHERE TO GO SAYS SO RATHER THAN SWALLOWING IT', async () => {
+  // There is no feedback table on purpose: a message nobody reads is worse
+  // than no button. So with no webhook the honest answer is "not configured",
+  // and the page hides the button entirely.
+  const db = await TestDb.create();
+  const res = await call(db, 'POST', '/api/feedback', { token: TOKEN, body: { text: 'the page is broken' } });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.sent, false);
+  assert.equal(res.body.configured, false);
+});
+
+test('empty feedback is refused rather than posted', async () => {
+  const db = await TestDb.create();
+  const was = env.DISCORD_OPS_WEBHOOK_URL;
+  env.DISCORD_OPS_WEBHOOK_URL = 'https://discord.test/ops';
+  try {
+    const res = await call(db, 'POST', '/api/feedback', { token: TOKEN, body: { text: '   ' } });
+    assert.equal(res.status, 400);
+  } finally {
+    env.DISCORD_OPS_WEBHOOK_URL = was;
+  }
+});
+
+test('A DISCORD INVITE MUST BE A DISCORD LINK', async () => {
+  // This value becomes a link in a header that members click. "A URL somebody
+  // typed" is not good enough: an invite quietly pointing elsewhere is a
+  // phishing link wearing our own chrome.
+  const store = await import('../src/store.ts');
+  assert.equal(store.validateSettings({ discordInvite: 'https://discord.gg/abc' }), null);
+  assert.equal(store.validateSettings({ discordInvite: '' }), null, 'blank hides the button');
+  assert.match(String(store.validateSettings({ discordInvite: 'https://evil.test/discord.gg' })), /discord\.gg/);
+  assert.match(String(store.validateSettings({ discordInvite: 'http://discord.gg/abc' })), /discord\.gg/);
+});

@@ -3687,3 +3687,83 @@ test('WHAT IS COMING STAYS ON SCREEN FOR EVERYONE', async () => {
   const member = await boot({ ...DASHBOARD, canCurate: false });
   assert.ok(member.doc.getElementById('release-radar'), 'still there to be filled');
 });
+
+// ── The header ribbon ────────────────────────────────────────────────────────
+
+test('NOTHING IN THE RIBBON IS DECORATION', async () => {
+  // Each control is hidden until it has somewhere real to point. An icon that
+  // does nothing is the same lie as a lever attached to nothing.
+  const bare = await boot({ ...DASHBOARD, feedback: false });
+  assert.equal(($(bare, '#fb-open') as any).hidden, true, 'no webhook, no feedback button');
+  assert.equal(($(bare, '#discord-link') as any).hidden, true, 'no invite, no link');
+
+  const wired = await boot({
+    ...DASHBOARD,
+    feedback: true,
+    settings: { ...DASHBOARD.settings, discordInvite: 'https://discord.gg/abc' },
+  });
+  assert.equal(($(wired, '#fb-open') as any).hidden, false);
+  assert.equal(($(wired, '#discord-link') as any).hidden, false);
+  assert.equal(($(wired, '#discord-link') as any).getAttribute('href'), 'https://discord.gg/abc');
+});
+
+test('the profile menu says who you are and what that lets you do', async () => {
+  const owner = await boot({ ...DASHBOARD, you: 'OWNER', canArm: true, canCurate: true });
+  assert.equal($(owner, '#me-initial').textContent, 'O', 'the avatar is your own initial');
+  assert.match($(owner, '#me-role').textContent, /may arm/);
+
+  const member = await boot({ ...DASHBOARD, you: 'dan', canArm: false, canCurate: false });
+  assert.equal($(member, '#me-initial').textContent, 'D');
+  assert.match($(member, '#me-role').textContent, /Watching only/);
+});
+
+test('THE BELL IS THINGS THAT WANT A PERSON, NOT A FEED', async () => {
+  // The activity log is the feed. This is the short list of what is true right
+  // now and needs somebody — and when there is nothing, it says so rather than
+  // being padded out.
+  const quiet = await boot({ ...DASHBOARD, stockLoads: [], queues: [], authorisations: [] });
+  assert.match($(quiet, '#bell-list').textContent, /Nothing wants you/);
+  assert.equal(($(quiet, '#bell-dot') as any).hidden, true);
+
+  const busy = await boot({
+    ...DASHBOARD,
+    stockLoads: [{ at: new Date().toISOString(), message: 'STOCK LOADED: 30th Celebration ETB — ~31000 units' }],
+    queues: [{ at: new Date().toISOString(), retailer: 'Pokemon Center' }],
+  });
+  const text = $(busy, '#bell-list').textContent;
+  assert.match(text, /30th Celebration/);
+  assert.doesNotMatch(text, /STOCK LOADED:/, 'said in words, not in log syntax');
+  assert.match(text, /waiting room/);
+  assert.equal(($(busy, '#bell-dot') as any).hidden, false, 'and it is marked unread');
+});
+
+test('a member is not told about links waiting on somebody else', async () => {
+  const d = JSON.parse(JSON.stringify(DASHBOARD));
+  d.canCurate = false;
+  d.stockLoads = [];
+  d.queues = [];
+  d.authorisations = [];
+  d.requests = [{ id: 1, url: 'a', status: 'pending' }];
+  const h = await boot(d);
+  assert.match($(h, '#bell-list').textContent, /Nothing wants you/, 'deciding it is not their job');
+});
+
+test('opening the bell clears the mark', async () => {
+  const h = await boot({
+    ...DASHBOARD,
+    queues: [{ at: new Date().toISOString(), retailer: 'Target' }],
+  });
+  assert.equal(($(h, '#bell-dot') as any).hidden, false);
+  $(h, '#bell-open').click();
+  assert.equal(($(h, '#bell-pop') as any).hidden, false, 'and the panel opens');
+  assert.equal(($(h, '#bell-dot') as any).hidden, true);
+});
+
+test('two panels are never open at once', async () => {
+  const h = await boot(DASHBOARD);
+  $(h, '#bell-open').click();
+  assert.equal(($(h, '#bell-pop') as any).hidden, false);
+  $(h, '#me-open').click();
+  assert.equal(($(h, '#me-pop') as any).hidden, false);
+  assert.equal(($(h, '#bell-pop') as any).hidden, true, 'the other one shut');
+});

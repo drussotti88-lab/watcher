@@ -717,6 +717,7 @@ var DEFAULT_SETTINGS = {
   sweepEveryHours: 24,
   stagedRepeatMinutes: 0,
   inStockRepeatAfter: [],
+  discordInvite: "",
   spendCapDay: null,
   budgetTotal: 0,
   pausedRetailers: [],
@@ -796,6 +797,13 @@ function validateSettings(s) {
     if (n > 0 && n < 5) return "repeat the load-in alert no more often than every 5 minutes";
     if (n > 24 * 60) return "a repeat interval longer than a day is the same as off";
   }
+  if (s.discordInvite !== void 0 && s.discordInvite !== "") {
+    const v = String(s.discordInvite).trim();
+    if (!/^https:\/\/(discord\.gg|discord\.com|www\.discord\.com)\//i.test(v)) {
+      return "a Discord invite looks like https://discord.gg/\u2026 \u2014 other links are not accepted here";
+    }
+    if (v.length > 200) return "that does not look like an invite link";
+  }
   if (s.inStockRepeatAfter !== void 0) {
     const list = s.inStockRepeatAfter;
     if (!Array.isArray(list)) return "the follow-up times must be a list of minutes";
@@ -853,6 +861,7 @@ async function getSettings(db2, userId) {
     // Same comma-separated storage as pausedRetailers. A malformed entry is
     // dropped rather than made NaN: a schedule that half-parses should send
     // fewer messages, never a message at an unknown time.
+    discordInvite: text("discordInvite", ""),
     inStockRepeatAfter: text("inStockRepeatAfter", "").split(",").map((v) => Number(v.trim())).filter((n) => Number.isFinite(n) && n > 0).sort((a, b) => a - b),
     budgetTotal: num2("budgetTotal", DEFAULT_SETTINGS.budgetTotal),
     spendCapDay: map.has("spendCapDay") && Number.isFinite(Number(map.get("spendCapDay"))) && Number(map.get("spendCapDay")) > 0 ? Number(map.get("spendCapDay")) : null,
@@ -877,6 +886,7 @@ async function setSettings(db2, userId, patch) {
     "sweepEveryHours",
     "stagedRepeatMinutes",
     "inStockRepeatAfter",
+    "discordInvite",
     "budgetTotal",
     "spendCapDay",
     "pausedRetailers",
@@ -2443,6 +2453,19 @@ async function announceStaged(webhookUrl, items, now, note) {
   const embeds = buildStagedEmbeds(items, now, note);
   if (embeds.length) await post(webhookUrl, embeds);
 }
+function buildFeedbackEmbed(who, text, now) {
+  return {
+    title: "\u{1F4AC} Feedback",
+    description: clip(text, 3800),
+    color: COLOR_OPS,
+    fields: [inline("From", who || "someone signed in")],
+    timestamp: now
+  };
+}
+async function sendFeedback(webhookUrl, who, text, now) {
+  if (!text.trim()) return;
+  await post(webhookUrl, [buildFeedbackEmbed(who, text, now)]);
+}
 async function announce(webhookUrl, label, retailer, items, now) {
   if (items.length === 0) return;
   await post(webhookUrl, [buildDiscoveryEmbed(label, retailer, items, now)]);
@@ -2801,6 +2824,13 @@ function esc(s) {
 var FONTS = '<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap">';
 var svg = (paths) => `<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
 var ICONS = {
+  // A bell, for the things that want a person.
+  bell: svg('<path d="M18 8a6 6 0 1 0-12 0c0 7-3 8-3 8h18s-3-1-3-8"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/>'),
+  // A speech bubble: somebody telling us something.
+  feedback: svg('<path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 9 9 0 0 1-3.8-.8L3 21l1.9-4.6A8.4 8.4 0 0 1 12 3.1a8.4 8.4 0 0 1 9 8.4z"/>'),
+  // Discord's mark is theirs; this is a plain game controller, which is what
+  // the link means here without borrowing somebody else's logo.
+  discord: svg('<rect x="2" y="7" width="20" height="11" rx="5"/><path d="M7 11v3M5.5 12.5h3M15.5 12h.01M18 14h.01"/>'),
   // A crosshair: a mission is one thing, watched.
   missions: svg('<circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2.2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>'),
   // A box.
@@ -2864,7 +2894,45 @@ body { margin: 0; color: var(--ink); font: 15px/1.55 var(--sans);
 main { max-width: 1040px; margin: 0 auto;
        padding: calc(20px + env(safe-area-inset-top, 0px)) 20px 96px; }
 
-header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; position: relative; }
+header > div:first-of-type, header > div:nth-of-type(2) { min-width: 0; }
+
+/* \u2500\u2500 The ribbon \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */
+.ribbon { margin-left: auto; display: flex; align-items: center; gap: 6px; align-self: center; }
+.rib { display: inline-flex; align-items: center; gap: 7px; position: relative;
+       padding: 7px 10px; border-radius: var(--r-sm); border: 1px solid var(--line);
+       background: var(--panel-2); color: var(--muted); cursor: pointer;
+       font: 500 12.5px/1 var(--sans); text-decoration: none; }
+.rib:hover { color: var(--ink); border-color: var(--line-strong); }
+.rib svg { width: 17px; height: 17px; }
+.rib .dot { position: absolute; top: 4px; right: 4px; width: 8px; height: 8px;
+            border-radius: 50%; background: var(--alert); }
+.rib.avatar { width: 32px; height: 32px; padding: 0; justify-content: center;
+              border-radius: 50%; background: var(--accent-soft); color: var(--accent);
+              border-color: var(--accent); font-weight: 700; font-size: 13px; }
+
+/* Both panels hang under the ribbon rather than in it, so a long list does not
+   push the header around. */
+.pop { position: absolute; right: 0; top: calc(100% + 8px); z-index: 40; width: 340px;
+       max-width: calc(100vw - 24px); max-height: 60vh; overflow-y: auto;
+       background: var(--panel); border: 1px solid var(--line-strong);
+       border-radius: var(--r); box-shadow: 0 18px 40px rgba(0,0,0,.45); }
+.pop-sm { width: 230px; }
+.pop-head { padding: 11px 12px 8px; font: 600 12px/1.3 var(--sans); color: var(--muted);
+            letter-spacing: .04em; text-transform: uppercase;
+            display: flex; align-items: center; gap: 8px; }
+.popitem { display: block; width: 100%; text-align: left; padding: 10px 12px;
+           background: none; border: 0; border-top: 1px solid var(--line);
+           color: var(--ink); font: 500 13.5px/1.2 var(--sans); cursor: pointer;
+           text-decoration: none; }
+.popitem:hover { background: var(--panel-2); }
+.bellrow { display: block; width: 100%; text-align: left; padding: 10px 12px;
+           background: none; border: 0; border-top: 1px solid var(--line);
+           color: var(--ink); font: 500 13px/1.35 var(--sans); cursor: pointer; }
+.bellrow:hover { background: var(--panel-2); }
+.bellrow .when { color: var(--dim); font-weight: 400; font-size: 12px; }
+.bellrow.alarm { border-left: 3px solid var(--alert); }
+.bellrow.warn { border-left: 3px solid var(--warn); }
 /* The mark: the creature's eye from the dnacardvault logo, redrawn as SVG \u2014
    the same drawing the PWA icons are rendered from. */
 .mark { width: 34px; height: 34px; border-radius: 10px; flex: none;
@@ -3772,10 +3840,42 @@ ${FONTS}<style>${STYLE}</style></head>
          trade than a header line. -->
     <div class="brand phonebrand"><span class="mark"></span><span class="brand-name"><b>Phantom</b> <i>by DNA</i></span></div>
     <div>
-      <span class="sub" id="summary">loading\u2026</span> <span class="who" id="who"></span>
+      <span class="sub" id="summary">loading\u2026</span>
     </div>
-    <button id="wiz-open" class="small" title="How Phantom works">How it works</button>
-    <button id="install" class="small" hidden>Install</button>
+
+    <!-- \u2500\u2500 The ribbon \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+         Four controls, each with something real behind it. Nothing here is
+         decoration: the bell is built from rows this page already has, the
+         Discord button is hidden until somebody sets an invite, and Feedback
+         is hidden unless there is a webhook for it to reach. An icon that
+         does nothing is the same lie as a lever attached to nothing. -->
+    <div class="ribbon">
+      <button id="fb-open" class="rib" title="Send feedback" hidden>
+        ${ICONS.feedback}<span class="l-wide">Feedback</span>
+      </button>
+      <a id="discord-link" class="rib" hidden target="_blank" rel="noreferrer"
+         title="Open the Discord">${ICONS.discord}</a>
+      <button id="bell-open" class="rib" title="What needs you" aria-expanded="false">
+        ${ICONS.bell}<span class="dot" id="bell-dot" hidden></span>
+      </button>
+      <button id="me-open" class="rib avatar" title="You" aria-expanded="false">
+        <span id="me-initial">\xB7</span>
+      </button>
+    </div>
+
+    <!-- Both panels hang off the ribbon and close on any click outside. -->
+    <div class="pop" id="bell-pop" hidden>
+      <div class="pop-head">What needs you</div>
+      <div id="bell-list"></div>
+    </div>
+    <div class="pop pop-sm" id="me-pop" hidden>
+      <div class="pop-head"><span id="me-handle"></span><span class="who" id="who"></span></div>
+      <div class="meta" id="me-role" style="padding:0 12px 8px"></div>
+      <button class="popitem" id="wiz-open">How Phantom works</button>
+      <button class="popitem" id="me-settings">Settings</button>
+      <button class="popitem" id="install" hidden>Install the app</button>
+      <a class="popitem" href="/logout">Sign out</a>
+    </div>
   </header>
 
   <!-- \u2500\u2500 The front door \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
@@ -4248,6 +4348,11 @@ ${FONTS}<style>${STYLE}</style></head>
             <span class="hint">minutes between reminders while stock sits staged \u2014 0 says it once</span>
             <input type="number" name="stagedRepeatMinutes" step="5" min="0" max="1440" placeholder="0">
           </label>
+          <label class="f">Discord invite
+            <span class="hint">the link people join with \u2014 https://discord.gg/\u2026 \u2014 blank hides the button</span>
+            <input type="url" name="discordInvite" placeholder="https://discord.gg/\u2026"
+                   autocomplete="off" spellcheck="false" maxlength="200">
+          </label>
           <label class="f">Follow up on in-stock after
             <span class="hint">minutes after the first post, comma separated \u2014 "30" sends two posts in all, "30, 60" sends three. Blank says it once.</span>
             <input type="text" name="inStockRepeatAfter" placeholder="30" autocomplete="off"
@@ -4361,6 +4466,30 @@ ${FONTS}<style>${STYLE}</style></head>
         <button type="button" class="small" data-act="detail-close">Close</button>
       </div>
       <div id="detail-body"></div>
+    </div>
+  </dialog>
+
+  <!-- Feedback goes to the ops channel, which is where things that are wrong
+       already go. There is no feedback table on purpose: a message nobody
+       reads is worse than no button. -->
+  <dialog id="fb-dialog">
+    <div class="card">
+      <div class="dlg-head">
+        <h3>Tell us what is wrong</h3>
+        <button type="button" class="small" data-act="fb-close">Close</button>
+      </div>
+      <p class="sub" style="margin:-4px 0 12px">
+        This lands in the Discord ops channel with your handle on it. Nothing
+        else about you is sent.
+      </p>
+      <form class="stack" id="fb-form">
+        <textarea name="text" rows="5" maxlength="4000"
+                  placeholder="What happened, and what did you expect instead?"></textarea>
+        <div class="actions">
+          <button type="submit" class="primary">Send</button>
+          <span class="msg" id="fb-msg"></span>
+        </div>
+      </form>
     </div>
   </dialog>
 </main>
@@ -5960,6 +6089,8 @@ function render() {
   document.getElementById('summary').textContent =
     parts.length ? parts.join(' \xB7 ') : 'nothing in stock';
   document.getElementById('who').textContent = DATA.you || '';
+  renderMe();
+  renderBell();
 
   /*
    * Whether alerts have anywhere to go.
@@ -6208,6 +6339,8 @@ function renderShops(st) {
   if (document.activeElement !== burst) burst.value = st.burstSpacingSeconds || '';
   const repeat = sform.querySelector('[name=stagedRepeatMinutes]');
   if (repeat && document.activeElement !== repeat) repeat.value = st.stagedRepeatMinutes || '';
+  const inv = sform.querySelector('[name=discordInvite]');
+  if (inv && document.activeElement !== inv) inv.value = st.discordInvite || '';
   const inRep = sform.querySelector('[name=inStockRepeatAfter]');
   if (inRep && document.activeElement !== inRep) {
     inRep.value = (st.inStockRepeatAfter || []).join(', ');
@@ -7898,6 +8031,7 @@ document.getElementById('shops-form').addEventListener('submit', async (e) => {
       // "30, 60" on the page; a list of numbers on the wire. Anything that is
       // not a number is dropped rather than sent as NaN \u2014 a schedule that half
       // parses should send fewer posts, never one at an unknown time.
+      discordInvite: String(f.discordInvite || '').trim(),
       inStockRepeatAfter: String(f.inStockRepeatAfter || '')
         .split(',')
         .map((v) => Number(v.trim()))
@@ -8154,6 +8288,216 @@ function sharedUrl() {
  * A phone that has opened the menu keeps it open until it is closed. Rotating
  * a phone should not throw away what you just tapped.
  */
+/* \u2500\u2500 The ribbon \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+ *
+ * A profile menu, a bell, a Discord link and a feedback box. Everything here
+ * is built from rows the page already has or is hidden until it has somewhere
+ * real to point.
+ */
+
+/** Close every hanging panel. One rule, so two can never be open at once. */
+function closePops(except) {
+  for (const [pop, btn] of [['bell-pop', 'bell-open'], ['me-pop', 'me-open']]) {
+    if (pop === except) continue;
+    const node = document.getElementById(pop);
+    const b = document.getElementById(btn);
+    if (node) node.hidden = true;
+    if (b) b.setAttribute('aria-expanded', 'false');
+  }
+}
+
+function togglePop(pop, btn) {
+  const node = document.getElementById(pop);
+  const open = node.hidden;
+  closePops(open ? pop : null);
+  node.hidden = !open;
+  document.getElementById(btn).setAttribute('aria-expanded', String(open));
+  if (open && pop === 'bell-pop') markBellSeen();
+}
+
+document.addEventListener('click', (e) => {
+  if (e.target.closest('.pop') || e.target.closest('.ribbon')) return;
+  closePops(null);
+});
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePops(null); });
+
+document.getElementById('bell-open').addEventListener('click', () => togglePop('bell-pop', 'bell-open'));
+document.getElementById('me-open').addEventListener('click', () => togglePop('me-pop', 'me-open'));
+document.getElementById('me-settings').addEventListener('click', () => {
+  closePops(null);
+  showTab('settings');
+});
+
+/*
+ * What the bell is FOR.
+ *
+ * Not a feed of everything that happened \u2014 the activity log is that, and it is
+ * a different question. This is the short list of things that are true right
+ * now and want a person: stock loading before a drop, a waiting room, money
+ * authorised and not yet spent, links waiting on a decision, and Phantom
+ * having gone quiet.
+ *
+ * Every row is built from data already on the page. Nothing here polls, and
+ * nothing here is invented to fill the panel out: an empty bell says so.
+ */
+function bellItems() {
+  const out = [];
+  for (const s of (DATA.stockLoads || []).slice(0, 4)) {
+    out.push({
+      at: s.at,
+      tone: 'alarm',
+      text: String(s.message || '').replace('STOCK LOADED: ', ''),
+      tab: 'missions',
+    });
+  }
+  for (const q of (DATA.queues || []).slice(0, 3)) {
+    out.push({
+      at: q.at,
+      tone: 'warn',
+      text: (q.retailer || 'A shop') + ' is showing a waiting room',
+      tab: 'activity',
+    });
+  }
+  for (const a of (DATA.authorisations || []).slice(0, 3)) {
+    out.push({
+      at: a.grantedAt || a.at,
+      tone: 'warn',
+      text: 'Money is authorised and not yet spent' +
+        (a.total ? ' \u2014 ' + money(a.total) : ''),
+      tab: 'activity',
+    });
+  }
+  if (DATA.canCurate === true) {
+    const waiting = (DATA.requests || []).filter((r) => r.status === 'pending');
+    if (waiting.length) {
+      out.push({
+        at: waiting[0].createdAt || '',
+        tone: 'warn',
+        text: waiting.length + (waiting.length === 1 ? ' link is' : ' links are') + ' waiting on you',
+        tab: 'finds',
+      });
+    }
+  }
+  // The silence. Same threshold the banner uses, because two numbers for one
+  // idea is how they drift apart.
+  const seen = DATA.agentSeenAt ? Date.parse(DATA.agentSeenAt) : NaN;
+  if (Number.isFinite(seen) && Date.now() - seen > SILENCE_MS) {
+    out.push({
+      at: DATA.agentSeenAt,
+      tone: 'alarm',
+      text: 'Phantom has not reported since ' + ago(DATA.agentSeenAt),
+      tab: 'activity',
+    });
+  }
+  return out.sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')));
+}
+
+/*
+ * What counts as unread.
+ *
+ * The newest item's timestamp, against the last one you looked at, kept on
+ * this device. Not a server-side read flag: this is a glance, not an inbox,
+ * and a badge that needs a round trip to clear is a badge that stays lit.
+ */
+function bellSeenAt() {
+  try { return localStorage.getItem('bell:seen') || ''; } catch (e) { return ''; }
+}
+function markBellSeen() {
+  const items = bellItems();
+  const newest = items.length ? String(items[0].at || '') : '';
+  try { localStorage.setItem('bell:seen', newest || new Date().toISOString()); } catch (e) { /* fine */ }
+  const dot = document.getElementById('bell-dot');
+  if (dot) dot.hidden = true;
+}
+
+function renderBell() {
+  const list = document.getElementById('bell-list');
+  const dot = document.getElementById('bell-dot');
+  if (!list) return;
+  const items = bellItems();
+  list.textContent = '';
+
+  if (items.length === 0) {
+    const none = el('div', 'bellrow');
+    none.textContent = 'Nothing wants you right now.';
+    list.appendChild(none);
+    if (dot) dot.hidden = true;
+    return;
+  }
+
+  for (const i of items) {
+    const row = el('button', 'bellrow' + (i.tone ? ' ' + i.tone : ''));
+    row.type = 'button';
+    row.appendChild(el('div', null, i.text));
+    if (i.at) row.appendChild(el('div', 'when', ago(i.at)));
+    row.addEventListener('click', () => {
+      closePops(null);
+      showTab(i.tab);
+    });
+    list.appendChild(row);
+  }
+
+  const newest = String(items[0].at || '');
+  if (dot) dot.hidden = !(newest && newest > bellSeenAt());
+}
+
+/*
+ * Who you are, in the corner.
+ *
+ * The handle was a badge beside the summary and nothing else. Making it a
+ * menu gives the two things that were cluttering the header a home \u2014 how it
+ * works, and installing the app \u2014 and puts signing out where every other app
+ * on earth keeps it.
+ */
+function renderMe() {
+  const handle = String(DATA.you || '');
+  const initial = document.getElementById('me-initial');
+  if (initial) initial.textContent = (handle.trim()[0] || '\xB7').toUpperCase();
+  const name = document.getElementById('me-handle');
+  if (name) name.textContent = handle || 'Signed in';
+  const role = document.getElementById('me-role');
+  if (role) {
+    role.textContent = DATA.canArm === true
+      ? 'This account runs a Phantom and may arm missions.'
+      : DATA.canCurate === true
+        ? 'This account curates the catalogue.'
+        : 'Watching only \u2014 the catalogue and the machine belong to the owner.';
+  }
+
+  // Hidden until somebody sets an invite. A button that goes nowhere is worse
+  // than no button, and the webhook is a credential, not an address.
+  const dl = document.getElementById('discord-link');
+  const invite = (DATA.settings && DATA.settings.discordInvite) || '';
+  if (dl) {
+    dl.hidden = !invite;
+    if (invite) dl.href = invite;
+  }
+  const fb = document.getElementById('fb-open');
+  if (fb) fb.hidden = DATA.feedback !== true;
+}
+
+const fbDialog = document.getElementById('fb-dialog');
+document.getElementById('fb-open').addEventListener('click', () => {
+  closePops(null);
+  if (fbDialog.showModal) fbDialog.showModal(); else fbDialog.open = true;
+  const t = fbDialog.querySelector('[name=text]');
+  if (t) t.focus();
+});
+fbDialog.querySelector('[data-act=fb-close]').addEventListener('click', () => {
+  if (fbDialog.close) fbDialog.close(); else fbDialog.open = false;
+});
+document.getElementById('fb-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const form = e.target;
+  const box = form.querySelector('[name=text]');
+  const msg = document.getElementById('fb-msg');
+  await withButton(form.querySelector('button[type=submit]'), 'Sending\u2026', msg, async () => {
+    await api('POST', '/api/feedback', { text: box.value });
+    box.value = '';
+    return 'sent \u2014 thank you';
+  });
+});
+
 document.getElementById('flt-missions-more').addEventListener('click', () => {
   FILTERS_OPEN.missions = !FILTERS_OPEN.missions;
   render();
@@ -8641,7 +8985,10 @@ function createHandler(db2, env2) {
         capabilities: shopStatus,
         agentSeenAt,
         // Whether alerts have anywhere to go. A boolean, never the URL.
-        discord: Boolean(env2.DISCORD_WEBHOOK_URL)
+        discord: Boolean(env2.DISCORD_WEBHOOK_URL),
+        // Whether the feedback button has anywhere to send. Same rule: a
+        // control with nothing behind it is not shown.
+        feedback: Boolean(env2.DISCORD_OPS_WEBHOOK_URL || env2.DISCORD_WEBHOOK_URL)
       });
     }
     if (request.method === "GET" && path.startsWith("/api/missions/") && path.endsWith("/runs")) {
@@ -8971,6 +9318,16 @@ function createHandler(db2, env2) {
       const done = await forgetDiscovery(db2, userId, id);
       if (!done) return json({ error: "no such discovery, or it was already decided" }, 404);
       return json({ forgotten: id });
+    }
+    if (request.method === "POST" && path === "/api/feedback") {
+      const hook = env2.DISCORD_OPS_WEBHOOK_URL || env2.DISCORD_WEBHOOK_URL;
+      if (!hook) return json({ sent: false, configured: false });
+      const b = await body();
+      const text = String(b?.text ?? "").trim();
+      if (!text) return json({ error: "say something first" }, 400);
+      if (text.length > 4e3) return json({ error: "that is longer than Discord will take" }, 400);
+      await sendFeedback(hook, await userHandle(db2, userId), text, now);
+      return json({ sent: true, configured: true });
     }
     if (request.method === "POST" && path === "/api/notify/test") {
       if (!env2.DISCORD_WEBHOOK_URL) {
