@@ -3516,7 +3516,7 @@ test('MOVING REFRESH OUT OF THE TOOLBAR KEEPS IT WORKING', async () => {
     'both now live in Settings rather than above every list',
   );
   assert.ok(h.doc.getElementById('tab-settings').contains(refresh));
-  assert.ok(!h.doc.querySelector('.bar').contains(refresh), 'and not in the toolbar');
+  assert.ok(!h.doc.querySelector('header').contains(refresh), 'and not in the header');
 });
 
 test('A MISSION CAN BE MUTED FROM ITS SETTINGS, WITHOUT PAUSING IT', async () => {
@@ -3564,19 +3564,21 @@ test('THE POP-UP DOES NOT RESIZE WHEN YOU CHANGE TABS', async () => {
   assert.match(css, /\.dlgbody \{[^}]*overflow-y: auto/, 'and the content moves, not the window');
 });
 
-test('THE TOOLBAR KEEPS ONLY WHAT YOU DO FROM A LIST', async () => {
-  // It began as six controls in three rows on a phone, above every list.
-  // Refresh and auto-refresh went to Settings, then Phantom on/off and the
-  // sweep. Adding a product is the only one of them you do while reading a
-  // list, so it is the only one left.
+test('ONE HEADER ROW, WITH ONLY WHAT YOU DO FROM A LIST', async () => {
+  // This was a header line, a toolbar under it, and a ribbon opposite the
+  // toolbar — which left "Sign out" floating under the bell with nothing
+  // around it. Six controls went to Settings and the profile menu; adding a
+  // product is the only action you take FROM a list, so it is the only one
+  // still out here.
   const h = await boot(DASHBOARD);
-  const bar = h.doc.querySelector('.bar');
+  const ribbon = h.doc.querySelector('.ribbon');
   const settings = h.doc.getElementById('tab-settings');
+  const mePop = h.doc.getElementById('me-pop');
 
-  assert.ok(bar.querySelector('#add-open'), 'add stays');
-  assert.ok(bar.querySelector('a[href="/logout"]'), 'and the way out');
-  assert.ok(!bar.querySelector('#phantom-toggle'), 'the machine switch moved');
-  assert.ok(!bar.querySelector('#sweep-now'));
+  assert.ok(ribbon.querySelector('#add-open'), 'add stays');
+  assert.ok(!h.doc.querySelector('.bar'), 'the toolbar row is gone entirely');
+  assert.ok(mePop.querySelector('a[href="/logout"]'), 'signing out is in the profile menu');
+  assert.equal(h.doc.querySelectorAll('a[href="/logout"]').length, 1, 'and only there');
   assert.ok(settings.contains(h.doc.getElementById('phantom-toggle')));
   assert.ok(settings.contains(h.doc.getElementById('sweep-now')));
   assert.ok(!h.doc.getElementById('bar-more-open'), 'and the overflow menu has nothing left to hide');
@@ -3806,4 +3808,61 @@ test('two panels are never open at once', async () => {
   $(h, '#me-open').click();
   assert.equal(($(h, '#me-pop') as any).hidden, false);
   assert.equal(($(h, '#bell-pop') as any).hidden, true, 'the other one shut');
+});
+
+// ── The dashboard leads with what you can act on ─────────────────────────────
+
+test('THE HERO NUMBER IS WHAT IS BUYABLE FROM THE SHOP, NOT WHAT IS LISTED', async () => {
+  // The funnel is about a WINDOW. "18 came in stock this week" tells you
+  // nothing about whether to open a tab right now, and that was the one
+  // question this page did not answer.
+  const d = JSON.parse(JSON.stringify(DASHBOARD));
+  d.missions = [
+    { ...DASHBOARD.missions[0], id: 1, state: 'in', price: 59.99, sellerKind: 'retailer',
+      productName: 'Chaos Rising ETB', url: 'https://t.test/a', enabled: true },
+    { ...DASHBOARD.missions[0], id: 2, state: 'in', price: 179.99, sellerKind: 'marketplace',
+      sellerName: 'Rares Market', productName: 'A tin', url: 'https://t.test/b', enabled: true },
+    { ...DASHBOARD.missions[0], id: 3, state: 'out', enabled: true },
+    { ...DASHBOARD.missions[0], id: 4, state: 'in', enabled: false, sellerKind: 'retailer' },
+  ];
+  const h = await boot(d);
+  assert.equal($(h, '#live-n').textContent, '1', 'one, from the shop itself');
+  assert.match($(h, '#live-label').textContent, /from the shop/i);
+
+  const text = $(h, '#live-list').textContent;
+  assert.match(text, /Chaos Rising/);
+  assert.match(text, /Rares Market/, 'the reseller is shown, because it IS in stock');
+  assert.match(text, /⚠️/, 'and flagged, because it is not what you came for');
+  assert.equal(h.doc.querySelectorAll('#live-list .live').length, 2, 'the paused one is not stock');
+});
+
+test('the shop comes before the reseller, and the cheaper before the dearer', async () => {
+  const d = JSON.parse(JSON.stringify(DASHBOARD));
+  d.missions = [
+    { ...DASHBOARD.missions[0], id: 1, state: 'in', price: 199, sellerKind: 'marketplace',
+      productName: 'Reseller box', enabled: true },
+    { ...DASHBOARD.missions[0], id: 2, state: 'in', price: 89, sellerKind: 'retailer',
+      productName: 'Dearer shop box', enabled: true },
+    { ...DASHBOARD.missions[0], id: 3, state: 'in', price: 49, sellerKind: 'retailer',
+      productName: 'Cheaper shop box', enabled: true },
+  ];
+  const h = await boot(d);
+  const names = [...h.doc.querySelectorAll('#live-list .nm')].map((n) => n.textContent);
+  assert.match(names[0], /Cheaper/);
+  assert.match(names[1], /Dearer/);
+  assert.match(names[2], /Reseller/);
+});
+
+test('nothing in stock says so, rather than showing an empty panel', async () => {
+  const d = JSON.parse(JSON.stringify(DASHBOARD));
+  d.missions = d.missions.map((m) => ({ ...m, state: 'out' }));
+  const h = await boot(d);
+  assert.equal($(h, '#live-n').textContent, '0');
+  assert.match($(h, '#live-list').textContent, /what watching mostly looks like/);
+});
+
+test('THERE IS EXACTLY ONE HERO FIGURE ON THE DASHBOARD', async () => {
+  // A dashboard with two 46px numbers has no lead at all.
+  const h = await boot(DASHBOARD);
+  assert.equal(h.doc.querySelectorAll('#tab-home .hero').length, 1);
 });

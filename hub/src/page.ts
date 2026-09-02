@@ -147,11 +147,14 @@ body { margin: 0; color: var(--ink); font: 15px/1.55 var(--sans);
 main { max-width: 1040px; margin: 0 auto;
        padding: calc(20px + env(safe-area-inset-top, 0px)) 20px 96px; }
 
-header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; position: relative; }
-header > div:first-of-type, header > div:nth-of-type(2) { min-width: 0; }
+header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+         position: relative; margin-bottom: 18px; }
+header > div { min-width: 0; }
+#summary { display: block; }
 
 /* ── The ribbon ─────────────────────────────────────────────────────────── */
-.ribbon { margin-left: auto; display: flex; align-items: center; gap: 6px; align-self: center; }
+.ribbon { margin-left: auto; display: flex; align-items: center; gap: 8px; flex: none; }
+.ribbon .primary { padding: 8px 14px; font-size: 13px; }
 .rib { display: inline-flex; align-items: center; gap: 7px; position: relative;
        padding: 7px 10px; border-radius: var(--r-sm); border: 1px solid var(--line);
        background: var(--panel-2); color: var(--muted); cursor: pointer;
@@ -575,8 +578,38 @@ button.small { padding: 4px 10px; font-size: 12px; border-radius: var(--r-sm); b
  * next to them: a red bar that means "this is the problem" and a red bar that
  * means "series four" cannot live in the same app.
  */
+/* Two columns on a desktop, one on a phone. Panels that carry a list or a row
+   of tiles take the full width; the four that are comparisons sit side by side,
+   which is what makes this read as a dashboard rather than a scroll. */
+.dash { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px;
+        align-items: start; }
+.dash > .card { margin: 0; }
+.dash .span2 { grid-column: 1 / -1; }
+@media (max-width: 860px) { .dash { grid-template-columns: minmax(0, 1fr); } }
+
+/* The hero figure. Exactly one on the page: the number you opened it for.
+   Proportional figures, not tabular — at this size tabular-nums gives every
+   digit the width of a zero and a small number looks loose. */
+.hero { font: 700 46px/1 var(--display); color: var(--ink); letter-spacing: -.02em; }
+.hero.none { color: var(--muted); }
+.herolabel { font: 500 12px/1.3 var(--sans); letter-spacing: .06em;
+             text-transform: uppercase; color: var(--muted); margin-top: 6px; }
+
+/* One buyable listing. A row, not a card: the point is to scan several and
+   click one, and a grid of tiles here would out-shout the number above it. */
+.live { display: flex; align-items: center; gap: 10px; padding: 9px 0;
+        border-top: 1px solid var(--line); }
+.live img { width: 34px; height: 34px; border-radius: 7px; object-fit: cover;
+            background: var(--panel-2); flex: none; }
+.live .g { flex: 1 1 0; min-width: 0; }
+.live .nm { font-size: 13.5px; color: var(--ink);
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.live .px { font: 700 14px/1 var(--mono); color: var(--ink); }
+.live .go { font-size: 12px; }
+
 .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
         gap: 10px; margin-bottom: 12px; }
+.kpis:last-child { margin-bottom: 0; }
 .kpi { border: 1px solid var(--line); border-radius: var(--r-ctl); padding: 12px 14px;
        background: var(--panel-2); }
 .kpi .k { font: 500 11px/1.3 var(--sans); letter-spacing: .06em; text-transform: uppercase;
@@ -1130,7 +1163,15 @@ ${FONTS}<style>${STYLE}</style></head>
          Discord button is hidden until somebody sets an invite, and Feedback
          is hidden unless there is a webhook for it to reach. An icon that
          does nothing is the same lie as a lever attached to nothing. -->
+    <!-- ── One row, not three ─────────────────────────────────────────────
+         This was a header line, then a toolbar under it, and then a ribbon
+         opposite the toolbar — so "Sign out" ended up floating under the bell
+         with nothing around it. Six controls went to Settings and the profile
+         menu; the one thing you do FROM a list is adding a product, so it is
+         the only action left out here, and it lives in the same row as
+         everything else that is not content. -->
     <div class="ribbon">
+      <button id="add-open" class="primary">Add product</button>
       <a id="discord-link" class="rib" hidden target="_blank" rel="noreferrer"
          title="Open the Discord">${ICONS.discord}</a>
       <button id="bell-open" class="rib" title="What needs you" aria-expanded="false">
@@ -1241,17 +1282,7 @@ ${FONTS}<style>${STYLE}</style></head>
   <div class="card banner warn" id="load-banner" hidden></div>
 
 
-  <!-- What is left after four controls went to Settings.
-       This started as six buttons in three rows on a phone, before any content.
-       Refresh and auto-refresh went first, then Phantom on/off and the sweep:
-       none of them is pressed while you are reading a list, and all of them
-       were taking room above every one of them. Adding a product is the only
-       thing you do FROM a list, so it is the only thing that stayed. -->
-  <div class="bar">
-    <button id="add-open" class="primary">Add product</button>
-    <span class="grow"></span>
-    <a class="btn" href="/logout">Sign out</a>
-  </div>
+
 
   <!-- ── The dashboard ────────────────────────────────────────────────────
        One question: where are we losing it? The funnel leads because the
@@ -1260,53 +1291,77 @@ ${FONTS}<style>${STYLE}</style></head>
        log. Machine health sits underneath because it is the second question,
        not the first. -->
   <section id="tab-home">
+    <!-- ── The dashboard, as a dashboard ──────────────────────────────────
+         It was six full-width cards stacked down a page: money, funnel, a
+         loose row of numbers, refusals, the machine, wins. Everything was the
+         same size, so nothing was more important than anything else, and the
+         one question you open this page to ask — is there anything to buy
+         right now — was not on it at all.
+
+         Now: one hero number, a band of stat tiles, and a grid. What is
+         BUYABLE leads, because it is the only part you can act on this
+         second. Everything below it is history, in decreasing order of how
+         often it changes what you do. -->
     <div class="fltrow">
       <div class="chips" id="range-chips"></div>
       <span class="grow"></span>
       <span class="sub" id="range-note"></span>
     </div>
 
-    <!-- Money first. Three numbers, because "spent" is not one thing: an
-         order is paid, a pre-order is owed, and a grant nobody resolved is
-         neither. A budget that adds the first two together is wrong twice. -->
-    <div class="card" id="money-card">
-      <div class="wizhead">
-        <div class="name">The money</div>
-        <span class="sub" id="money-budget"></span>
+    <div class="dash">
+      <!-- The hero. Exactly one per view, and it is the thing you came for. -->
+      <div class="card span2" id="live-card">
+        <div class="wizhead">
+          <div>
+            <div class="hero" id="live-n">—</div>
+            <div class="herolabel" id="live-label">buyable right now</div>
+          </div>
+          <button type="button" class="small" id="live-all">See the watchlist</button>
+        </div>
+        <div id="live-list"></div>
       </div>
-      <div class="kpis" id="money-kpis"></div>
-      <div id="money-bar"></div>
-      <div id="money-upcoming"></div>
-    </div>
 
-    <div class="card" id="funnel-card">
-      <div class="name">Where it goes</div>
-      <div class="sub" id="funnel-sub"></div>
-      <div id="funnel"></div>
-      <div id="funnel-verdict"></div>
-    </div>
+      <div class="card span2"><div class="kpis" id="home-kpis"></div></div>
 
-    <div class="kpis" id="home-kpis"></div>
-
-    <div class="card">
-      <div class="name">Why it did not buy</div>
-      <div class="sub">Every run that ended in something other than an order, in its own words.</div>
-      <div id="refusals"></div>
-    </div>
-
-    <div class="card">
-      <div class="name">The machine</div>
-      <div class="sub">Is it running, and how fast does it read a page?</div>
-      <div class="kpis" id="health-kpis"></div>
-      <div id="speed"></div>
-    </div>
-
-    <div class="card" id="wins-preview">
-      <div class="wizhead">
-        <div class="name">Latest wins</div>
-        <button type="button" class="small" id="see-wins">See all</button>
+      <div class="card" id="funnel-card">
+        <div class="name">Where it goes</div>
+        <div class="sub" id="funnel-sub"></div>
+        <div id="funnel"></div>
+        <div id="funnel-verdict"></div>
       </div>
-      <div id="wins-preview-list"></div>
+
+      <!-- Money: three numbers, because "spent" is not one thing. An order is
+           paid, a pre-order is owed, and a grant nobody resolved is neither. -->
+      <div class="card" id="money-card">
+        <div class="wizhead">
+          <div class="name">The money</div>
+          <span class="sub" id="money-budget"></span>
+        </div>
+        <div class="kpis" id="money-kpis"></div>
+        <div id="money-bar"></div>
+        <div id="money-upcoming"></div>
+      </div>
+
+      <div class="card">
+        <div class="name">Why it did not buy</div>
+        <div class="sub">Every run that ended in something other than an order, in its own words.</div>
+        <div id="refusals"></div>
+      </div>
+
+      <div class="card">
+        <div class="name">The machine</div>
+        <div class="sub">Is it running, and how fast does it read a page?</div>
+        <div class="kpis" id="health-kpis"></div>
+        <div id="speed"></div>
+      </div>
+
+      <div class="card span2" id="wins-preview">
+        <div class="wizhead">
+          <div class="name">Latest wins</div>
+          <button type="button" class="small" id="see-wins">See all</button>
+        </div>
+        <div id="wins-preview-list"></div>
+      </div>
     </div>
   </section>
 
@@ -3366,6 +3421,11 @@ function render() {
   document.getElementById('who').textContent = DATA.you || '';
   renderMe();
   renderBell();
+  // Not inside renderHome(): that waits on the insights fetch, and this panel
+  // needs nothing but the watchlist already in hand. Tying "what is buyable
+  // right now" to an aggregate query is how the fastest answer on the page
+  // ends up behind the slowest one.
+  renderLive();
 
   /*
    * Whether alerts have anywhere to go.
@@ -4349,6 +4409,98 @@ function stage(host, label, n, of, note, cliff) {
   host.appendChild(row);
 }
 
+/*
+ * What is buyable right now.
+ *
+ * The one question this page exists to answer in the moment, and until now it
+ * was not on the page at all: the funnel is about a WINDOW, and "18 came in
+ * stock this week" tells you nothing about whether to open a tab.
+ *
+ * Built from the watchlist the page already holds — no request, no aggregate,
+ * no wait. Marketplace listings are shown but flagged: they are usually the
+ * only thing in stock and usually at three times MSRP, so hiding them would
+ * lie about the number and showing them silently would invite a bad click.
+ */
+function liveNow() {
+  return (DATA.missions || [])
+    .filter((m) => m.enabled && m.state === 'in')
+    .sort((a, b) => {
+      // Sold by the shop first, then cheapest. Both halves matter: a reseller
+      // at $180 is not what you came for, and among real ones price decides.
+      const ar = a.sellerKind === 'marketplace' ? 1 : 0;
+      const br = b.sellerKind === 'marketplace' ? 1 : 0;
+      if (ar !== br) return ar - br;
+      return (a.price ?? Infinity) - (b.price ?? Infinity);
+    });
+}
+
+function renderLive() {
+  const list = document.getElementById('live-list');
+  const n = document.getElementById('live-n');
+  const label = document.getElementById('live-label');
+  if (!list || !n) return;
+
+  const rows = liveNow();
+  const shop = rows.filter((m) => m.sellerKind !== 'marketplace');
+  list.textContent = '';
+
+  n.textContent = String(shop.length);
+  n.className = shop.length ? 'hero' : 'hero none';
+  label.textContent = shop.length === 1
+    ? 'buyable right now, from the shop itself'
+    : 'buyable right now, from the shops themselves';
+
+  if (rows.length === 0) {
+    const none = el('div', 'meta');
+    none.style.marginTop = '10px';
+    none.textContent = 'Nothing you watch is in stock. That is what watching mostly looks like.';
+    list.appendChild(none);
+    return;
+  }
+
+  for (const m of rows.slice(0, 6)) {
+    const row = el('div', 'live');
+    if (m.imageUrl) {
+      const img = el('img');
+      img.src = m.imageUrl;
+      img.alt = '';
+      img.loading = 'lazy';
+      row.appendChild(img);
+    }
+    const g = el('div', 'g');
+    const nm = el('div', 'nm', shortName(m.productName));
+    nm.title = m.productName;
+    g.appendChild(nm);
+    const meta = el('div', 'meta');
+    meta.append(m.retailer + (m.sellerKind === 'marketplace'
+      ? ' · ⚠️ ' + (m.sellerName || 'marketplace seller')
+      : ''));
+    const stock = stockLine(m);
+    if (stock) meta.append(' · ' + stock);
+    g.appendChild(meta);
+    row.appendChild(g);
+
+    if (m.price !== null && m.price !== undefined) {
+      row.appendChild(el('div', 'px', money(m.price)));
+    }
+    if (m.url) {
+      const a = el('a', 'btn small go', 'Open');
+      a.href = m.url;
+      a.target = '_blank';
+      a.rel = 'noreferrer';
+      row.appendChild(a);
+    }
+    list.appendChild(row);
+  }
+
+  if (rows.length > 6) {
+    const more = el('div', 'meta');
+    more.style.marginTop = '8px';
+    more.textContent = (rows.length - 6) + ' more on the watchlist.';
+    list.appendChild(more);
+  }
+}
+
 function renderHome() {
   const host = document.getElementById('tab-home');
   if (!host || host.hidden) return;
@@ -5201,6 +5353,7 @@ for (const tab of document.querySelectorAll('.tab')) {
 }
 
 document.getElementById('see-wins').addEventListener('click', () => showTab('wins'));
+document.getElementById('live-all').addEventListener('click', () => showTab('missions'));
 
 const addDialog = document.getElementById('add-dialog');
 
