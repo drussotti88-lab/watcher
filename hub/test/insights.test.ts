@@ -39,7 +39,8 @@ test('AN EMPTY SYSTEM READS AS EMPTY, NOT AS BROKEN', async () => {
   const f = await store.funnel(db, A, 168);
   assert.deepEqual(
     { ...f, outcomes: f.outcomes.length, refusals: f.refusals.length },
-    { watching: 0, sawStock: 0, sawStockArmed: 0, authorised: 0, bought: 0, outcomes: 0, refusals: 0 },
+    { watching: 0, sawStock: 0, sawStockArmed: 0, resellerOnly: 0, authorised: 0, bought: 0,
+      outcomes: 0, refusals: 0 },
   );
   const h = await store.health(db, A, 168);
   assert.equal(h.checks, 0);
@@ -58,11 +59,13 @@ test('SAW STOCK IS THE STAGE THE WHOLE PAGE TURNS ON', async () => {
   const { db, listing } = await seeded();
   await store.recordObservation(db, A, {
     listingId: listing.id, state: 'out', confidence: 'exact', price: 49.99,
+    sellerKind: 'retailer',
   });
   assert.equal((await store.funnel(db, A, 168)).sawStock, 0, 'out of stock is not stock');
 
   await store.recordObservation(db, A, {
     listingId: listing.id, state: 'in', confidence: 'exact', price: 49.99,
+    sellerKind: 'retailer',
   });
   assert.equal((await store.funnel(db, A, 168)).sawStock, 1);
 });
@@ -75,6 +78,7 @@ test('a listing counts ONCE however many times it came in stock', async () => {
   for (let i = 0; i < 5; i += 1) {
     await store.recordObservation(db, A, {
       listingId: listing.id, state: 'in', confidence: 'exact', price: 49.99,
+      sellerKind: 'retailer',
     });
   }
   assert.equal((await store.funnel(db, A, 168)).sawStock, 1);
@@ -87,6 +91,7 @@ test('ARMED-WHEN-IT-APPEARED IS THE NUMBER THAT NAMES THE PROBLEM', async () => 
   const { db, listing, mission } = await seeded();
   await store.recordObservation(db, A, {
     listingId: listing.id, state: 'in', confidence: 'exact', price: 49.99,
+    sellerKind: 'retailer',
   });
 
   const before = await store.funnel(db, A, 168);
@@ -103,6 +108,7 @@ test('the window is honoured — old stock is not this week s news', async () =>
   const { db, listing } = await seeded();
   await store.recordObservation(db, A, {
     listingId: listing.id, state: 'in', confidence: 'exact', price: 49.99,
+    sellerKind: 'retailer',
   });
   await db.query("UPDATE observations SET at = now() - interval '40 days'");
   assert.equal((await store.funnel(db, A, 24)).sawStock, 0);
@@ -241,4 +247,154 @@ test('WINS ARE THIS ACCOUNT S OWN, however shared the catalogue is', async () =>
   assert.equal((await store.wins(db, 2)).length, 1, 'theirs');
   assert.equal((await store.funnel(db, A, 168)).bought, 0);
   assert.equal((await store.funnel(db, 2, 168)).bought, 1);
+});
+
+// ── The seller is the correction ─────────────────────────────────────────────
+//
+// The first version of this funnel reported "15 listings came in stock" and it
+// read as fifteen missed chances. Two of them were. The other thirteen were
+// Walmart marketplace resellers, permanently in stock at two to four times
+// MSRP — and every mission refuses those on purpose, because retailer_only is
+// the default and a reseller listing is the thing you are RACING, not the thing
+// you want.
+//
+// Counting them as opportunities pointed the next day's work at arming, when
+// the honest answer was that almost nothing had dropped.
+
+async function twoListings() {
+  const db = await TestDb.create();
+  const product = await store.upsertProduct(db, A, { name: 'Mega Tin', msrp: 24.99 });
+  const shop = await store.addListing(db, A, {
+    productKey: product.key, retailer: 'Target', externalId: 'shop',
+    url: 'https://www.target.com/p/-/A-1',
+  });
+  const reseller = await store.addListing(db, A, {
+    productKey: product.key, retailer: 'Walmart', externalId: 'resell',
+    url: 'https://www.walmart.com/ip/2',
+  });
+  await store.upsertMission(db, A, { listingId: shop.id });
+  await store.upsertMission(db, A, { listingId: reseller.id });
+  return { db, shop, reseller };
+}
+
+test('A RESELLER IN STOCK IS NOT AN OPPORTUNITY WE MISSED', async () => {
+  const { db, shop, reseller } = await twoListings();
+  await store.recordObservation(db, A, {
+    listingId: reseller.id, state: 'in', confidence: 'exact', price: 79.99,
+    sellerKind: 'marketplace', sellerName: 'Rares Market L.L.C.',
+  });
+  await store.recordObservation(db, A, {
+    listingId: shop.id, state: 'in', confidence: 'exact', price: 24.99,
+    sellerKind: 'retailer', sellerName: 'Target',
+  });
+
+  const f = await store.funnel(db, A, 168);
+  assert.equal(f.sawStock, 1, 'one real drop, not two');
+  assert.equal(f.resellerOnly, 1, 'and the other is counted as context, not loss');
+});
+
+test('a listing the shop AND a reseller both had counts as the shop', async () => {
+  // Walmart sells its own stock beside the resellers on the same page. If the
+  // retailer ever had it, there was a real chance, whatever else was listed.
+  const { db, shop } = await twoListings();
+  await store.recordObservation(db, A, {
+    listingId: shop.id, state: 'in', confidence: 'exact', price: 79.99,
+    sellerKind: 'marketplace', sellerName: 'Rares',
+  });
+  await store.recordObservation(db, A, {
+    listingId: shop.id, state: 'in', confidence: 'exact', price: 24.99,
+    sellerKind: 'retailer', sellerName: 'Target',
+  });
+  const f = await store.funnel(db, A, 168);
+  assert.equal(f.sawStock, 1);
+  assert.equal(f.resellerOnly, 0, 'not double-counted, and not called reseller-only');
+});
+
+// ── The money ────────────────────────────────────────────────────────────────
+
+test('SPENT IS NOT ONE THING — an order is paid, a pre-order is owed', async () => {
+  const { db, shop } = await twoListings();
+  const m = (await store.listMissions(db, A)).find((x) => x.listingId === shop.id)!;
+  await store.recordRun(db, A, m.id, {
+    outcome: 'bought', reason: 'BOUGHT', state: 'in', price: 24.99, total: 27.42, quantity: 1,
+  } as never);
+  await store.recordRun(db, A, m.id, {
+    outcome: 'bought', reason: 'BOUGHT', state: 'in', price: 59.99, total: 65.84, quantity: 1,
+    isPreOrder: true, releaseDate: '2026-11-14',
+  } as never);
+
+  const cash = await store.money(db, A);
+  assert.equal(cash.settled, 27.42, 'the order is money gone');
+  assert.equal(cash.committed, 65.84, 'the pre-order is money owed');
+  assert.equal(cash.upcoming.length, 1);
+  assert.equal(cash.upcoming[0]!.releaseDate, '2026-11-14', 'and it says when');
+});
+
+test('A BUDGET IS A NUMBER TO READ, NOT A SECOND BRAKE', async () => {
+  // The daily cap stops things. This does not, and must not: a forgotten
+  // figure in a settings box is not allowed to cost a drop.
+  const { db, shop } = await twoListings();
+  await store.setSettings(db, A, { budgetTotal: 500, spendCapDay: 200 });
+  const m = (await store.listMissions(db, A)).find((x) => x.listingId === shop.id)!;
+  await store.recordRun(db, A, m.id, {
+    outcome: 'bought', reason: 'BOUGHT', state: 'in', price: 100, total: 110, quantity: 1,
+  } as never);
+
+  const cash = await store.money(db, A);
+  assert.equal(cash.budget, 500);
+  assert.equal(cash.left, 390, 'budget minus settled minus committed minus open');
+
+  // And it really is only a reading: arming still answers to the CAP.
+  const armed = await store.upsertMission(db, A, {
+    listingId: shop.id, armed: true, ceiling: 50,
+  });
+  assert.equal(armed.armed, true, 'the budget did not refuse it');
+});
+
+test('an unset budget leaves nothing to subtract from', async () => {
+  const { db } = await twoListings();
+  const cash = await store.money(db, A);
+  assert.equal(cash.budget, 0);
+  assert.equal(cash.left, null, 'not zero — there is no answer, and zero is an answer');
+});
+
+test('A GRANT NOBODY RESOLVED IS COUNTED, because not-sure is a real state', async () => {
+  // A Phantom that died mid-checkout leaves a live grant and nobody knowing
+  // whether money moved. Rounding that to zero is how a budget lies.
+  const { db, shop } = await twoListings();
+  const m = await store.upsertMission(db, A, { listingId: shop.id, armed: true, ceiling: 50 });
+  await store.setSettings(db, A, { spendCapDay: 200, budgetTotal: 500 });
+  await store.requestAuthorisation(db, A, m.id);
+
+  const cash = await store.money(db, A);
+  assert.ok(cash.open > 0, 'the open grant shows up');
+  assert.equal(cash.left, Math.round((500 - cash.open) * 100) / 100);
+});
+
+test('WINS SAY WHICH ARE PRE-ORDERS', async () => {
+  const { db, shop } = await twoListings();
+  const m = (await store.listMissions(db, A)).find((x) => x.listingId === shop.id)!;
+  await store.recordRun(db, A, m.id, {
+    outcome: 'bought', reason: 'BOUGHT', state: 'in', price: 59.99, total: 65.84, quantity: 1,
+    isPreOrder: true, releaseDate: '2026-11-14',
+  } as never);
+  const [w] = await store.wins(db, A);
+  assert.equal(w!.isPreOrder, true);
+  assert.equal(w!.releaseDate, '2026-11-14');
+});
+
+test('a release date on an ORDINARY order is not kept — it is not a ship date', async () => {
+  // products.release_date is a fact about the product. On an order that is
+  // already paid it says nothing about when money moves, and carrying it would
+  // put a date in the "owed, when it ships" list that owes nothing.
+  const { db, shop } = await twoListings();
+  const m = (await store.listMissions(db, A)).find((x) => x.listingId === shop.id)!;
+  await store.recordRun(db, A, m.id, {
+    outcome: 'bought', reason: 'BOUGHT', state: 'in', price: 24.99, total: 27.42, quantity: 1,
+    isPreOrder: false, releaseDate: '2026-11-14',
+  } as never);
+  const [w] = await store.wins(db, A);
+  assert.equal(w!.isPreOrder, false);
+  assert.equal(w!.releaseDate, null);
+  assert.equal((await store.money(db, A)).upcoming.length, 0);
 });

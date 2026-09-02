@@ -157,6 +157,18 @@ export interface RunOut {
   sellerName?: string;
   quantity?: number | null;
   total?: number | null;
+  /**
+   * Was this a pre-order at the moment it was placed?
+   *
+   * A fact about the ORDER, which is why it travels with the run rather than
+   * being looked up later. The listing's current pre-order flag is exactly
+   * wrong for this: a pre-order that has since released reads as an ordinary
+   * order, and the money it still owes vanishes from the books on the day it
+   * matters most.
+   */
+  isPreOrder?: boolean;
+  /** When it ships, if the shop said so. */
+  releaseDate?: string | null;
 }
 
 export class HubError extends Error {

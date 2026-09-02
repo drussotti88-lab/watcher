@@ -166,6 +166,13 @@ export async function attemptBuy(
     price: reading.price,
     sellerKind: reading.seller.kind,
     sellerName: reading.seller.name,
+    // Carried on every run, not only the bought one, so a DECLINED pre-order
+    // is still legible later as "we refused a pre-order" rather than as an
+    // unexplained refusal. It is the reading's own answer at the moment the
+    // mission acted, which is the only moment this question has a fixed
+    // answer.
+    isPreOrder: reading.preOrder.isPreOrder === true,
+    releaseDate: reading.preOrder.releaseDate ?? null,
   };
   // Started before the authorisation so the clock covers everything a drop
   // spends, not just the browser half.

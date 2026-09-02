@@ -974,12 +974,16 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       // Clamped rather than trusted. An unbounded interval on the activity log
       // is a query that gets slower every week it runs.
       const hours = Number.isFinite(asked) ? Math.min(24 * 90, Math.max(1, asked)) : 168;
-      const [shape, machine, recent] = await Promise.all([
+      const [shape, machine, recent, cash] = await Promise.all([
         store.funnel(db, userId, hours),
         store.health(db, userId, hours),
         store.wins(db, userId, 3),
+        // Deliberately NOT windowed. A budget is a standing thing: what has
+        // been spent against it and what is owed out of it are true whatever
+        // range the page happens to be showing.
+        store.money(db, userId),
       ]);
-      return json({ hours, funnel: shape, health: machine, wins: recent });
+      return json({ hours, funnel: shape, health: machine, wins: recent, money: cash });
     }
 
     if (request.method === 'GET' && path === '/api/wins') {
@@ -1020,6 +1024,8 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
         sellerName?: string;
         quantity?: number | null;
         total?: number | null;
+        isPreOrder?: boolean;
+        releaseDate?: string | null;
       }>();
       if (!b?.missionId || !b?.outcome || b.outcome === 'running') {
         return json({ error: 'need missionId and a settled outcome' }, 400);
@@ -1033,6 +1039,8 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
         sellerName: b.sellerName,
         quantity: b.quantity,
         total: b.total,
+        isPreOrder: b.isPreOrder === true,
+        releaseDate: b.releaseDate ?? null,
       });
       return json({ run: id });
     }

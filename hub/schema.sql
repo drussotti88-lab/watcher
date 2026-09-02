@@ -877,3 +877,19 @@ CREATE TABLE IF NOT EXISTS product_requests (
 );
 CREATE INDEX IF NOT EXISTS product_requests_pending_idx
   ON product_requests (status, created_at DESC);
+
+-- ---------------------------------------------------------------------------
+-- Was the order a pre-order?  (2 Sep 2026)
+-- ---------------------------------------------------------------------------
+--
+-- A fact about the ORDER, so it belongs on the run rather than being derived
+-- later. `watch_state.is_preorder` is the current truth about a listing, which
+-- is exactly wrong for this question: a pre-order that has since released now
+-- reads as an ordinary order, and the money it still owes disappears from the
+-- books on the day it matters most.
+--
+-- The distinction is money, not bookkeeping. An order is paid. A pre-order is
+-- COMMITTED — the retailer takes it at ship, sometimes months out — and a
+-- budget that counts the two the same is a budget that is wrong twice.
+ALTER TABLE mission_runs ADD COLUMN IF NOT EXISTS is_preorder BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE mission_runs ADD COLUMN IF NOT EXISTS release_date DATE;

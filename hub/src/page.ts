@@ -562,6 +562,29 @@ button.small { padding: 4px 10px; font-size: 12px; border-radius: var(--r-sm); b
 .rowline .bar { height: 4px; border-radius: 2px; background: var(--accent);
                 opacity: .55; margin-top: 5px; }
 
+/* The budget, as one bar in three parts.
+ *
+ * A stacked bar rather than three separate meters, because the question is
+ * part-to-whole — how much of the pot is accounted for — and three meters make
+ * the reader do the addition. Two-pixel gaps between the segments so adjacent
+ * fills stay countable, and every segment carries a written label: these are
+ * status colours, and a status colour without a word beside it is a colour
+ * somebody has to guess at.
+ */
+.stack { display: flex; height: 14px; border-radius: 7px; overflow: hidden;
+         background: var(--panel-2); margin-top: 12px; gap: 2px; }
+.stack > span { display: block; height: 100%;
+                /* A real number is never invisible. $1.09 against a $500 budget
+                   is a fifth of a per cent — sub-pixel, and a segment that
+                   rounds to nothing reads as money that is not there. */
+                min-width: 3px; }
+.stack .settled { background: var(--accent); }
+.stack .committed { background: var(--warn); }
+.stack .open { background: var(--alert); }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 10px; font-size: 12.5px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+.legend i { width: 9px; height: 9px; border-radius: 3px; display: inline-block; }
+
 .fltrow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
            margin: 0 0 10px; }
 .fltcount { margin: -4px 0 12px; }
@@ -1110,6 +1133,19 @@ ${FONTS}<style>${STYLE}</style></head>
       <span class="sub" id="range-note"></span>
     </div>
 
+    <!-- Money first. Three numbers, because "spent" is not one thing: an
+         order is paid, a pre-order is owed, and a grant nobody resolved is
+         neither. A budget that adds the first two together is wrong twice. -->
+    <div class="card" id="money-card">
+      <div class="wizhead">
+        <div class="name">The money</div>
+        <span class="sub" id="money-budget"></span>
+      </div>
+      <div class="kpis" id="money-kpis"></div>
+      <div id="money-bar"></div>
+      <div id="money-upcoming"></div>
+    </div>
+
     <div class="card" id="funnel-card">
       <div class="name">Where it goes</div>
       <div class="sub" id="funnel-sub"></div>
@@ -1279,6 +1315,10 @@ ${FONTS}<style>${STYLE}</style></head>
           <label class="f">Most to spend in 24 hours
             <span class="hint">in dollars — nothing can be armed without this</span>
             <input type="number" name="spendCapDay" step="0.01" min="0" placeholder="unset">
+          </label>
+          <label class="f">Total budget
+            <span class="hint">the pot this is working against — reads only, stops nothing</span>
+            <input type="number" name="budgetTotal" step="0.01" min="0" placeholder="unset">
           </label>
           <label class="f">Sweep for new products every
             <span class="hint">hours — how often the catalogues are re-read</span>
@@ -2887,6 +2927,9 @@ function render() {
   if (document.activeElement !== sf.querySelector('[name=shippingAllowance]')) {
     sf.querySelector('[name=shippingAllowance]').value = st.shippingAllowance || '';
   }
+  if (document.activeElement !== sf.querySelector('[name=budgetTotal]')) {
+    sf.querySelector('[name=budgetTotal]').value = st.budgetTotal ? st.budgetTotal : '';
+  }
   if (document.activeElement !== sf.querySelector('[name=spendCapDay]')) {
     sf.querySelector('[name=spendCapDay]').value =
       st.spendCapDay === null || st.spendCapDay === undefined ? '' : st.spendCapDay;
@@ -3780,6 +3823,8 @@ function renderHome() {
     }));
   }
 
+  renderMoney2(INSIGHTS && INSIGHTS.money);
+
   const funnelHost = document.getElementById('funnel');
   const verdict = document.getElementById('funnel-verdict');
   const kpis = document.getElementById('home-kpis');
@@ -3807,11 +3852,14 @@ function renderHome() {
 
   const top = Math.max(1, f.watching);
   stage(funnelHost, 'Watching', f.watching, top, 'listings with a mission on them');
-  stage(funnelHost, 'Saw stock', f.sawStock, top,
-    f.watching ? pct(f.sawStock, f.watching) + ' of what is watched came in stock' : '');
+  stage(funnelHost, 'Came in stock at the shop', f.sawStock, top,
+    (f.watching ? pct(f.sawStock, f.watching) + ' of what is watched' : '') +
+    (f.resellerOnly
+      ? ' · ' + f.resellerOnly + ' more were resellers only, which every mission refuses'
+      : ''));
   stage(funnelHost, 'Armed when it did', f.sawStockArmed, top,
     f.sawStock
-      ? pct(f.sawStockArmed, f.sawStock) + ' of the ones that appeared were armed to act'
+      ? pct(f.sawStockArmed, f.sawStock) + ' of the real ones were armed to act'
       : '',
     f.sawStock > 0 && f.sawStockArmed === 0);
   stage(funnelHost, 'Authorised', f.authorised, top, 'the Hub agreed to spend');
@@ -3834,9 +3882,12 @@ function renderHome() {
   if (f.watching === 0) {
     say.textContent = 'Nothing is being watched yet. Add a listing and this fills in.';
   } else if (f.sawStock === 0) {
-    say.textContent =
-      'Nothing you watch has come in stock in the last ' + label + '. That is not a ' +
-      'fault — it is what watching mostly looks like.';
+    say.textContent = f.resellerOnly
+      ? 'Nothing dropped at the shops in the last ' + label + '. ' + f.resellerOnly +
+        ' listings were in stock from marketplace resellers, which every mission ' +
+        'refuses on purpose — those are the thing you are racing, not the thing you want.'
+      : 'Nothing you watch has come in stock in the last ' + label + '. That is not a ' +
+        'fault — it is what watching mostly looks like.';
   } else if (f.sawStockArmed === 0) {
     say.textContent = win +
       'Stock appeared on ' + f.sawStock + ' listing' + (f.sawStock === 1 ? '' : 's') +
@@ -3869,7 +3920,8 @@ function renderHome() {
   const runs = f.outcomes.reduce((a, o) => a + o.n, 0);
   kpi(kpis, 'Orders', String(f.bought), 'confirmed in ' + label, f.bought ? 'good' : '');
   kpi(kpis, 'Runs', String(runs), 'times a mission acted, or could not');
-  kpi(kpis, 'Stock seen', String(f.sawStock), 'listings that came in stock');
+  kpi(kpis, 'Real stock', String(f.sawStock),
+    f.resellerOnly ? '+' + f.resellerOnly + ' reseller-only, refused' : 'from the shop itself');
   kpi(kpis, 'Armed now', String(f.sawStockArmed) + ' / ' + f.sawStock,
     'of those, armed to buy', f.sawStock && !f.sawStockArmed ? 'bad' : '');
 
@@ -3931,6 +3983,112 @@ function renderHome() {
   renderWinsInto('wins-preview-list', INSIGHTS.wins || [], true);
 }
 
+/**
+ * The money, in three parts.
+ *
+ * "Spent" is not one thing, and the split is the whole point:
+ *
+ *   SETTLED    an order. Paid, gone.
+ *   COMMITTED  a pre-order. The shop takes it at ship, sometimes months out —
+ *              owed, not paid, and still yours until then.
+ *   OPEN       a grant nobody resolved. Either a buy in flight or a Phantom
+ *              that died mid-checkout, in which case nobody knows whether
+ *              money moved. Shown because "not sure" is a real state, and
+ *              rounding it to zero is how a budget lies.
+ *
+ * The bar is stacked because the question is part-to-whole. Every segment
+ * carries a written label: these are the status colours, and a status colour
+ * with no word beside it is a colour somebody has to guess at.
+ */
+function renderMoney2(m) {
+  const card = document.getElementById('money-card');
+  if (!card) return;
+  const kpis = document.getElementById('money-kpis');
+  const bar = document.getElementById('money-bar');
+  const up = document.getElementById('money-upcoming');
+  const budgetNote = document.getElementById('money-budget');
+  for (const n of [kpis, bar, up]) n.textContent = '';
+  budgetNote.textContent = '';
+
+  if (!m) { budgetNote.textContent = 'Loading…'; return; }
+
+  kpi(kpis, 'Settled', money(m.settled), 'orders, paid');
+  kpi(kpis, 'Committed', money(m.committed),
+    m.upcoming.length ? m.upcoming.length + ' pre-orders, owed at ship' : 'pre-orders, owed at ship');
+  kpi(kpis, 'Open grants', money(m.open),
+    m.open > 0 ? 'authorised and unresolved' : 'nothing in flight', m.open > 0 ? 'bad' : '');
+  if (m.left !== null) {
+    kpi(kpis, 'Left', money(m.left), 'of the budget', m.left < 0 ? 'bad' : 'good');
+  }
+
+  if (m.budget > 0) {
+    budgetNote.textContent = 'budget ' + money(m.budget);
+    const used = m.settled + m.committed + m.open;
+    const scale = Math.max(m.budget, used);
+    const row = el('div', 'stack');
+    const seg = (cls, v) => {
+      if (v <= 0) return;
+      const b = el('span', cls);
+      b.style.width = (v / scale) * 100 + '%';
+      b.title = cls + ' ' + money(v);
+      row.appendChild(b);
+    };
+    seg('settled', m.settled);
+    seg('committed', m.committed);
+    seg('open', m.open);
+    bar.appendChild(row);
+
+    const key = el('div', 'legend');
+    const mark = (colour, text) => {
+      const w = el('span');
+      const dot = el('i');
+      dot.style.background = colour;
+      w.appendChild(dot);
+      w.appendChild(document.createTextNode(text));
+      key.appendChild(w);
+    };
+    mark('var(--accent)', 'settled ' + money(m.settled));
+    mark('var(--warn)', 'committed ' + money(m.committed));
+    if (m.open > 0) mark('var(--alert)', 'open ' + money(m.open));
+    bar.appendChild(key);
+    if (used > m.budget) {
+      const over = el('div', 'meta stale');
+      over.style.marginTop = '8px';
+      over.textContent = 'That is ' + money(used - m.budget) + ' past the budget.';
+      bar.appendChild(over);
+    }
+  } else {
+    budgetNote.textContent = 'no budget set';
+    const hint = el('div', 'meta');
+    hint.style.marginTop = '10px';
+    hint.textContent =
+      'Set a budget under Settings and this becomes a bar with a number left on it. ' +
+      'It only ever reads — nothing is stopped by it, so a forgotten figure cannot ' +
+      'cost you a drop.';
+    bar.appendChild(hint);
+  }
+
+  // What is owed, and when. The half of a pre-order that a total cannot say.
+  if (m.upcoming.length) {
+    const head = el('div', 'name', 'Owed, when it ships');
+    head.style.marginTop = '20px';
+    up.appendChild(head);
+    const box = el('div', 'rows');
+    for (const u of m.upcoming) {
+      const line = el('div', 'rowline');
+      const g = el('div', 'g');
+      g.appendChild(el('div', null, u.name));
+      g.appendChild(el('div', 'meta',
+        [u.retailer, u.releaseDate ? 'ships ' + u.releaseDate : 'no ship date given']
+          .filter(Boolean).join(' · ')));
+      line.appendChild(g);
+      line.appendChild(el('span', 'c', money(u.total)));
+      box.appendChild(line);
+    }
+    up.appendChild(box);
+  }
+}
+
 function pct(n, of) {
   if (!of) return '0%';
   const p = (n / of) * 100;
@@ -3969,6 +4127,11 @@ function renderWinsInto(id, rows, preview) {
     g.appendChild(el('div', null, w.productName || 'a product'));
     const bits = [w.retailer, ago(w.at)];
     if (w.quantity > 1) bits.push('×' + w.quantity);
+    // A pre-order is not paid for yet, and a wins list that blurs the two is a
+    // wins list you cannot budget from.
+    if (w.isPreOrder) {
+      bits.push(w.releaseDate ? 'PRE-ORDER · ships ' + w.releaseDate : 'PRE-ORDER');
+    }
     if (!preview && w.vaultStatus) bits.push('vault: ' + w.vaultStatus);
     g.appendChild(el('div', 'meta', bits.filter(Boolean).join(' · ')));
     row.appendChild(g);
@@ -3996,11 +4159,15 @@ function renderWins() {
   const rows = WINS || [];
   const box = document.getElementById('wins-summary');
   box.textContent = '';
-  const spent = rows.reduce((a, w) => a + (w.total !== null ? w.total : 0), 0);
+  const orders = rows.filter((w) => !w.isPreOrder);
+  const pres = rows.filter((w) => w.isPreOrder);
+  const sum = (xs) => xs.reduce((a, w) => a + (w.total !== null ? w.total : 0), 0);
   const units = rows.reduce((a, w) => a + (w.quantity || 1), 0);
-  kpi(box, 'Orders', String(rows.length), 'confirmed, all time', rows.length ? 'good' : '');
-  kpi(box, 'Items', String(units), 'across those orders');
-  kpi(box, 'Spent', money(spent), 'all-in, as the cart stated it');
+  kpi(box, 'Orders', String(orders.length), 'paid', orders.length ? 'good' : '');
+  kpi(box, 'Pre-orders', String(pres.length), 'owed at ship');
+  kpi(box, 'Items', String(units), 'across all of them');
+  kpi(box, 'Settled', money(sum(orders)), 'money actually gone');
+  if (pres.length) kpi(box, 'Committed', money(sum(pres)), 'still to be taken');
   renderWinsInto('wins-list', rows, false);
 }
 
@@ -4503,6 +4670,7 @@ document.getElementById('settings-form').addEventListener('submit', async (e) =>
       taxRate: Math.round(percent * 1000) / 100000,
       shippingAllowance: Number(f.shippingAllowance || 0),
       // Blank clears the cap — and with it, the ability to arm anything new.
+      budgetTotal: f.budgetTotal === '' ? 0 : Number(f.budgetTotal),
       spendCapDay: f.spendCapDay === '' ? null : Number(f.spendCapDay),
       // Blank leaves the sweep cadence as it is — there is no "no sweeps"
       // spelling here on purpose.

@@ -922,6 +922,19 @@ export interface Settings {
    */
   spendCapDay: number | null;
   /**
+   * The standing pot this whole operation is working against, in dollars.
+   *
+   * Deliberately NOT the daily cap. The cap is a brake — the most that may be
+   * committed in any rolling day, checked at grant time so a runaway cannot
+   * spend a year's money in an hour. This is the tank: what there is in total,
+   * against which orders placed and pre-orders owed are drawn down.
+   *
+   * Zero means unset. Unset changes nothing and stops nothing — a budget is a
+   * number to read, not a second brake, and quietly turning it into one would
+   * be a way to lose a drop to a setting nobody remembered typing.
+   */
+  budgetTotal: number;
+  /**
    * Shops that are switched off, by name.
    *
    * A shop at a time, rather than the master switch or nothing. There are
@@ -966,6 +979,7 @@ export const DEFAULT_SETTINGS: Settings = {
   paused: false,
   sweepEveryHours: 24,
   spendCapDay: null,
+  budgetTotal: 0,
   pausedRetailers: [],
   burstSpacingSeconds: 0,
   dropModeUntil: '',
@@ -986,6 +1000,11 @@ export function isClockTime(v: string): boolean {
 }
 
 export function validateSettings(s: Partial<Settings>): string | null {
+  if (s.budgetTotal !== undefined && s.budgetTotal !== null) {
+    const n = Number(s.budgetTotal);
+    if (!Number.isFinite(n) || n < 0) return 'a budget is a number of dollars, or nothing';
+    if (n > 10_000_000) return 'that budget does not look like dollars';
+  }
   if (s.spendCapDay !== undefined && s.spendCapDay !== null) {
     if (!Number.isFinite(s.spendCapDay) || s.spendCapDay <= 0) {
       return 'the daily spend cap must be a positive number of dollars';
@@ -1089,6 +1108,7 @@ export async function getSettings(db: Sql, userId: number): Promise<Settings> {
     timezone: text('timezone', ''),
     paused: text('paused', '') === 'true',
     sweepEveryHours: num('sweepEveryHours', DEFAULT_SETTINGS.sweepEveryHours),
+    budgetTotal: num('budgetTotal', DEFAULT_SETTINGS.budgetTotal),
     spendCapDay: map.has('spendCapDay') && Number.isFinite(Number(map.get('spendCapDay'))) && Number(map.get('spendCapDay')) > 0
       ? Number(map.get('spendCapDay'))
       : null,
@@ -1120,6 +1140,7 @@ export async function setSettings(
     'timezone',
     'paused',
     'sweepEveryHours',
+    'budgetTotal',
     'spendCapDay',
     'pausedRetailers',
     'burstSpacingSeconds',
@@ -1974,6 +1995,10 @@ export async function finishRun(
     sellerName?: string;
     quantity?: number | null;
     total?: number | null;
+    /** Was this a pre-order at the moment it was placed? Money, not trivia. */
+    isPreOrder?: boolean;
+    /** When it ships, if the shop said. Null for an ordinary order. */
+    releaseDate?: string | null;
   },
 ): Promise<void> {
   // Anything that is not a plain success must explain itself. A run marked
@@ -1987,8 +2012,9 @@ export async function finishRun(
         SET finished_at = now(),
             outcome = $1, reason = $2, state = $3, price = $4,
             seller_kind = $5, seller_name = $6, quantity = $7, total = $8,
+            is_preorder = $9, release_date = $10,
             ms = GREATEST(0, EXTRACT(EPOCH FROM (now() - started_at)) * 1000)::int
-      WHERE user_id = $9 AND id = $10`,
+      WHERE user_id = $11 AND id = $12`,
     [
       r.outcome,
       reason.slice(0, 500),
@@ -1998,6 +2024,11 @@ export async function finishRun(
       r.sellerName ?? '',
       r.quantity ?? null,
       r.total ?? null,
+      r.isPreOrder === true,
+      // Only meaningful on a pre-order. A release date on an ordinary order is
+      // the product's street date, which is a fact about the product and has
+      // nothing to say about when money moves.
+      r.isPreOrder === true ? (r.releaseDate || null) : null,
       userId,
       runId,
     ],
@@ -3068,10 +3099,33 @@ export async function urgentListings(db: Sql, userId: number): Promise<number[]>
 export interface Funnel {
   /** Enabled missions, right now. */
   watching: number;
-  /** Of those, how many saw their listing in stock during the window. */
+  /**
+   * Of those, how many saw their listing in stock FROM THE SHOP ITSELF.
+   *
+   * ── Why the seller matters more than the stock ────────────────────────────
+   *
+   * The first version counted any in-stock reading and reported fifteen
+   * listings, which read as fifteen missed chances. Two of them were. The
+   * other thirteen were Walmart marketplace resellers, which are permanently
+   * in stock at two to four times MSRP — and every mission refuses them on
+   * purpose, because `retailer_only` is the default and a reseller listing is
+   * the thing you are racing, not the thing you want.
+   *
+   * Counting those as opportunities made the funnel say we were losing
+   * thirteen chances a week that never existed, and pointed the next day's
+   * work at arming when the honest answer was that almost nothing had dropped.
+   */
   sawStock: number;
   /** Of the ones that saw stock, how many were armed to do anything about it. */
   sawStockArmed: number;
+  /**
+   * Listings that were only ever in stock from a marketplace seller.
+   *
+   * Context, not loss. Shown so the number above is not mistaken for the whole
+   * story — and so "nothing dropped this week" can be told apart from "we were
+   * asleep".
+   */
+  resellerOnly: number;
   /** Grants issued in the window — the Hub said yes to spending. */
   authorised: number;
   /** Orders the retailer confirmed. */
@@ -3092,17 +3146,31 @@ export async function funnel(db: Sql, userId: number, hours: number): Promise<Fu
     [userId],
   );
 
-  // Seen in stock. Joined through THIS user's missions, so a reading written by
-  // somebody else's agent on a shared listing still counts for the person
-  // watching it — which is the whole point of one read serving everyone.
-  const [seen] = await db.query<{ seen: string; armed: string }>(
-    `SELECT count(DISTINCT m.listing_id)::text AS seen,
-            count(DISTINCT m.listing_id) FILTER (WHERE m.armed)::text AS armed
-       FROM missions m
-       JOIN observations o ON o.listing_id = m.listing_id
-      WHERE m.user_id = $1 AND m.enabled
-        AND o.state = 'in'
-        AND o.at > now() - $2::interval`,
+  // Seen in stock, split by WHO was selling it.
+  //
+  // Joined through this user's missions, so a reading written by somebody
+  // else's agent on a shared listing still counts for the person watching it —
+  // which is the whole point of one read serving everyone.
+  //
+  // `seller_kind = 'retailer'` is the whole correction. A marketplace listing
+  // sitting in stock all month is not an opportunity anybody missed; it is the
+  // thing every mission is configured to refuse.
+  const [seen] = await db.query<{ seen: string; armed: string; reseller: string }>(
+    `WITH sightings AS (
+       SELECT m.listing_id,
+              bool_or(o.seller_kind = 'retailer') AS from_shop,
+              bool_or(m.armed) AS armed
+         FROM missions m
+         JOIN observations o ON o.listing_id = m.listing_id
+        WHERE m.user_id = $1 AND m.enabled
+          AND o.state = 'in'
+          AND o.at > now() - $2::interval
+        GROUP BY m.listing_id
+     )
+     SELECT count(*) FILTER (WHERE from_shop)::text AS seen,
+            count(*) FILTER (WHERE from_shop AND armed)::text AS armed,
+            count(*) FILTER (WHERE NOT from_shop)::text AS reseller
+       FROM sightings`,
     [userId, since],
   );
 
@@ -3163,6 +3231,7 @@ export async function funnel(db: Sql, userId: number, hours: number): Promise<Fu
     watching: Number(state?.watching ?? 0),
     sawStock: Number(seen?.seen ?? 0),
     sawStockArmed: Number(seen?.armed ?? 0),
+    resellerOnly: Number(seen?.reseller ?? 0),
     authorised: n([grants ?? { n: '0' }]),
     bought: Number(outcomes.find((o) => o.outcome === 'bought')?.n ?? 0),
     outcomes: outcomes.map((o) => ({ outcome: String(o.outcome), n: Number(o.n) })),
@@ -3254,6 +3323,91 @@ export async function health(db: Sql, userId: number, hours: number): Promise<He
  * that lesson is why this list can be trusted. Dry runs are not wins and are
  * not here; a page that pads itself stops being worth opening.
  */
+/* ── The money ───────────────────────────────────────────────────────────────
+ *
+ * Three numbers, and the whole reason there are three is that "spent" is not
+ * one thing:
+ *
+ *   SETTLED    an order. The money is gone.
+ *   COMMITTED  a pre-order. The retailer takes it at ship, sometimes months
+ *              out — it is owed, not paid, and it is still yours until then.
+ *   OPEN       a grant the Hub issued that never resolved. Either a buy in
+ *              progress, or a Phantom that died mid-checkout and nobody knows
+ *              whether money moved. Counted, because "we are not sure" is a
+ *              real state and rounding it to zero is how a budget lies.
+ *
+ * A budget that adds the first two together is wrong twice: it says you have
+ * less to work with than you do, and it forgets the bill that is coming.
+ */
+export interface Money {
+  /** The standing pot, from settings. Zero means "not set", not "no money". */
+  budget: number;
+  /** Orders. Paid. */
+  settled: number;
+  /** Pre-orders not yet released. Owed. */
+  committed: number;
+  /** Grants still open — a buy in flight, or one nobody resolved. */
+  open: number;
+  /** budget − settled − committed − open, when a budget is set. */
+  left: number | null;
+  /** What is owed, and when it comes due. Soonest first. */
+  upcoming: { name: string; retailer: string; releaseDate: string | null; total: number }[];
+}
+
+export async function money(db: Sql, userId: number): Promise<Money> {
+  const settings = await getSettings(db, userId);
+
+  const [totals] = await db.query<{ settled: string; committed: string }>(
+    `SELECT coalesce(sum(r.total) FILTER (WHERE NOT r.is_preorder), 0)::text AS settled,
+            coalesce(sum(r.total) FILTER (WHERE r.is_preorder), 0)::text AS committed
+       FROM mission_runs r JOIN missions m ON m.id = r.mission_id
+      WHERE m.user_id = $1 AND r.outcome = 'bought'`,
+    [userId],
+  );
+
+  const [grants] = await db.query<{ open: string }>(
+    `SELECT coalesce(sum(amount), 0)::text AS open
+       FROM authorisations WHERE user_id = $1 AND status = 'granted'`,
+    [userId],
+  );
+
+  const upcoming = await db.query<{
+    name: string; retailer: string; release_date: string | null; total: string;
+  }>(
+    `SELECT p.name, l.retailer, r.release_date, coalesce(r.total, 0)::text AS total
+       FROM mission_runs r
+       JOIN missions m ON m.id = r.mission_id
+       JOIN listings l ON l.id = m.listing_id
+       JOIN products p ON p.key = l.product_key
+      WHERE m.user_id = $1 AND r.outcome = 'bought' AND r.is_preorder
+      ORDER BY r.release_date NULLS LAST, r.started_at
+      LIMIT 20`,
+    [userId],
+  );
+
+  const budget = Number(settings.budgetTotal ?? 0);
+  const settled = Number(totals?.settled ?? 0);
+  const committed = Number(totals?.committed ?? 0);
+  const open = Number(grants?.open ?? 0);
+
+  return {
+    budget,
+    settled,
+    committed,
+    open,
+    left: budget > 0 ? Math.round((budget - settled - committed - open) * 100) / 100 : null,
+    upcoming: upcoming.map((u) => ({
+      name: String(u.name ?? ''),
+      retailer: String(u.retailer ?? ''),
+      // toDate, not slice: a DATE column arrives as a Date object, and
+      // String(date).slice(0, 10) is "Sat Nov 14" — a label that looks
+      // almost right and has lost the year.
+      releaseDate: toDate(u.release_date),
+      total: Number(u.total),
+    })),
+  };
+}
+
 export interface Win {
   runId: number;
   missionId: number;
@@ -3266,11 +3420,16 @@ export interface Win {
   msrp: number | null;
   /** queued | sent | dismissed | null when no vault row exists yet. */
   vaultStatus: string | null;
+  /** An order is paid; a pre-order is owed. The page must not blur them. */
+  isPreOrder: boolean;
+  /** When a pre-order ships, if the shop said. */
+  releaseDate: string | null;
 }
 
 export async function wins(db: Sql, userId: number, limit = 100): Promise<Win[]> {
   const rows = await db.query(
     `SELECT r.id, r.mission_id, r.started_at, r.quantity, r.price, r.total,
+            r.is_preorder, r.release_date,
             p.name AS product_name, p.msrp, l.retailer,
             a.status AS vault_status
        FROM mission_runs r
@@ -3294,5 +3453,7 @@ export async function wins(db: Sql, userId: number, limit = 100): Promise<Win[]>
     total: r.total === null || r.total === undefined ? null : Number(r.total),
     msrp: r.msrp === null || r.msrp === undefined ? null : Number(r.msrp),
     vaultStatus: r.vault_status ? String(r.vault_status) : null,
+    isPreOrder: r.is_preorder === true,
+    releaseDate: toDate(r.release_date),
   }));
 }

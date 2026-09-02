@@ -711,6 +711,7 @@ var DEFAULT_SETTINGS = {
   paused: false,
   sweepEveryHours: 24,
   spendCapDay: null,
+  budgetTotal: 0,
   pausedRetailers: [],
   burstSpacingSeconds: 0,
   dropModeUntil: ""
@@ -726,6 +727,11 @@ function isClockTime(v) {
   return h >= 0 && h <= 23 && m >= 0 && m <= 59 && parts[0].length === 2 && parts[1].length === 2;
 }
 function validateSettings(s) {
+  if (s.budgetTotal !== void 0 && s.budgetTotal !== null) {
+    const n = Number(s.budgetTotal);
+    if (!Number.isFinite(n) || n < 0) return "a budget is a number of dollars, or nothing";
+    if (n > 1e7) return "that budget does not look like dollars";
+  }
   if (s.spendCapDay !== void 0 && s.spendCapDay !== null) {
     if (!Number.isFinite(s.spendCapDay) || s.spendCapDay <= 0) {
       return "the daily spend cap must be a positive number of dollars";
@@ -816,6 +822,7 @@ async function getSettings(db2, userId) {
     timezone: text("timezone", ""),
     paused: text("paused", "") === "true",
     sweepEveryHours: num2("sweepEveryHours", DEFAULT_SETTINGS.sweepEveryHours),
+    budgetTotal: num2("budgetTotal", DEFAULT_SETTINGS.budgetTotal),
     spendCapDay: map.has("spendCapDay") && Number.isFinite(Number(map.get("spendCapDay"))) && Number(map.get("spendCapDay")) > 0 ? Number(map.get("spendCapDay")) : null,
     // Stored as one comma-separated string: the set is three names, and a
     // table for it would be three joins to answer "is Target on".
@@ -836,6 +843,7 @@ async function setSettings(db2, userId, patch) {
     "timezone",
     "paused",
     "sweepEveryHours",
+    "budgetTotal",
     "spendCapDay",
     "pausedRetailers",
     "burstSpacingSeconds",
@@ -1320,8 +1328,9 @@ async function finishRun(db2, userId, runId, r) {
         SET finished_at = now(),
             outcome = $1, reason = $2, state = $3, price = $4,
             seller_kind = $5, seller_name = $6, quantity = $7, total = $8,
+            is_preorder = $9, release_date = $10,
             ms = GREATEST(0, EXTRACT(EPOCH FROM (now() - started_at)) * 1000)::int
-      WHERE user_id = $9 AND id = $10`,
+      WHERE user_id = $11 AND id = $12`,
     [
       r.outcome,
       reason.slice(0, 500),
@@ -1331,6 +1340,11 @@ async function finishRun(db2, userId, runId, r) {
       r.sellerName ?? "",
       r.quantity ?? null,
       r.total ?? null,
+      r.isPreOrder === true,
+      // Only meaningful on a pre-order. A release date on an ordinary order is
+      // the product's street date, which is a fact about the product and has
+      // nothing to say about when money moves.
+      r.isPreOrder === true ? r.releaseDate || null : null,
       userId,
       runId
     ]
@@ -1883,13 +1897,21 @@ async function funnel(db2, userId, hours) {
     [userId]
   );
   const [seen] = await db2.query(
-    `SELECT count(DISTINCT m.listing_id)::text AS seen,
-            count(DISTINCT m.listing_id) FILTER (WHERE m.armed)::text AS armed
-       FROM missions m
-       JOIN observations o ON o.listing_id = m.listing_id
-      WHERE m.user_id = $1 AND m.enabled
-        AND o.state = 'in'
-        AND o.at > now() - $2::interval`,
+    `WITH sightings AS (
+       SELECT m.listing_id,
+              bool_or(o.seller_kind = 'retailer') AS from_shop,
+              bool_or(m.armed) AS armed
+         FROM missions m
+         JOIN observations o ON o.listing_id = m.listing_id
+        WHERE m.user_id = $1 AND m.enabled
+          AND o.state = 'in'
+          AND o.at > now() - $2::interval
+        GROUP BY m.listing_id
+     )
+     SELECT count(*) FILTER (WHERE from_shop)::text AS seen,
+            count(*) FILTER (WHERE from_shop AND armed)::text AS armed,
+            count(*) FILTER (WHERE NOT from_shop)::text AS reseller
+       FROM sightings`,
     [userId, since]
   );
   const [grants] = await db2.query(
@@ -1932,6 +1954,7 @@ async function funnel(db2, userId, hours) {
     watching: Number(state?.watching ?? 0),
     sawStock: Number(seen?.seen ?? 0),
     sawStockArmed: Number(seen?.armed ?? 0),
+    resellerOnly: Number(seen?.reseller ?? 0),
     authorised: n([grants ?? { n: "0" }]),
     bought: Number(outcomes.find((o) => o.outcome === "bought")?.n ?? 0),
     outcomes: outcomes.map((o) => ({ outcome: String(o.outcome), n: Number(o.n) })),
@@ -1981,9 +2004,56 @@ async function health(db2, userId, hours) {
     stalls: Math.max(0, total - seen)
   };
 }
+async function money(db2, userId) {
+  const settings = await getSettings(db2, userId);
+  const [totals] = await db2.query(
+    `SELECT coalesce(sum(r.total) FILTER (WHERE NOT r.is_preorder), 0)::text AS settled,
+            coalesce(sum(r.total) FILTER (WHERE r.is_preorder), 0)::text AS committed
+       FROM mission_runs r JOIN missions m ON m.id = r.mission_id
+      WHERE m.user_id = $1 AND r.outcome = 'bought'`,
+    [userId]
+  );
+  const [grants] = await db2.query(
+    `SELECT coalesce(sum(amount), 0)::text AS open
+       FROM authorisations WHERE user_id = $1 AND status = 'granted'`,
+    [userId]
+  );
+  const upcoming = await db2.query(
+    `SELECT p.name, l.retailer, r.release_date, coalesce(r.total, 0)::text AS total
+       FROM mission_runs r
+       JOIN missions m ON m.id = r.mission_id
+       JOIN listings l ON l.id = m.listing_id
+       JOIN products p ON p.key = l.product_key
+      WHERE m.user_id = $1 AND r.outcome = 'bought' AND r.is_preorder
+      ORDER BY r.release_date NULLS LAST, r.started_at
+      LIMIT 20`,
+    [userId]
+  );
+  const budget = Number(settings.budgetTotal ?? 0);
+  const settled = Number(totals?.settled ?? 0);
+  const committed = Number(totals?.committed ?? 0);
+  const open = Number(grants?.open ?? 0);
+  return {
+    budget,
+    settled,
+    committed,
+    open,
+    left: budget > 0 ? Math.round((budget - settled - committed - open) * 100) / 100 : null,
+    upcoming: upcoming.map((u) => ({
+      name: String(u.name ?? ""),
+      retailer: String(u.retailer ?? ""),
+      // toDate, not slice: a DATE column arrives as a Date object, and
+      // String(date).slice(0, 10) is "Sat Nov 14" — a label that looks
+      // almost right and has lost the year.
+      releaseDate: toDate(u.release_date),
+      total: Number(u.total)
+    }))
+  };
+}
 async function wins(db2, userId, limit = 100) {
   const rows = await db2.query(
     `SELECT r.id, r.mission_id, r.started_at, r.quantity, r.price, r.total,
+            r.is_preorder, r.release_date,
             p.name AS product_name, p.msrp, l.retailer,
             a.status AS vault_status
        FROM mission_runs r
@@ -2006,7 +2076,9 @@ async function wins(db2, userId, limit = 100) {
     unitPrice: r.price === null || r.price === void 0 ? null : Number(r.price),
     total: r.total === null || r.total === void 0 ? null : Number(r.total),
     msrp: r.msrp === null || r.msrp === void 0 ? null : Number(r.msrp),
-    vaultStatus: r.vault_status ? String(r.vault_status) : null
+    vaultStatus: r.vault_status ? String(r.vault_status) : null,
+    isPreOrder: r.is_preorder === true,
+    releaseDate: toDate(r.release_date)
   }));
 }
 
@@ -3018,6 +3090,29 @@ button.small { padding: 4px 10px; font-size: 12px; border-radius: var(--r-sm); b
 .rowline .bar { height: 4px; border-radius: 2px; background: var(--accent);
                 opacity: .55; margin-top: 5px; }
 
+/* The budget, as one bar in three parts.
+ *
+ * A stacked bar rather than three separate meters, because the question is
+ * part-to-whole \u2014 how much of the pot is accounted for \u2014 and three meters make
+ * the reader do the addition. Two-pixel gaps between the segments so adjacent
+ * fills stay countable, and every segment carries a written label: these are
+ * status colours, and a status colour without a word beside it is a colour
+ * somebody has to guess at.
+ */
+.stack { display: flex; height: 14px; border-radius: 7px; overflow: hidden;
+         background: var(--panel-2); margin-top: 12px; gap: 2px; }
+.stack > span { display: block; height: 100%;
+                /* A real number is never invisible. $1.09 against a $500 budget
+                   is a fifth of a per cent \u2014 sub-pixel, and a segment that
+                   rounds to nothing reads as money that is not there. */
+                min-width: 3px; }
+.stack .settled { background: var(--accent); }
+.stack .committed { background: var(--warn); }
+.stack .open { background: var(--alert); }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 10px; font-size: 12.5px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+.legend i { width: 9px; height: 9px; border-radius: 3px; display: inline-block; }
+
 .fltrow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
            margin: 0 0 10px; }
 .fltcount { margin: -4px 0 12px; }
@@ -3553,6 +3648,19 @@ ${FONTS}<style>${STYLE}</style></head>
       <span class="sub" id="range-note"></span>
     </div>
 
+    <!-- Money first. Three numbers, because "spent" is not one thing: an
+         order is paid, a pre-order is owed, and a grant nobody resolved is
+         neither. A budget that adds the first two together is wrong twice. -->
+    <div class="card" id="money-card">
+      <div class="wizhead">
+        <div class="name">The money</div>
+        <span class="sub" id="money-budget"></span>
+      </div>
+      <div class="kpis" id="money-kpis"></div>
+      <div id="money-bar"></div>
+      <div id="money-upcoming"></div>
+    </div>
+
     <div class="card" id="funnel-card">
       <div class="name">Where it goes</div>
       <div class="sub" id="funnel-sub"></div>
@@ -3722,6 +3830,10 @@ ${FONTS}<style>${STYLE}</style></head>
           <label class="f">Most to spend in 24 hours
             <span class="hint">in dollars \u2014 nothing can be armed without this</span>
             <input type="number" name="spendCapDay" step="0.01" min="0" placeholder="unset">
+          </label>
+          <label class="f">Total budget
+            <span class="hint">the pot this is working against \u2014 reads only, stops nothing</span>
+            <input type="number" name="budgetTotal" step="0.01" min="0" placeholder="unset">
           </label>
           <label class="f">Sweep for new products every
             <span class="hint">hours \u2014 how often the catalogues are re-read</span>
@@ -5330,6 +5442,9 @@ function render() {
   if (document.activeElement !== sf.querySelector('[name=shippingAllowance]')) {
     sf.querySelector('[name=shippingAllowance]').value = st.shippingAllowance || '';
   }
+  if (document.activeElement !== sf.querySelector('[name=budgetTotal]')) {
+    sf.querySelector('[name=budgetTotal]').value = st.budgetTotal ? st.budgetTotal : '';
+  }
   if (document.activeElement !== sf.querySelector('[name=spendCapDay]')) {
     sf.querySelector('[name=spendCapDay]').value =
       st.spendCapDay === null || st.spendCapDay === undefined ? '' : st.spendCapDay;
@@ -6223,6 +6338,8 @@ function renderHome() {
     }));
   }
 
+  renderMoney2(INSIGHTS && INSIGHTS.money);
+
   const funnelHost = document.getElementById('funnel');
   const verdict = document.getElementById('funnel-verdict');
   const kpis = document.getElementById('home-kpis');
@@ -6250,11 +6367,14 @@ function renderHome() {
 
   const top = Math.max(1, f.watching);
   stage(funnelHost, 'Watching', f.watching, top, 'listings with a mission on them');
-  stage(funnelHost, 'Saw stock', f.sawStock, top,
-    f.watching ? pct(f.sawStock, f.watching) + ' of what is watched came in stock' : '');
+  stage(funnelHost, 'Came in stock at the shop', f.sawStock, top,
+    (f.watching ? pct(f.sawStock, f.watching) + ' of what is watched' : '') +
+    (f.resellerOnly
+      ? ' \xB7 ' + f.resellerOnly + ' more were resellers only, which every mission refuses'
+      : ''));
   stage(funnelHost, 'Armed when it did', f.sawStockArmed, top,
     f.sawStock
-      ? pct(f.sawStockArmed, f.sawStock) + ' of the ones that appeared were armed to act'
+      ? pct(f.sawStockArmed, f.sawStock) + ' of the real ones were armed to act'
       : '',
     f.sawStock > 0 && f.sawStockArmed === 0);
   stage(funnelHost, 'Authorised', f.authorised, top, 'the Hub agreed to spend');
@@ -6277,9 +6397,12 @@ function renderHome() {
   if (f.watching === 0) {
     say.textContent = 'Nothing is being watched yet. Add a listing and this fills in.';
   } else if (f.sawStock === 0) {
-    say.textContent =
-      'Nothing you watch has come in stock in the last ' + label + '. That is not a ' +
-      'fault \u2014 it is what watching mostly looks like.';
+    say.textContent = f.resellerOnly
+      ? 'Nothing dropped at the shops in the last ' + label + '. ' + f.resellerOnly +
+        ' listings were in stock from marketplace resellers, which every mission ' +
+        'refuses on purpose \u2014 those are the thing you are racing, not the thing you want.'
+      : 'Nothing you watch has come in stock in the last ' + label + '. That is not a ' +
+        'fault \u2014 it is what watching mostly looks like.';
   } else if (f.sawStockArmed === 0) {
     say.textContent = win +
       'Stock appeared on ' + f.sawStock + ' listing' + (f.sawStock === 1 ? '' : 's') +
@@ -6312,7 +6435,8 @@ function renderHome() {
   const runs = f.outcomes.reduce((a, o) => a + o.n, 0);
   kpi(kpis, 'Orders', String(f.bought), 'confirmed in ' + label, f.bought ? 'good' : '');
   kpi(kpis, 'Runs', String(runs), 'times a mission acted, or could not');
-  kpi(kpis, 'Stock seen', String(f.sawStock), 'listings that came in stock');
+  kpi(kpis, 'Real stock', String(f.sawStock),
+    f.resellerOnly ? '+' + f.resellerOnly + ' reseller-only, refused' : 'from the shop itself');
   kpi(kpis, 'Armed now', String(f.sawStockArmed) + ' / ' + f.sawStock,
     'of those, armed to buy', f.sawStock && !f.sawStockArmed ? 'bad' : '');
 
@@ -6374,6 +6498,112 @@ function renderHome() {
   renderWinsInto('wins-preview-list', INSIGHTS.wins || [], true);
 }
 
+/**
+ * The money, in three parts.
+ *
+ * "Spent" is not one thing, and the split is the whole point:
+ *
+ *   SETTLED    an order. Paid, gone.
+ *   COMMITTED  a pre-order. The shop takes it at ship, sometimes months out \u2014
+ *              owed, not paid, and still yours until then.
+ *   OPEN       a grant nobody resolved. Either a buy in flight or a Phantom
+ *              that died mid-checkout, in which case nobody knows whether
+ *              money moved. Shown because "not sure" is a real state, and
+ *              rounding it to zero is how a budget lies.
+ *
+ * The bar is stacked because the question is part-to-whole. Every segment
+ * carries a written label: these are the status colours, and a status colour
+ * with no word beside it is a colour somebody has to guess at.
+ */
+function renderMoney2(m) {
+  const card = document.getElementById('money-card');
+  if (!card) return;
+  const kpis = document.getElementById('money-kpis');
+  const bar = document.getElementById('money-bar');
+  const up = document.getElementById('money-upcoming');
+  const budgetNote = document.getElementById('money-budget');
+  for (const n of [kpis, bar, up]) n.textContent = '';
+  budgetNote.textContent = '';
+
+  if (!m) { budgetNote.textContent = 'Loading\u2026'; return; }
+
+  kpi(kpis, 'Settled', money(m.settled), 'orders, paid');
+  kpi(kpis, 'Committed', money(m.committed),
+    m.upcoming.length ? m.upcoming.length + ' pre-orders, owed at ship' : 'pre-orders, owed at ship');
+  kpi(kpis, 'Open grants', money(m.open),
+    m.open > 0 ? 'authorised and unresolved' : 'nothing in flight', m.open > 0 ? 'bad' : '');
+  if (m.left !== null) {
+    kpi(kpis, 'Left', money(m.left), 'of the budget', m.left < 0 ? 'bad' : 'good');
+  }
+
+  if (m.budget > 0) {
+    budgetNote.textContent = 'budget ' + money(m.budget);
+    const used = m.settled + m.committed + m.open;
+    const scale = Math.max(m.budget, used);
+    const row = el('div', 'stack');
+    const seg = (cls, v) => {
+      if (v <= 0) return;
+      const b = el('span', cls);
+      b.style.width = (v / scale) * 100 + '%';
+      b.title = cls + ' ' + money(v);
+      row.appendChild(b);
+    };
+    seg('settled', m.settled);
+    seg('committed', m.committed);
+    seg('open', m.open);
+    bar.appendChild(row);
+
+    const key = el('div', 'legend');
+    const mark = (colour, text) => {
+      const w = el('span');
+      const dot = el('i');
+      dot.style.background = colour;
+      w.appendChild(dot);
+      w.appendChild(document.createTextNode(text));
+      key.appendChild(w);
+    };
+    mark('var(--accent)', 'settled ' + money(m.settled));
+    mark('var(--warn)', 'committed ' + money(m.committed));
+    if (m.open > 0) mark('var(--alert)', 'open ' + money(m.open));
+    bar.appendChild(key);
+    if (used > m.budget) {
+      const over = el('div', 'meta stale');
+      over.style.marginTop = '8px';
+      over.textContent = 'That is ' + money(used - m.budget) + ' past the budget.';
+      bar.appendChild(over);
+    }
+  } else {
+    budgetNote.textContent = 'no budget set';
+    const hint = el('div', 'meta');
+    hint.style.marginTop = '10px';
+    hint.textContent =
+      'Set a budget under Settings and this becomes a bar with a number left on it. ' +
+      'It only ever reads \u2014 nothing is stopped by it, so a forgotten figure cannot ' +
+      'cost you a drop.';
+    bar.appendChild(hint);
+  }
+
+  // What is owed, and when. The half of a pre-order that a total cannot say.
+  if (m.upcoming.length) {
+    const head = el('div', 'name', 'Owed, when it ships');
+    head.style.marginTop = '20px';
+    up.appendChild(head);
+    const box = el('div', 'rows');
+    for (const u of m.upcoming) {
+      const line = el('div', 'rowline');
+      const g = el('div', 'g');
+      g.appendChild(el('div', null, u.name));
+      g.appendChild(el('div', 'meta',
+        [u.retailer, u.releaseDate ? 'ships ' + u.releaseDate : 'no ship date given']
+          .filter(Boolean).join(' \xB7 ')));
+      line.appendChild(g);
+      line.appendChild(el('span', 'c', money(u.total)));
+      box.appendChild(line);
+    }
+    up.appendChild(box);
+  }
+}
+
 function pct(n, of) {
   if (!of) return '0%';
   const p = (n / of) * 100;
@@ -6412,6 +6642,11 @@ function renderWinsInto(id, rows, preview) {
     g.appendChild(el('div', null, w.productName || 'a product'));
     const bits = [w.retailer, ago(w.at)];
     if (w.quantity > 1) bits.push('\xD7' + w.quantity);
+    // A pre-order is not paid for yet, and a wins list that blurs the two is a
+    // wins list you cannot budget from.
+    if (w.isPreOrder) {
+      bits.push(w.releaseDate ? 'PRE-ORDER \xB7 ships ' + w.releaseDate : 'PRE-ORDER');
+    }
     if (!preview && w.vaultStatus) bits.push('vault: ' + w.vaultStatus);
     g.appendChild(el('div', 'meta', bits.filter(Boolean).join(' \xB7 ')));
     row.appendChild(g);
@@ -6439,11 +6674,15 @@ function renderWins() {
   const rows = WINS || [];
   const box = document.getElementById('wins-summary');
   box.textContent = '';
-  const spent = rows.reduce((a, w) => a + (w.total !== null ? w.total : 0), 0);
+  const orders = rows.filter((w) => !w.isPreOrder);
+  const pres = rows.filter((w) => w.isPreOrder);
+  const sum = (xs) => xs.reduce((a, w) => a + (w.total !== null ? w.total : 0), 0);
   const units = rows.reduce((a, w) => a + (w.quantity || 1), 0);
-  kpi(box, 'Orders', String(rows.length), 'confirmed, all time', rows.length ? 'good' : '');
-  kpi(box, 'Items', String(units), 'across those orders');
-  kpi(box, 'Spent', money(spent), 'all-in, as the cart stated it');
+  kpi(box, 'Orders', String(orders.length), 'paid', orders.length ? 'good' : '');
+  kpi(box, 'Pre-orders', String(pres.length), 'owed at ship');
+  kpi(box, 'Items', String(units), 'across all of them');
+  kpi(box, 'Settled', money(sum(orders)), 'money actually gone');
+  if (pres.length) kpi(box, 'Committed', money(sum(pres)), 'still to be taken');
   renderWinsInto('wins-list', rows, false);
 }
 
@@ -6946,6 +7185,7 @@ document.getElementById('settings-form').addEventListener('submit', async (e) =>
       taxRate: Math.round(percent * 1000) / 100000,
       shippingAllowance: Number(f.shippingAllowance || 0),
       // Blank clears the cap \u2014 and with it, the ability to arm anything new.
+      budgetTotal: f.budgetTotal === '' ? 0 : Number(f.budgetTotal),
       spendCapDay: f.spendCapDay === '' ? null : Number(f.spendCapDay),
       // Blank leaves the sweep cadence as it is \u2014 there is no "no sweeps"
       // spelling here on purpose.
@@ -8118,12 +8358,16 @@ function createHandler(db2, env2) {
     if (request.method === "GET" && path === "/api/insights") {
       const asked = Number(url.searchParams.get("hours") ?? "168");
       const hours = Number.isFinite(asked) ? Math.min(24 * 90, Math.max(1, asked)) : 168;
-      const [shape, machine, recent] = await Promise.all([
+      const [shape, machine, recent, cash] = await Promise.all([
         funnel(db2, userId, hours),
         health(db2, userId, hours),
-        wins(db2, userId, 3)
+        wins(db2, userId, 3),
+        // Deliberately NOT windowed. A budget is a standing thing: what has
+        // been spent against it and what is owed out of it are true whatever
+        // range the page happens to be showing.
+        money(db2, userId)
       ]);
-      return json({ hours, funnel: shape, health: machine, wins: recent });
+      return json({ hours, funnel: shape, health: machine, wins: recent, money: cash });
     }
     if (request.method === "GET" && path === "/api/wins") {
       return json({ wins: await wins(db2, userId, 200) });
@@ -8159,7 +8403,9 @@ function createHandler(db2, env2) {
         sellerKind: b.sellerKind,
         sellerName: b.sellerName,
         quantity: b.quantity,
-        total: b.total
+        total: b.total,
+        isPreOrder: b.isPreOrder === true,
+        releaseDate: b.releaseDate ?? null
       });
       return json({ run: id });
     }

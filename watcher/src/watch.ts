@@ -104,6 +104,12 @@ export function judge(
     price: reading.price,
     sellerKind: reading.seller.kind,
     sellerName: reading.seller.name,
+    // On every run, not only the bought one. A pre-order that was DECLINED is
+    // then legible later as exactly that, rather than as an unexplained
+    // refusal — and the answer is the page's own, at the moment the mission
+    // acted, which is the only moment it is fixed.
+    isPreOrder: reading.preOrder.isPreOrder === true,
+    releaseDate: reading.preOrder.releaseDate ?? null,
   };
 
   // ── Somebody else's mission ───────────────────────────────────────────────

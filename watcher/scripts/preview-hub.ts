@@ -97,7 +97,8 @@ const server = createServer((req, res) => {
     res.end(JSON.stringify({
       hours: 168,
       funnel: {
-        watching: 39, sawStock: 15, sawStockArmed: 1, authorised: 2, bought: 1,
+        watching: 39, sawStock: 2, sawStockArmed: 0, resellerOnly: 13,
+        authorised: 5, bought: 1,
         outcomes: [
           { outcome: 'in_stock', n: 41 }, { outcome: 'declined', n: 6 },
           { outcome: 'blocked', n: 2 }, { outcome: 'failed', n: 2 }, { outcome: 'bought', n: 1 },
@@ -118,17 +119,32 @@ const server = createServer((req, res) => {
         ],
       },
       wins: [
+        { runId: 2, missionId: 21, productName: 'Mega Evolution Pitch Black ETB',
+          retailer: 'Pokemon Center', at: ago(60 * 8), quantity: 1, unitPrice: 59.99,
+          total: 65.84, msrp: 59.99, vaultStatus: null, isPreOrder: true,
+          releaseDate: '2026-11-14' },
         { runId: 1, missionId: 63, productName: 'Test pens', retailer: 'Target',
           at: ago(60 * 30), quantity: 1, unitPrice: 0.99, total: 1.09, msrp: 1.29,
-          vaultStatus: 'queued' },
+          vaultStatus: 'queued', isPreOrder: false, releaseDate: null },
       ],
+      money: {
+        budget: 500, settled: 1.09, committed: 65.84, open: 54.99, left: 378.08,
+        upcoming: [
+          { name: 'Mega Evolution Pitch Black ETB', retailer: 'Pokemon Center',
+            releaseDate: '2026-11-14', total: 65.84 },
+        ],
+      },
     }));
   } else if (path === '/api/wins') {
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ wins: [
+      { runId: 2, missionId: 21, productName: 'Mega Evolution Pitch Black ETB',
+        retailer: 'Pokemon Center', at: ago(60 * 8), quantity: 1, unitPrice: 59.99,
+        total: 65.84, msrp: 59.99, vaultStatus: null, isPreOrder: true,
+        releaseDate: '2026-11-14' },
       { runId: 1, missionId: 63, productName: 'Test pens', retailer: 'Target',
         at: ago(60 * 30), quantity: 1, unitPrice: 0.99, total: 1.09, msrp: 1.29,
-        vaultStatus: 'queued' },
+        vaultStatus: 'queued', isPreOrder: false, releaseDate: null },
     ] }));
   } else if (path === '/api/dashboard') {
     res.writeHead(200, { 'content-type': 'application/json' });
