@@ -196,6 +196,21 @@ export function isQueue(reason: string): boolean {
 }
 
 /**
+ * Does this queue stand in front of the whole shop, or one item?
+ *
+ * Queue-it's waiting room is a front door: every page on the site sits
+ * behind it, so reading a second page proves nothing and the pass should
+ * move on. Walmart's is not. Captured live on 2 Sep 2026: the redirect
+ * carried one `itemID` in its `qpdata` and the queue id was tied to it. Other
+ * Walmart listings load normally while one is queued — so skipping the rest
+ * of the shop on a Walmart queue throws away readings that were there for
+ * the taking, at the exact minute they matter.
+ */
+export function queueScope(reason: string): 'site' | 'item' {
+  return reason === 'Queue-it waiting room' ? 'site' : 'item';
+}
+
+/**
  * Is this a challenge page rather than a real one?
  *
  * Title and visible text carry every pattern that describes something a person

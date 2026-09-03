@@ -72,6 +72,8 @@ export interface ReadinessInput {
   agentSeenAt?: string | null;
   /** Enough of each mission to know whether this shop is being watched at all. */
   missions?: readonly { retailer?: string | null; enabled?: boolean | null }[];
+  /** Bot checks served per shop in the last day. Queues do not count. */
+  walls?: readonly { retailer: string; n: number }[];
 }
 
 const toMinutes = (hhmm: string): number | null => {
@@ -161,6 +163,25 @@ export function dropReadiness(input: ReadinessInput): Readiness | null {
     blockers.push({
       what: 'Drop-window spacing is unset, so the scheduled window cannot speed anything up',
       fix: 'Settings → Which shops, and how hard → Drop-window spacing',
+    });
+  }
+
+  /*
+   * ── The shop has been turning this browser away ──────────────────────────
+   *
+   * Not a switch, and nothing to flip — which is exactly why it needs saying.
+   * A press-and-hold on the watch profile means twenty minutes of nothing
+   * from that shop, and several in a day means the evening's coverage is a
+   * coin toss. The fix names the thing that still works when the watcher is
+   * walled: the handoff to a browser the shop trusts.
+   */
+  const walls = (input.walls ?? []).find(
+    (w) => String(w.retailer).toLowerCase() === retailer.toLowerCase(),
+  );
+  if (walls && walls.n > 0) {
+    blockers.push({
+      what: `${retailer} served ${walls.n} bot check${walls.n === 1 ? '' : 's'} to the watcher in the last 24 hours — coverage tonight may be patchy`,
+      fix: 'Nothing to switch. Hold my place opens your own browser if the watcher is walled',
     });
   }
 

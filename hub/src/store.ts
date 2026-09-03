@@ -3184,6 +3184,38 @@ export function isQueueLine(message: unknown): boolean {
   return /waiting room/i.test(m) || m.startsWith('QUEUE:');
 }
 
+/**
+ * How often each shop put a wall up, lately.
+ *
+ * Walls, not queues: a waiting room is a drop, a press-and-hold is the shop
+ * telling this browser to go away, and only the second one is a reason to
+ * doubt tomorrow's coverage. On 3 Sep 2026 the watch profile was served
+ * Walmart's press-and-hold on an ordinary product page at 7:31am and stood
+ * down twenty minutes. Once is weather. Several in a day, on the shop with a
+ * drop that evening, is a forecast — and it belongs on the readiness banner
+ * rather than in a log nobody reads on a Wednesday afternoon.
+ */
+export async function wallsByShop(
+  db: Sql,
+  userId: number,
+  hours = 24,
+): Promise<{ retailer: string; n: number }[]> {
+  const rows = await db.query<{ retailer: string; n: string }>(
+    `SELECT retailer, count(*)::text AS n
+       FROM activity
+      WHERE user_id = $1
+        AND at > now() - ($2 || ' hours')::interval
+        AND kind = 'check'
+        AND message LIKE 'blocked:%'
+        AND message NOT ILIKE '%waiting room%'
+        AND retailer <> ''
+      GROUP BY retailer
+      ORDER BY count(*) DESC`,
+    [userId, String(hours)],
+  );
+  return rows.map((r) => ({ retailer: r.retailer, n: Number(r.n) }));
+}
+
 export async function queueSightings(
   db: Sql,
   userId: number,

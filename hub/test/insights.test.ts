@@ -646,3 +646,29 @@ test('the profile carries no secret about the account', async () => {
   assert.ok(!text.includes('hash'));
   assert.ok(!('vaultUserId' in p));
 });
+
+// ── Walls per shop ───────────────────────────────────────────────────────────
+
+test('WALLS ARE COUNTED PER SHOP, AND A QUEUE IS NOT A WALL', async () => {
+  const { db } = await seeded();
+  const at = new Date().toISOString();
+  await store.recordActivity(db, A, [
+    { at, kind: 'check', retailer: 'Walmart', message: 'blocked: Press-and-hold check — standing down' },
+    { at, kind: 'check', retailer: 'Walmart', message: 'blocked: Press-and-hold check — standing down' },
+    // A waiting room is a drop, not the shop turning us away.
+    { at, kind: 'check', retailer: 'Walmart', message: 'blocked: waiting room is up — a drop may be live, get in line yourself now' },
+    { at, kind: 'check', retailer: 'Target', message: 'blocked: Access denied — standing down' },
+    { at, kind: 'check', retailer: 'Target', message: 'out at $59.99' },
+  ]);
+  const walls = await store.wallsByShop(db, A, 24);
+  assert.deepEqual(walls, [{ retailer: 'Walmart', n: 2 }, { retailer: 'Target', n: 1 }]);
+});
+
+test('old walls fall out of the window', async () => {
+  const { db } = await seeded();
+  const old = new Date(Date.now() - 30 * 60 * 60 * 1000).toISOString();
+  await store.recordActivity(db, A, [
+    { at: old, kind: 'check', retailer: 'Walmart', message: 'blocked: Press-and-hold check — standing down' },
+  ]);
+  assert.deepEqual(await store.wallsByShop(db, A, 24), []);
+});

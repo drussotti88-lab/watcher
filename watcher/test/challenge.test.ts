@@ -12,7 +12,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { detectChallenge, isQueue, isQueueUrl } from '../src/challenge.ts';
+import { detectChallenge, isQueue, isQueueUrl, queueScope } from '../src/challenge.ts';
 
 // -------------------------------------------------------------- healthy pages
 
@@ -316,4 +316,14 @@ test('a mangled qpdata still calls the queue rather than missing it', () => {
   // Truncated by a redirect chain, or reshaped next season. Missing a drop
   // over a JSON parse is the worse failure.
   assert.equal(isQueueUrl('https://www.walmart.com/qp?qpdata=%7B%22queued%22%3Atrue%2C%22que'), true);
+});
+
+test('A WALMART QUEUE IS ONE ITEM; A QUEUE-IT ROOM IS THE WHOLE SHOP', () => {
+  // Captured 2 Sep 2026: Walmart's redirect carries one itemID and the queue
+  // id is tied to it. The pass used to skip every other Walmart check on a
+  // queue sighting, on the premise that every page was behind the same door.
+  // That premise is Queue-it's, not Walmart's.
+  assert.equal(queueScope('Queue-it waiting room'), 'site');
+  assert.equal(queueScope('Walmart waiting room'), 'item');
+  assert.equal(queueScope('Walmart queue redirect'), 'item');
 });

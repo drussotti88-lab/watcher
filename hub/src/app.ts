@@ -377,6 +377,7 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
         settings,
         agentSeenAt,
         missions,
+        walls: await store.wallsByShop(db, userId, 24).catch(() => []),
       });
 
       const shopStatus = capabilityTable().retailers.map((r) => ({

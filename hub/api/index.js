@@ -1904,6 +1904,22 @@ function isQueueLine(message) {
   const m = String(message ?? "");
   return /waiting room/i.test(m) || m.startsWith("QUEUE:");
 }
+async function wallsByShop(db2, userId, hours = 24) {
+  const rows = await db2.query(
+    `SELECT retailer, count(*)::text AS n
+       FROM activity
+      WHERE user_id = $1
+        AND at > now() - ($2 || ' hours')::interval
+        AND kind = 'check'
+        AND message LIKE 'blocked:%'
+        AND message NOT ILIKE '%waiting room%'
+        AND retailer <> ''
+      GROUP BY retailer
+      ORDER BY count(*) DESC`,
+    [userId, String(hours)]
+  );
+  return rows.map((r) => ({ retailer: r.retailer, n: Number(r.n) }));
+}
 async function queueSightings(db2, userId, minutes = 30) {
   const rows = await db2.query(
     `SELECT retailer, max(at) AS at
@@ -2499,6 +2515,15 @@ function dropReadiness(input) {
     blockers.push({
       what: "Drop-window spacing is unset, so the scheduled window cannot speed anything up",
       fix: "Settings \u2192 Which shops, and how hard \u2192 Drop-window spacing"
+    });
+  }
+  const walls = (input.walls ?? []).find(
+    (w) => String(w.retailer).toLowerCase() === retailer.toLowerCase()
+  );
+  if (walls && walls.n > 0) {
+    blockers.push({
+      what: `${retailer} served ${walls.n} bot check${walls.n === 1 ? "" : "s"} to the watcher in the last 24 hours \u2014 coverage tonight may be patchy`,
+      fix: "Nothing to switch. Hold my place opens your own browser if the watcher is walled"
     });
   }
   if (
@@ -9774,7 +9799,8 @@ function createHandler(db2, env2) {
         now: new Date(now),
         settings,
         agentSeenAt,
-        missions
+        missions,
+        walls: await wallsByShop(db2, userId, 24).catch(() => [])
       });
       const shopStatus = capabilityTable().retailers.map((r) => ({
         name: r.name,

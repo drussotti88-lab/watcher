@@ -130,3 +130,24 @@ test('several switches off are several blockers', () => {
   });
   assert.equal(r!.blockers.length, 5);
 });
+
+test('A SHOP THAT HAS BEEN WALLING THE WATCHER IS SAID OUT LOUD, WITH WHAT STILL WORKS', () => {
+  // 3 Sep 2026, 7:31am: the watch profile got Walmart's press-and-hold on an
+  // ordinary product page and stood down twenty minutes. Once is weather;
+  // several on the shop with a drop that evening is a forecast.
+  const r = dropReadiness({ ...ok, walls: [{ retailer: 'Walmart', n: 3 }] });
+  const b = r!.blockers.find((x) => /bot checks/.test(x.what));
+  assert.ok(b, r!.blockers.map((x) => x.what).join(' | '));
+  assert.match(b!.what, /Walmart served 3 bot checks/);
+  assert.match(b!.fix, /Hold my place/);
+});
+
+test('walls at another shop are not this drop\'s problem', () => {
+  const r = dropReadiness({ ...ok, walls: [{ retailer: 'Target', n: 9 }] });
+  assert.deepEqual(r?.blockers, []);
+});
+
+test('one wall is singular', () => {
+  const r = dropReadiness({ ...ok, walls: [{ retailer: 'Walmart', n: 1 }] });
+  assert.match(r!.blockers[0]!.what, /1 bot check to the watcher/);
+});

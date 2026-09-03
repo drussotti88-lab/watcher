@@ -22,7 +22,7 @@
  * check the detection half worked.
  */
 import type { Browser } from './browser.ts';
-import { isQueue } from './challenge.ts';
+import { isQueue, queueScope } from './challenge.ts';
 import { DEFAULT_SETTINGS, type Hub, type Mission, type ObservationOut, type RunOut, type Settings } from './hub.ts';
 import { Pacer, isDue, nextUp } from './rate.ts';
 import { readListing, type Reading } from './read.ts';
@@ -654,13 +654,20 @@ export async function pass(missions: Mission[], pacer: Pacer, deps: WatchDeps): 
     if (reading.challenged && isQueue(reading.challengeReason)) {
       // A waiting room, not a wall. No long stand-down — the next pass should
       // look again at the ordinary pace, because the interesting moment is
-      // when the queue comes DOWN. The rest of this retailer's checks are
-      // skipped this pass only: every one of its pages is behind the same
-      // queue, and reading N copies of the waiting room proves nothing.
+      // when the queue comes DOWN.
+      //
+      // Whether the REST of this shop's checks are skipped depends on what
+      // kind of queue it is. A site-wide one (Queue-it) puts every page
+      // behind the same door, and reading N copies of it proves nothing. A
+      // per-item one (Walmart, measured 2 Sep 2026: one itemID in the
+      // redirect) leaves every other listing readable — and on a drop night
+      // those other listings are exactly what you want read.
       result.blocked.push(`${mission.retailer}: WAITING ROOM UP — drop likely live`);
       log(`  QUEUE at ${mission.retailer} — waiting room is up; a drop may be live`);
-      for (let i = remaining.length - 1; i >= 0; i -= 1) {
-        if (remaining[i]!.retailer === mission.retailer) remaining.splice(i, 1);
+      if (queueScope(reading.challengeReason) === 'site') {
+        for (let i = remaining.length - 1; i >= 0; i -= 1) {
+          if (remaining[i]!.retailer === mission.retailer) remaining.splice(i, 1);
+        }
       }
     } else if (reading.challenged) {
       const until = pacer.challenged(mission.retailer, now());

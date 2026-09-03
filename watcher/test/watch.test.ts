@@ -711,6 +711,43 @@ test('A WAITING ROOM DOES NOT STAND THE RETAILER DOWN', async () => {
   assert.doesNotMatch(blockedRun!.reason, /standing down/);
 });
 
+test('A WALMART QUEUE ON ONE ITEM DOES NOT SKIP THE OTHER WALMART ITEMS', async () => {
+  // Captured 2 Sep 2026: Walmart's queue redirect carries one itemID. The
+  // other listings load normally while one is queued — and on a drop night
+  // those other listings are exactly what you want read. The old rule skipped
+  // the whole shop on the first sighting, which is Queue-it's shape, not
+  // Walmart's.
+  const { hub, runs } = recorder();
+  // No spacing between reads: the point of this test is the skip rule, not
+  // the pacer, and at the default 20s only one Walmart read fits in a pass
+  // whatever the rule says.
+  const pacer = new Pacer({ ...STEADY, minSpacingMs: 0 }, () => 0);
+  const missions = [
+    mission({ id: 1, retailer: 'Walmart' }),
+    mission({ id: 2, retailer: 'Walmart' }),
+    mission({ id: 3, retailer: 'Walmart' }),
+  ];
+  let calls = 0;
+  const result = await pass(missions, pacer, {
+    browser,
+    hub,
+    now: () => T0,
+    read: reads(() => {
+      calls += 1;
+      // Only the first item is queued; the rest read as ordinary pages.
+      return calls === 1
+        ? reading({ challenged: true, challengeReason: 'Walmart queue redirect', state: 'unknown' })
+        : reading();
+    }),
+  });
+
+  assert.equal(result.checked, 3, 'every Walmart item was still read');
+  assert.equal(pacer.standingDown('Walmart', T0), false, 'and no stand-down');
+  assert.equal(result.blocked.length, 1, 'the queue was still shouted about');
+  assert.match(result.blocked[0]!, /WAITING ROOM UP/);
+  assert.equal(runs.filter((r) => r.outcome === 'blocked').length, 1);
+});
+
 // ── the stock-loaded alarm: the drop precursor ───────────────────────────────
 
 import { stockLoaded, STOCK_LOADED_MIN } from '../src/watch.ts';
