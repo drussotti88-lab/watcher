@@ -70,6 +70,19 @@ export class Browser {
         : {}),
       headless: !this.config.browser.headed,
       viewport: { width: 1366, height: 900 },
+      /*
+       * ── Extensions: on for the buy profile, off for the watch profile ────
+       *
+       * Playwright passes --disable-extensions by default. The watch profile
+       * keeps that: signed out, three retailers all day, fewer moving parts.
+       * The buy profile drops it, because it is the one a person signs into
+       * and finishes a checkout in, and a password manager there is the
+       * reason card details never pass through this code. Whatever is
+       * installed there during `npm run signin` runs, and nothing here
+       * inspects or lists it — owner's call, 3 Sep 2026. Extensions only run
+       * headed; the buy profile already is.
+       */
+      ...(this.persona === 'buy' ? { ignoreDefaultArgs: ['--disable-extensions'] } : {}),
       // ── The sandbox stays on ──────────────────────────────────────────────
       //
       // Playwright turns it off by default for a persistent context, and

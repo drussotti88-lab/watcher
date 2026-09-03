@@ -13,6 +13,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { scrub, looksSensitive } from '../src/scrub.ts';
 
 const corpus = JSON.parse(
@@ -119,4 +120,16 @@ test('NO ANTI-DETECTION FLAGS IN THE BROWSER LAUNCH', () => {
   ]) {
     assert.ok(!live.includes(banned), `${banned} is not ours to use`);
   }
+});
+
+// ── Extensions: on for the buy profile, off for the watch profile ────────────
+
+test('THE BUY PROFILE RUNS EXTENSIONS AND THE WATCH PROFILE DOES NOT', () => {
+  // Playwright passes --disable-extensions by default. The buy profile is the
+  // one a person signs into and keeps a password manager in, so it drops that
+  // flag; the watch profile, signed out at three retailers all day, keeps it.
+  const src = readFileSync(resolve(import.meta.dirname, '../src/browser.ts'), 'utf8');
+  assert.match(src, /this\.persona === 'buy' \? \{ ignoreDefaultArgs: \['--disable-extensions'\] \}/);
+  // And nothing here reads, lists or judges what is installed.
+  assert.doesNotMatch(src, /Extensions\/|manifest\.json|installedExtensions/);
 });
