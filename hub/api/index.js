@@ -3307,32 +3307,48 @@ a { color: var(--accent); text-underline-offset: 2px; }
 
 .navtop { display: flex; align-items: center; gap: 6px; }
 .navtop .brand { flex: 1 1 auto; min-width: 0; }
-.navtoggle, .navopen { flex: none; cursor: pointer; display: flex;
+.navtoggle { flex: none; cursor: pointer; display: flex;
        align-items: center; justify-content: center; width: 34px; height: 34px;
        border: 1px solid var(--line); border-radius: 9px; background: none;
        color: var(--muted); transition: color .12s, background .12s; }
-.navtoggle:hover, .navopen:hover { color: var(--ink); background: rgba(255,255,255,.05); }
-.navtoggle .ico, .navopen .ico { width: 17px; height: 17px; }
+.navtoggle:hover { color: var(--ink); background: rgba(255,255,255,.05); }
+.navtoggle .ico { width: 17px; height: 17px; }
 
-#nav-backdrop { position: fixed; inset: 0; z-index: 40;
-                background: rgba(4, 3, 8, .6); backdrop-filter: blur(2px); }
-#nav-backdrop[hidden] { display: none; }
 
-/* \u2500\u2500 Phone: the same panel, slid in over the content \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */
+/* \u2500\u2500 Phone: the bottom bar \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */
+/* The sidebar is a browser thing. On a phone the thumb lives at the bottom of
+   the screen, and a drawer that has to be opened first is a tap in front of
+   every tap. Same items, same order, laid out as a strip: the group label and
+   the collapse control have no meaning here and are not drawn. */
 @media (max-width: 899px) {
-  .tabs { position: fixed; z-index: 50; left: 0; top: 0; bottom: 0; width: 268px;
-          max-width: 84vw; display: flex; flex-direction: column; gap: 2px;
-          padding: 14px 12px calc(14px + env(safe-area-inset-bottom, 0px));
-          border-right: 1px solid var(--line); background: var(--panel, #0b0a12);
-          transform: translateX(-101%); transition: transform .2s ease;
-          overflow-y: auto; }
-  .tabs.open { transform: none; box-shadow: 0 0 60px rgba(0, 0, 0, .6); }
-  .navtoggle { display: none; }
-  .phonebrand { display: none; }
+  .tabs { position: fixed; left: 0; right: 0; bottom: 0; top: auto; z-index: 50;
+          display: flex; flex-direction: row; align-items: stretch; gap: 0;
+          border-top: 1px solid var(--line); padding: 2px 0 0;
+          /* The home-indicator strip on an iPhone. Without this the last row
+             of labels sits under it and reads as clipped. */
+          padding-bottom: env(safe-area-inset-bottom, 0px);
+          background: var(--panel, #0b0a12); }
+  .tabs .navtop, .navgroup, .navspacer { display: none; }
+  .tab { position: relative; flex: 1 1 0; min-width: 0; border-radius: 0;
+         display: flex; flex-direction: column; align-items: center; gap: 3px;
+         padding: 7px 1px 6px; font-size: 10px; letter-spacing: .01em; }
+  .tab:hover { background: none; }
+  /* Seven items and the longest label is nine characters: labels shrink
+     rather than collide. */
+  .tab .lbl { flex: none; max-width: 100%; }
+  @media (max-width: 400px) { .tab { font-size: 9px; letter-spacing: 0; } }
+  .tab .ico { width: 21px; height: 21px; }
+  .tab.on { color: var(--accent); background: none; font-weight: 600; }
+  .tab.on::before { display: none; }
+  /* A badge on the icon, not a number after the label: at 10px an inline
+     count is indistinguishable from the word it follows. */
+  .tab .count { position: absolute; top: 4px; left: 50%; margin-left: 5px;
+                font-size: 9.5px; line-height: 1; padding: 2px 4px;
+                border-radius: 6px; background: var(--accent-soft); color: var(--ink); }
+  /* Content must clear the bar. 58px is the bar, and the inset is whatever
+     the phone adds under it. */
+  .shell > main { padding-bottom: calc(58px + env(safe-area-inset-bottom, 0px)); }
 }
-/* The hamburger is the phone's only way in, so it is hidden on a browser where
-   the rail is always there. */
-@media (min-width: 900px) { .navopen { display: none; } }
 
 /* \u2500\u2500 Browser: the rail \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */
 @media (min-width: 900px) {
@@ -4235,18 +4251,15 @@ function dashboardPage() {
 ${FONTS}<style>${STYLE}</style></head>
 <body><div class="shell">
   <!-- \u2500\u2500 The sidebar \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-       One nav at every width, matching DNA Card Vault: a rail on a browser
-       that collapses to icons, and the same panel sliding in over the content
-       on a phone. It replaces the bottom bar, which was a second navigation
-       with different manners \u2014 a phone got labels under icons in a strip, a
-       browser got a list, and neither looked like the vault the account also
-       lives in.
+       One list of items, drawn two ways: a rail on a browser, matching DNA
+       Card Vault, that collapses to icons; and a bottom bar on a phone, where
+       the thumb is. The drawer that briefly replaced the bar was a tap in
+       front of every tap and lasted one evening.
 
        Grouped, because seven flat items is a list and four-plus-two is a
        shape: the first group is what the machine is doing, the second is what
        is waiting on a person, and Settings sits apart at the bottom where it
        is not in the way of either. -->
-  <div id="nav-backdrop" hidden></div>
   <nav class="tabs" id="nav" aria-label="Sections">
     <div class="navtop">
       <div class="brand"><span class="mark"></span><span class="brand-name"><b>Phantom</b> <i>by DNA</i></span></div>
@@ -4268,8 +4281,6 @@ ${FONTS}<style>${STYLE}</style></head>
     <!-- The wordmark on a phone. The side panel carries it on a browser; a
          bottom bar cannot spare the width, and a nameless app is a worse
          trade than a header line. -->
-    <button class="navopen" id="nav-open" type="button" aria-label="Menu"
-            aria-expanded="false" aria-controls="nav">${ICONS.menu}</button>
     <div class="brand phonebrand"><span class="mark"></span><span class="brand-name"><b>Phantom</b> <i>by DNA</i></span></div>
     <div>
       <span class="sub" id="summary">loading\u2026</span>
@@ -8649,46 +8660,18 @@ function showTab(name) {
 }
 
 for (const tab of document.querySelectorAll('.tab')) {
-  tab.addEventListener('click', () => { showTab(tab.dataset.tab); closeNav(); });
+  tab.addEventListener('click', () => showTab(tab.dataset.tab));
 }
 
 /*
- * \u2500\u2500 The sidebar \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+ * \u2500\u2500 The sidebar's one control \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
  *
- * One panel at both widths. On a phone it slides in over the content and shuts
- * the moment you pick something \u2014 a drawer you have to dismiss yourself is a
- * drawer people stop opening. On a browser it is always there and collapses to
- * icons, and the choice is remembered per device.
- *
- * localStorage is wrapped because it throws outright in a few contexts (a
- * private window with site data blocked, an embedded preview). A menu that
- * cannot remember its width is a small loss; a menu that throws on load and
- * takes the page's scripts down with it is the whole app.
+ * On a browser the rail collapses to icons and the choice is remembered per
+ * device. localStorage is wrapped because it throws outright in a few contexts
+ * (a private window with site data blocked); a menu that cannot remember its
+ * width is a small loss, and one that throws on load and takes the page's
+ * scripts down with it is the whole app.
  */
-const navEl = document.getElementById('nav');
-const navBackdrop = document.getElementById('nav-backdrop');
-
-function closeNav() {
-  navEl.classList.remove('open');
-  navBackdrop.hidden = true;
-  document.getElementById('nav-open').setAttribute('aria-expanded', 'false');
-}
-function openNav() {
-  navEl.classList.add('open');
-  navBackdrop.hidden = false;
-  document.getElementById('nav-open').setAttribute('aria-expanded', 'true');
-}
-
-document.getElementById('nav-open').addEventListener('click', () => {
-  navEl.classList.contains('open') ? closeNav() : openNav();
-});
-navBackdrop.addEventListener('click', closeNav);
-// Escape closes it, because a full-height panel over the content is a modal
-// whether or not it was built as one.
-document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && navEl.classList.contains('open')) closeNav();
-});
-
 function setCollapsed(on) {
   document.body.classList.toggle('nav-collapsed', on);
   const btn = document.getElementById('nav-collapse');

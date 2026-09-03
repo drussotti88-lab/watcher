@@ -1633,48 +1633,53 @@ test('and when it is over it offers another', async () => {
   assert.equal($(h, '#sweep-now').disabled, false);
 });
 
-// ── The sidebar ──────────────────────────────────────────────────────────────
+// ── The bottom bar, and the rail ─────────────────────────────────────────────
 //
-// These three replace the bottom-bar tests. The bar was not broken — it was
-// replaced, on 3 Sep 2026, because the app had two navigations with different
-// manners (labels-under-icons in a strip on a phone, a list on a browser) and
-// neither looked like DNA Card Vault, which is the other half of the same
-// account. What the old tests protected still matters and is kept: nothing
-// off-screen, nothing under the home indicator, every item named.
+// One list of items, drawn two ways. On a phone it is the bottom bar, where
+// the thumb is; the drawer that briefly replaced it on 3 Sep 2026 was a tap in
+// front of every tap and lasted one evening. On a browser it is a rail that
+// collapses to icons.
 
-test('THE PHONE MENU IS A DRAWER THAT STARTS CLOSED', async () => {
-  // Off-canvas, not hidden: it has to animate in, and a display:none panel
-  // cannot. The old bug this inherits is that nothing may sit off the right
-  // edge with no way to reach it — here the way to reach it is the hamburger,
-  // which is why that button is not allowed to disappear on a phone.
+test('NO TAB CAN RUN OFF THE EDGE OF A PHONE', async () => {
+  // The original bug: six tabs are wider than a phone and the sixth was simply
+  // gone — no scrollbar, no affordance, just off the right-hand side. Fixed by
+  // the seven of them sharing the width; the rule is that nothing is off-screen.
+  const h = await boot();
+  const style = h.doc.querySelector('style').textContent;
+  const phone = /@media \(max-width: 899px\) \{([\s\S]*?)\n\}/.exec(style)?.[1] ?? '';
+  assert.match(phone, /\.tab \{[^}]*flex:\s*1 1 0/, 'every tab takes an equal share');
+  assert.match(phone, /\.tab \{[^}]*min-width:\s*0/, 'and none of them can refuse to shrink');
+});
+
+test('THE PHONE NAV IS AT THE BOTTOM, WHERE THE THUMB IS', async () => {
   const h = await boot();
   const style = h.doc.querySelector('style').textContent;
   const phone = /@media \(max-width: 899px\) \{([\s\S]*?)\n\}/.exec(style)?.[1] ?? '';
   assert.match(phone, /\.tabs \{[^}]*position:\s*fixed/);
-  assert.match(phone, /\.tabs \{[^}]*transform:\s*translateX\(-101%\)/, 'parked off-canvas');
-  assert.match(style, /\.tabs\.open \{[^}]*transform:\s*none/, 'and slides in');
-  assert.equal(h.doc.getElementById('nav').classList.contains('open'), false);
-  assert.equal(h.doc.getElementById('nav-backdrop').hidden, true);
+  assert.match(phone, /\.tabs \{[^}]*bottom:\s*0/);
+  assert.match(phone, /\.tabs \{[^}]*top:\s*auto/, 'and explicitly not stuck to the top');
+  // No drawer, no hamburger: the bar is always there.
+  assert.equal(h.doc.getElementById('nav-open'), null);
+  assert.equal(h.doc.getElementById('nav-backdrop'), null);
 });
 
-test('THE DRAWER CLEARS THE HOME INDICATOR', async () => {
-  // Kept from the bottom bar: on an iPhone the last item sat under the home
-  // indicator and read as clipped. A full-height drawer has the same edge.
+test('CONTENT CLEARS THE BOTTOM BAR, INCLUDING THE HOME INDICATOR', async () => {
+  // A fixed bar with nothing reserved for it hides the last card on the page,
+  // and on an iPhone the labels sit under the home indicator and read as
+  // clipped. Both are the same one-line mistake.
   const h = await boot();
   const style = h.doc.querySelector('style').textContent;
   const phone = /@media \(max-width: 899px\) \{([\s\S]*?)\n\}/.exec(style)?.[1] ?? '';
-  assert.match(phone, /env\(safe-area-inset-bottom/);
+  assert.match(phone, /padding-bottom:\s*calc\(58px \+ env\(safe-area-inset-bottom/);
+  assert.match(phone, /\.tabs \{[^}]*padding-bottom:\s*env\(safe-area-inset-bottom/);
 });
 
-test('THE HAMBURGER IS THE ONLY WAY IN ON A PHONE, SO IT CANNOT BE HIDDEN THERE', async () => {
+test('the rail-only furniture is not drawn on a phone', async () => {
+  // The group label and the collapse control mean nothing in a strip.
   const h = await boot();
   const style = h.doc.querySelector('style').textContent;
-  const open = h.doc.getElementById('nav-open');
-  assert.ok(open, 'the button exists');
-  assert.equal(open.getAttribute('aria-controls'), 'nav');
-  assert.equal(open.getAttribute('aria-expanded'), 'false');
-  // Hidden on a browser, where the rail is always there — and only there.
-  assert.match(style, /@media \(min-width: 900px\) \{[\s\S]{0,120}\.navopen \{ display: none/);
+  const phone = /@media \(max-width: 899px\) \{([\s\S]*?)\n\}/.exec(style)?.[1] ?? '';
+  assert.match(phone, /\.tabs \.navtop, \.navgroup, \.navspacer \{ display: none/);
 });
 
 test('THE RAIL COLLAPSES TO ICONS, AND EVERY ITEM STILL HAS A NAME', async () => {
