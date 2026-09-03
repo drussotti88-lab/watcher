@@ -25,6 +25,7 @@ import type { Browser } from './browser.ts';
 import { isQueue, queueScope } from './challenge.ts';
 import { DEFAULT_SETTINGS, type Hub, type Mission, type ObservationOut, type RunOut, type Settings } from './hub.ts';
 import { Pacer, isDue, nextUp } from './rate.ts';
+import { quietInterval } from './quiet.ts';
 import { readListing, type Reading } from './read.ts';
 import type { Activity } from './activity.ts';
 import { unknownRead } from './readers/types.ts';
@@ -405,6 +406,15 @@ export interface WatchDeps {
    * from.
    */
   windowMs?: number;
+  /**
+   * Is a drop window open?
+   *
+   * When one is, nothing is quiet: every listing is read at the interval its
+   * mission asked for, however long it has been sitting still. Decided in
+   * drop.ts and passed in, so there is one answer to "is a drop on" in the
+   * process rather than two that can disagree.
+   */
+  dropOpen?: boolean;
   /** Injectable so draining can be tested without real time passing. */
   wait?: (ms: number) => Promise<void>;
   /** The per-check ceiling. Injectable so a hang can be tested in milliseconds. */
@@ -451,10 +461,15 @@ export interface PassResult {
  * next check is twenty minutes out is not worth holding a pass open for, and
  * waiting on it would starve the ones that are ready.
  */
-function soonestAllowed(missions: Mission[], pacer: Pacer, now: number): number | null {
+function soonestAllowed(
+  missions: Mission[],
+  pacer: Pacer,
+  now: number,
+  dropOpen = false,
+): number | null {
   let soonest: number | null = null;
   for (const m of missions) {
-    if (!(m.checkNow === true || isDue(m.lastCheckedAt || null, m.checkEverySeconds, now))) continue;
+    if (!(m.checkNow === true || isDue(m.lastCheckedAt || null, quietInterval(m, now, dropOpen), now))) continue;
     const wait = pacer.waitMs(m.retailer, now);
     if (wait <= 0) return 0;
     if (soonest === null || wait < soonest) soonest = wait;
@@ -492,6 +507,7 @@ export async function pass(missions: Mission[], pacer: Pacer, deps: WatchDeps): 
   // it. Zero means the old behaviour — one round and out — so every existing
   // test still describes what it always did.
   const windowMs = deps.windowMs ?? 0;
+  const dropOpen = deps.dropOpen === true;
   const wait = deps.wait ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const started = now();
 
@@ -505,19 +521,19 @@ export async function pass(missions: Mission[], pacer: Pacer, deps: WatchDeps): 
       }
     }
 
-    let mission = nextUp(remaining, pacer, now());
+    let mission = nextUp(remaining, pacer, now(), dropOpen);
 
     // Nothing allowed right now. That is not the same as nothing to do: the
     // usual reason is a retailer's spacing, and the whole point of the window
     // is to spend it waiting for that rather than idling past it.
     if (!mission && windowMs > 0) {
       const spent = now() - started;
-      const soonest = soonestAllowed(remaining, pacer, now());
+      const soonest = soonestAllowed(remaining, pacer, now(), dropOpen);
       // Only worth waiting if the wait fits inside what is left of the window,
       // and only for a mission that is actually due to be checked.
       if (soonest !== null && spent + soonest < windowMs) {
         await wait(soonest);
-        mission = nextUp(remaining, pacer, now());
+        mission = nextUp(remaining, pacer, now(), dropOpen);
       }
     }
 
@@ -715,7 +731,7 @@ export async function pass(missions: Mission[], pacer: Pacer, deps: WatchDeps): 
   for (const m of missions) {
     if (done.has(m.id)) continue;
     if (named.has(m.retailer)) continue;
-    if (!isDue(m.lastCheckedAt || null, m.checkEverySeconds, nowMs)) continue;
+    if (!isDue(m.lastCheckedAt || null, quietInterval(m, nowMs), nowMs)) continue;
     const wait = pacer.waitMs(m.retailer, nowMs);
     if (wait <= 0) continue;
     const label = pacer.standingDown(m.retailer, nowMs) ? 'standing down' : 'pacing';

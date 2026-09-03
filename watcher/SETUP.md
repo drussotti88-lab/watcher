@@ -154,6 +154,7 @@ the first lines. Almost everything announces itself there.
 | `challenged — standing down` | A shop asked to check you're human. It backs off and tries later. Nothing is broken. |
 | `stopped on the line before the button` | `live` is false. That's the dry run working. |
 | A gap in the log | It batches what it sends. A minute or two of quiet is it working. |
+| A product it checked yesterday not being checked now | Phantom reads a listing less often the longer it says the same thing — down to every half hour for one that has not moved in a week. Anything in stock, armed, near its release date, or inside a drop window is always read at full speed. |
 | Chrome says "Restore pages?" | Something killed it rather than stopping it. Dismiss it; use **3** next time. |
 | `that page has refused N times running` | One product page keeps serving a bot check. Phantom rests that page, for longer each time, and carries on with the rest. |
 | `updating: … restarting` | It found a newer version and is replacing itself. The window comes back on its own. |

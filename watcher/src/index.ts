@@ -921,6 +921,9 @@ async function runPasses(once: boolean): Promise<void> {
           // time to pick up fresh missions and settings on schedule rather
           // than drifting a little later every cycle.
           windowMs: Math.round(config.intervalSec * 1000 * 0.9),
+          // During a drop, nothing rests: every listing is read at the
+          // interval its mission asked for, however long it has been still.
+          dropOpen: window.open,
           urgent: () => urgent,
         });
         const parts = [`${result.checked} checked`];

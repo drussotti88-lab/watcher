@@ -20,6 +20,8 @@
  * without waiting and without flakiness.
  */
 
+import { quietInterval } from './quiet.ts';
+
 export interface Pacing {
   /** Minimum gap between two requests to the same retailer. */
   minSpacingMs: number;
@@ -235,10 +237,18 @@ export function nextUp<
     checkEverySeconds: number;
     lastCheckedAt: string;
     checkNow?: boolean;
+    state?: string;
+    lastChangedAt?: string;
+    armed?: boolean;
+    releaseDate?: string | null;
   },
->(missions: T[], pacer: Pacer, now: number): T | null {
+>(missions: T[], pacer: Pacer, now: number, dropOpen = false): T | null {
   const due = missions
-    .filter((m) => m.checkNow === true || isDue(m.lastCheckedAt || null, m.checkEverySeconds, now))
+    // The interval a quiet listing has EARNED, which is its own when anything
+    // is happening and a multiple of it when nothing has been for hours. See
+    // quiet.ts for why: 3,194 reads a day from one house got that house's
+    // ordinary browsing challenged by two retailers at once.
+    .filter((m) => m.checkNow === true || isDue(m.lastCheckedAt || null, quietInterval(m, now, dropOpen), now))
     // Note what this filter is NOT excepting. A test run jumps the queue of
     // missions; it does not jump the retailer's budget. Letting a button in a
     // web page bypass the pacing is how you get a bot check while looking at

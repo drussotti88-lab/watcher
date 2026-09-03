@@ -61,6 +61,14 @@ export interface Mission {
    */
   availableQuantity?: number | null;
   lastCheckedAt: string;
+  /**
+   * When the reading last CHANGED, as opposed to when it was last taken.
+   *
+   * The Hub has always sent this and Phantom has always ignored it. It is
+   * what quiet.ts uses to stop reading a page that has said the same thing
+   * for a week as often as one that moved ten minutes ago.
+   */
+  lastChangedAt?: string;
   /** Target's published on-sale date, when it has one. Drives waking up. */
   releaseDate?: string | null;
 }

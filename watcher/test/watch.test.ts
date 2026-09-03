@@ -371,6 +371,41 @@ test('two retailers are checked in the same pass', async () => {
   assert.deepEqual(result.waitingOn, []);
 });
 
+test('A QUIET LISTING IS SKIPPED, AND A DROP WINDOW WAKES EVERYTHING UP', async () => {
+  // The pass is where quiet.ts actually saves the traffic, so it is proved
+  // here and not only in the unit tests: a listing that has said the same
+  // thing for two days is not due at sixty seconds, and the same listing is
+  // due the moment a drop window opens.
+  const { hub } = recorder();
+  const twoDaysStill = {
+    lastCheckedAt: new Date(T0 - 70_000).toISOString(),
+    lastChangedAt: new Date(T0 - 48 * 3_600_000).toISOString(),
+    checkEverySeconds: 60,
+  };
+
+  const quiet = await pass(
+    [mission({ id: 1, listingId: 21, ...twoDaysStill })],
+    new Pacer(STEADY, () => 0),
+    { browser, hub, now: () => T0, read: reads(() => reading()) },
+  );
+  assert.equal(quiet.checked, 0, 'nothing worth asking about');
+
+  const live = await pass(
+    [mission({ id: 1, listingId: 21, ...twoDaysStill })],
+    new Pacer(STEADY, () => 0),
+    { browser, hub, now: () => T0, read: reads(() => reading()), dropOpen: true },
+  );
+  assert.equal(live.checked, 1, 'a drop window reads everything at its own interval');
+
+  // And in stock is never quiet, drop or no drop.
+  const inStock = await pass(
+    [mission({ id: 1, listingId: 21, ...twoDaysStill, state: 'in' })],
+    new Pacer(STEADY, () => 0),
+    { browser, hub, now: () => T0, read: reads(() => reading()) },
+  );
+  assert.equal(inStock.checked, 1);
+});
+
 test('a challenge drops that retailer for the rest of the pass', async () => {
   // Retrying into a bot check is how a soft flag becomes a hard block.
   const { hub, runs } = recorder();
