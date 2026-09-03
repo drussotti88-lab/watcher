@@ -4113,31 +4113,69 @@ test('ARRIVING BY INVITE OPENS THE DOOR ON "CHOOSE A PASSWORD"', async () => {
   assert.match($(h, '#wiz-step').textContent!, /1 \/ 5/);
 });
 
-test('AN ACCOUNT THAT MAY BUY, WITH NO PHANTOM YET, IS TOLD WHERE BUYING HAPPENS', async () => {
-  // The right to arm is granted at the owner's terminal; the machine that
-  // acts on it is the tester's own. The door says so, once, until a Phantom
-  // carrying their token has checked in — then the step goes.
-  const h = await boot({ ...DASHBOARD, canCurate: false, canArm: true, agentSeenAt: null }, 'https://hub.test/?welcome=1');
-  const titles = () => $(h, '#wiz-title').textContent;
+test('AN ACCOUNT THAT MAY BUY IS HANDED PHANTOM BY THE PAGE ITSELF', async () => {
+  // The invite link is the whole handover only if the zip and the token come
+  // from the app. A tester who may buy gets a step in the door and a card in
+  // Settings, both with the download, the address, a token minted on press,
+  // the steps, and a line that goes green once their Phantom reports.
+  const zip = { sha: 'abc1234', builtAt: '2026-09-03T21:04:41Z', files: 119, bytes: 328129, launchers: 14 };
+  const h = await boot({ ...DASHBOARD, canCurate: false, canArm: true, agentSeenAt: null, phantomZip: zip }, 'https://hub.test/?welcome=1');
   const next = () => ($(h, '#wiz-next') as HTMLButtonElement).click();
   assert.match($(h, '#wiz-step').textContent!, /1 \/ 6/, 'one more step than a member');
   next(); next(); next(); next();
-  assert.equal(titles(), 'Phantom on your computer');
-  const text = $(h, '#wiz-body').textContent!;
-  assert.match(text, /your own computer/);
-  assert.match(text, /1 - Set up/);
-  assert.match(text, /own card/);
+  assert.equal($(h, '#wiz-title').textContent, 'Phantom on your computer');
+  const body = $(h, '#wiz-body');
+  const dl = body.querySelector('a[download]') as HTMLAnchorElement;
+  assert.ok(dl, 'a download button');
+  assert.match(dl.getAttribute('href')!, /\/api\/phantom\.zip$/);
+  assert.match(body.textContent!, /version abc1234/);
+  assert.match(body.textContent!, /hub\.test/, 'the address, to paste into 1 - Set up');
+  assert.match(body.textContent!, /9 - Sign in to Target/);
+  assert.match(body.textContent!, /No Phantom of yours has checked in yet/);
+  assert.equal(body.textContent!.includes('Your token'), false, 'nothing minted until asked');
+
+  // Press Show my token: one POST, the token appears, and survives a re-render.
+  h.reply('POST /api/me/watcher-token', { token: 'tok_abcdefghijklmnopqrstuvwxyz0123456789ABCDEF', hubUrl: 'https://hub.test' });
+  const show = [...body.querySelectorAll('button')].find((b) => b.textContent === 'Show my token') as HTMLButtonElement;
+  assert.ok(show);
+  show.click();
+  await h.settle();
+  const posted = h.calls.filter((c) => c.path === '/api/me/watcher-token');
+  assert.equal(posted.length, 1);
+  assert.equal(posted[0]!.method, 'POST');
+  assert.match($(h, '#wiz-body').textContent!, /tok_abcdefghijklmnopqrstuvwxyz0123456789ABCDEF/);
+  assert.match($(h, '#wiz-body').textContent!, /Shown once/);
+  h.dom.window.eval('renderWizard()');
+  assert.match($(h, '#wiz-body').textContent!, /tok_abcdefghijklmnopqrstuvwxyz/, 'a refresh must not lose it');
+
+  // The last step no longer promises that nothing can spend money.
   next();
-  assert.equal(titles(), 'Get the alerts');
+  assert.equal($(h, '#wiz-title').textContent, 'Get the alerts');
   assert.match($(h, '#wiz-body').textContent!, /only the Phantom on your computer can/);
 
-  // Their Phantom has reported: the step is gone, the count is a member's.
-  const h2 = await boot({ ...DASHBOARD, canCurate: false, canArm: true, agentSeenAt: '2026-09-03T12:00:00Z' }, 'https://hub.test/?welcome=1');
-  assert.match($(h2, '#wiz-step').textContent!, /1 \/ 5/);
+  // Settings carries the same panel, so skipping the tour loses nothing.
+  const card = h.doc.getElementById('get-phantom')!;
+  assert.equal(card.hidden, false);
+  assert.ok(card.querySelector('a[download]'));
+  assert.match(card.textContent!, /Phantom on your computer/);
 
-  // A member — no right to buy — never sees it, whatever their Phantom did.
-  const h3 = await boot({ ...DASHBOARD, canCurate: false, canArm: false, agentSeenAt: null }, 'https://hub.test/?welcome=1');
+  // Once their Phantom has reported, the line is green and the step stays,
+  // because the token and the download are still theirs to come back for.
+  const h2 = await boot({ ...DASHBOARD, canCurate: false, canArm: true, agentSeenAt: new Date(Date.now() - 20_000).toISOString(), phantomZip: zip }, 'https://hub.test/?welcome=1');
+  assert.match($(h2, '#wiz-step').textContent!, /1 \/ 6/);
+  assert.match(h2.doc.getElementById('get-phantom')!.textContent!, /checked in 20s ago/);
+
+  // A member never sees it; nor does the owner, who has a Phantom already.
+  const h3 = await boot({ ...DASHBOARD, canCurate: false, canArm: false, agentSeenAt: null, phantomZip: zip }, 'https://hub.test/?welcome=1');
   assert.match($(h3, '#wiz-step').textContent!, /1 \/ 5/);
+  assert.equal(h3.doc.getElementById('get-phantom')!.hidden, true);
+  const h4 = await boot({ ...DASHBOARD, canCurate: true, canArm: true, phantomZip: zip }, 'https://hub.test/?welcome=1');
+  assert.equal(h4.doc.getElementById('get-phantom')!.hidden, true);
+
+  // No zip built into this Hub: the button is replaced by an honest sentence.
+  const h5 = await boot({ ...DASHBOARD, canCurate: false, canArm: true, agentSeenAt: null, phantomZip: null }, 'https://hub.test/?welcome=1');
+  assert.equal(h5.doc.getElementById('get-phantom')!.querySelector('a[download]'), null);
+  assert.match(h5.doc.getElementById('get-phantom')!.textContent!, /not built into this app yet/);
 });
 
 test('mismatched passwords do not leave the page', async () => {

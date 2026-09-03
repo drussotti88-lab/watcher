@@ -1018,6 +1018,7 @@ textarea { min-height: 64px; resize: vertical; }
 .msg { font-size: 13px; min-height: 18px; }
 .msg.bad { color: var(--alert); }
 .msg.good { color: var(--in); }
+.sub.good { color: var(--in); }
 .empty { color: var(--muted); padding: 38px 16px; text-align: center;
          border: 1px dashed var(--line-strong); border-radius: var(--r-card); }
 .empty strong { color: var(--ink); display: block; margin-bottom: 5px;
@@ -1715,6 +1716,7 @@ ${FONTS}<style>${STYLE}</style></head>
          truth, which is that it belongs to someone else. -->
     <div id="machine-settings">
     <h2>Phantom</h2>
+    <div class="card" id="get-phantom" style="margin-bottom:10px" hidden></div>
     <div class="card">
       <div class="row">
         <div class="grow">
@@ -3865,6 +3867,7 @@ function render() {
   const note = document.getElementById('member-note');
   if (machine) machine.hidden = DATA.canArm !== true;
   if (note) note.hidden = DATA.canArm === true;
+  renderMachinePanels();
 
   // The sweep button says which of three things is true, because "queued" for
   // forty minutes reads as stuck. A sweep is thirteen queries reported one at a
@@ -4421,34 +4424,153 @@ function wizSteps() {
   // one thing this page cannot do for them is the thing they were given the
   // right to do. Say where it happens. Once their Phantom has reported, the
   // step goes; it has done its job.
-  if (DATA.canArm === true && !DATA.agentSeenAt) {
-    steps.push({ title: 'Phantom on your computer', render: wizMachine });
+  if (needsMachinePanel()) {
+    steps.push({ title: 'Phantom on your computer', render: renderMachineSetup });
   }
   steps.push({ title: 'Get the alerts', render: wizAlerts });
   return steps;
 }
 
-function wizMachine(body) {
+/*
+ * ── Phantom, self-served ──────────────────────────────────────────────────
+ *
+ * For an account that may buy, the one thing this page cannot do is the
+ * thing they were given the right to do — and until 3 Sep the zip and the
+ * token travelled by hand, which made the invite link half a handover. This
+ * panel is the other half: the download, the token, the address, the steps,
+ * and a line that turns green when their Phantom first reports.
+ *
+ * Rendered in two places from one function (the front door, and Settings)
+ * so the tester who skipped the tour can still find it. The minted token is
+ * kept in a variable: the page re-renders every thirty seconds and the token
+ * is shown exactly once by the server, so losing it to a refresh would mean
+ * minting again and retiring the one they were halfway through typing.
+ */
+let MINTED = null;  // { token, hubUrl } — this page load only, never stored
+
+function needsMachinePanel() {
+  // The owner has a Phantom and does not need to be told how to get one.
+  return DATA.canArm === true && DATA.canCurate !== true;
+}
+
+function copyButton(text, label) {
+  const b = el('button', null, label || 'Copy');
+  b.type = 'button';
+  b.addEventListener('click', () => {
+    const done = () => { b.textContent = 'Copied'; setTimeout(() => { b.textContent = label || 'Copy'; }, 1500); };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, () => { b.textContent = 'Select and copy it'; });
+    } else {
+      b.textContent = 'Select and copy it';
+    }
+  });
+  return b;
+}
+
+function renderMachineSetup(body) {
+  body.textContent = '';
+  const zip = DATA.phantomZip;
+  const seen = DATA.agentSeenAt;
+
   const p1 = el('p');
   p1.textContent =
-    'Your account may buy. Buying does not happen on this page. It happens on ' +
-    'your own computer, where a copy of Phantom runs signed into your own ' +
-    'Target account, on your own card.';
+    'Your account may buy. Buying happens on your own computer, where Phantom ' +
+    'runs signed into your own Target account, on your own card. Nothing on ' +
+    'this page spends money.';
   body.appendChild(p1);
 
-  const list = el('ul');
-  for (const line of [
-    'You get a zip and a token from whoever gave you this account.',
-    'Unzip it. Double-click 1 - Set up, then 2 - Start watching.',
-    'The SETUP file in the zip covers signing in to Target, and what to do on a Walmart drop night.',
-  ]) list.appendChild(el('li', null, line));
-  body.appendChild(list);
+  const need = el('p', 'sub');
+  need.textContent = 'You need Node (the LTS from nodejs.org) and Google Chrome installed first.';
+  body.appendChild(need);
 
-  const p2 = el('p', 'sub');
-  p2.style.marginTop = '12px';
-  p2.textContent =
-    'No Phantom of yours has checked in yet. This step disappears once one has.';
-  body.appendChild(p2);
+  // ── 1. The program ──
+  const dl = el('div', 'actions');
+  dl.style.marginTop = '12px';
+  if (zip) {
+    const a = el('a', 'btn primary', 'Download Phantom');
+    a.href = '/api/phantom.zip';
+    a.setAttribute('download', '');
+    dl.appendChild(a);
+    dl.appendChild(el('span', 'sub', 'zip, ' + Math.round(zip.bytes / 1024) + 'kb, version ' + zip.sha));
+  } else {
+    dl.appendChild(el('span', 'sub', 'The download is not built into this app yet; ask Roberto for the zip.'));
+  }
+  body.appendChild(dl);
+
+  // ── 2. The address and the token ──
+  const addr = el('div', 'actions');
+  addr.style.marginTop = '10px';
+  addr.appendChild(el('span', 'sub', 'App address'));
+  addr.appendChild(el('code', 'mono', location.origin));
+  addr.appendChild(copyButton(location.origin));
+  body.appendChild(addr);
+
+  const tok = el('div', 'actions');
+  tok.style.marginTop = '8px';
+  if (MINTED) {
+    tok.appendChild(el('span', 'sub', 'Your token'));
+    const c = el('code', 'mono', MINTED.token);
+    c.style.wordBreak = 'break-all';
+    tok.appendChild(c);
+    tok.appendChild(copyButton(MINTED.token));
+    body.appendChild(tok);
+    const warn = el('p', 'sub');
+    warn.textContent = 'Shown once. It is not stored anywhere you can read it back; if you lose it, press Show my token again and use the new one.';
+    body.appendChild(warn);
+  } else {
+    const b = el('button', 'primary', 'Show my token');
+    b.type = 'button';
+    const msg = el('span', 'msg');
+    b.addEventListener('click', () => {
+      withButton(b, 'Making one…', msg, async () => {
+        MINTED = await api('POST', '/api/me/watcher-token');
+        renderMachinePanels();
+      });
+    });
+    tok.appendChild(b);
+    tok.appendChild(msg);
+    body.appendChild(tok);
+    const why = el('p', 'sub');
+    why.textContent = '1 - Set up asks for the address and this token. Each press makes a new token and retires the old one.';
+    body.appendChild(why);
+  }
+
+  // ── 3. The steps ──
+  const ol = el('ol');
+  ol.style.marginTop = '12px';
+  for (const line of [
+    'Unzip it somewhere you will find again. Not a synced cloud folder.',
+    'Double-click 1 - Set up. Paste the address and the token when it asks.',
+    'Double-click 2 - Start watching. Leave both windows open.',
+    'Double-click 9 - Sign in to Target and sign in to your own account there.',
+    'Back here: set a daily spend cap in Settings, then arm a mission with a price ceiling.',
+  ]) ol.appendChild(el('li', null, line));
+  body.appendChild(ol);
+
+  // ── 4. Proof of life ──
+  const status = el('p', seen ? 'sub good' : 'sub');
+  status.style.marginTop = '12px';
+  status.textContent = seen
+    ? 'Your Phantom checked in ' + ago(seen) + '.'
+    : 'No Phantom of yours has checked in yet. This line updates by itself.';
+  body.appendChild(status);
+}
+
+/** Every place the panel lives, in one go. */
+function renderMachinePanels() {
+  const card = document.getElementById('get-phantom');
+  if (card) {
+    card.hidden = !needsMachinePanel();
+    if (!card.hidden) {
+      card.textContent = '';
+      card.appendChild(el('div', 'name', 'Phantom on your computer'));
+      const inner = el('div');
+      inner.style.marginTop = '8px';
+      card.appendChild(inner);
+      renderMachineSetup(inner);
+    }
+  }
+  renderWizard();
 }
 
 function wizPassword(body) {

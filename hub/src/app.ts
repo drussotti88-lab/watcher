@@ -38,6 +38,7 @@ import { applyFilters, dedupe } from './filter.ts';
 import { probeUrl } from './fetcher.ts';
 import {
   hashPassword,
+  hashToken,
   identify,
   mintSession,
   readInvite,
@@ -58,6 +59,7 @@ import { loginPage, ssoPage, invitePage, dashboardPage } from './page.ts';
 import { identifyListing } from './parsers/identify.ts';
 import { MANIFEST, SERVICE_WORKER, iconResponse } from './pwa.ts';
 import { capabilityTable } from './capabilities.ts';
+import { PHANTOM_ZIP_BASE64, PHANTOM_ZIP_META } from './generated/phantom-zip.ts';
 
 /**
  * The source a Phantom-side sweep reports into.
@@ -418,6 +420,8 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
         // Whether alerts have anywhere to go. A boolean, never the URL.
         discord: Boolean(env.DISCORD_WEBHOOK_URL),
         discordWins: Boolean(env.DISCORD_WINS_WEBHOOK_URL),
+        // What the Download button would hand over. Meta only, never bytes.
+        phantomZip: PHANTOM_ZIP_BASE64 ? PHANTOM_ZIP_META : null,
       });
     }
 
@@ -880,6 +884,50 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       if (pw.length < 10) return json({ error: 'use at least 10 characters' }, 400);
       const ok = await store.setPasswordById(db, userId, await hashPassword(pw));
       return ok ? json({ ok: true }) : json({ error: 'no such account' }, 404);
+    }
+
+    /*
+     * ── Phantom, self-served ─────────────────────────────────────────────
+     *
+     * The invite link is meant to be the whole handover, and it cannot be
+     * while the zip and the token still travel by hand. So the front door
+     * offers both, to a signed-in BROWSER, and only to an account that MAY
+     * BUY: a member's watching is done by the owner's Phantom, so a copy of
+     * the program is a thing they have no use for, and the token is the
+     * credential a Phantom presents. An agent token cannot mint a token —
+     * that would let one Phantom breed another.
+     *
+     * The token is returned exactly once, in this response, and stored as a
+     * hash. Asking again mints a new one and retires this one, which is the
+     * same rule the CLI has always had.
+     */
+    if (request.method === 'GET' && path === '/api/phantom.zip') {
+      if (caller.kind !== 'browser') return json({ error: 'sign in first' }, 403);
+      if (!(await store.canArm(db, userId))) {
+        return json({ error: 'watching needs no Phantom of your own; the owner’s does the reading' }, 403);
+      }
+      if (!PHANTOM_ZIP_BASE64) return json({ error: 'no zip has been built into this Hub yet' }, 404);
+      return new Response(Buffer.from(PHANTOM_ZIP_BASE64, 'base64'), {
+        headers: {
+          'Content-Type': 'application/zip',
+          'Content-Disposition': `attachment; filename="Phantom-${PHANTOM_ZIP_META.sha}.zip"`,
+          'Cache-Control': 'private, no-store',
+        },
+      });
+    }
+
+    if (request.method === 'POST' && path === '/api/me/watcher-token') {
+      if (caller.kind !== 'browser') return json({ error: 'sign in first' }, 403);
+      if (!(await store.canArm(db, userId))) {
+        return json({ error: 'this account watches; it has no Phantom to give a token to' }, 403);
+      }
+      // 32 bytes of randomness, base64url — the CLI's recipe exactly.
+      const bytes = new Uint8Array(32);
+      crypto.getRandomValues(bytes);
+      const token = Buffer.from(bytes).toString('base64url');
+      const ok = await store.setUserTokenById(db, userId, await hashToken(token));
+      if (!ok) return json({ error: 'no such account' }, 404);
+      return json({ token, hubUrl: url.origin }, 200, { 'Cache-Control': 'private, no-store' });
     }
 
     if (request.method === 'GET' && path === '/api/settings') {

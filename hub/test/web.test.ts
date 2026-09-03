@@ -687,6 +687,60 @@ test('THE INVITE LINK SIGNS YOU IN, AND SETTING A PASSWORD ENDS IT', async () =>
   assert.equal(login.status, 303);
 });
 
+test('THE FRONT DOOR HANDS OVER PHANTOM AND A TOKEN, TO AN ACCOUNT THAT MAY BUY', async () => {
+  // The invite link is the whole handover only if the zip and the token
+  // come from the app. Both do, to a signed-in browser, only when the
+  // account may arm — and the token it mints is a real one: the very next
+  // request presenting it is that person's Phantom.
+  const { db } = await setup();
+  const userId = await store.upsertUser(db, 'machinetester', await hashPassword('temporary'));
+  const hash = (await store.passwordHashById(db, userId))!;
+  const invite = await mintInvite(PASSWORD, userId, hash);
+  const door = await call(db, 'POST', '/api/invite', { body: { token: invite } });
+  const session = decodeURIComponent(/hub_session=([^;]+)/.exec(door.headers.get('set-cookie') ?? '')![1]!);
+
+  // A member: no Phantom of their own, so no zip and no token.
+  assert.equal((await call(db, 'GET', '/api/phantom.zip', { cookie: session })).status, 403);
+  assert.equal((await call(db, 'POST', '/api/me/watcher-token', { cookie: session })).status, 403);
+
+  // Granted at the terminal.
+  await store.setUserCanArm(db, 'machinetester', true);
+
+  const zip = await createHandler(db, env)(
+    new Request('https://hub.test/api/phantom.zip', { headers: { cookie: `${COOKIE_NAME}=${session}` } }),
+  );
+  assert.equal(zip.status, 200);
+  assert.equal(zip.headers.get('content-type'), 'application/zip');
+  assert.match(zip.headers.get('content-disposition') ?? '', /attachment; filename="Phantom-[0-9a-f]{7}\.zip"/);
+  const bytes = Buffer.from(await zip.arrayBuffer());
+  assert.equal(bytes.subarray(0, 2).toString(), 'PK', 'a real zip');
+  assert.ok(bytes.length > 100_000);
+  const dash = await call(db, 'GET', '/api/dashboard', { cookie: session });
+  assert.equal(dash.body.phantomZip.bytes, bytes.length, 'the page knows what it is offering');
+
+  const minted = await call(db, 'POST', '/api/me/watcher-token', { cookie: session });
+  assert.equal(minted.status, 200);
+  assert.match(minted.body.token, /^[A-Za-z0-9_-]{40,}$/);
+  assert.equal(minted.body.hubUrl, 'https://hub.test');
+  assert.equal(minted.headers.get('cache-control'), 'private, no-store');
+
+  // That token IS their Phantom now: it reads their feed, and only theirs.
+  const feed = await call(db, 'GET', '/api/missions/active', { token: minted.body.token });
+  assert.equal(feed.status, 200);
+  assert.equal(feed.body.missions.length, 0, 'their own missions, of which there are none yet');
+
+  // Minting again retires the first. Same rule as the CLI.
+  const second = await call(db, 'POST', '/api/me/watcher-token', { cookie: session });
+  assert.equal((await call(db, 'GET', '/api/missions/active', { token: minted.body.token })).status, 401);
+  assert.equal((await call(db, 'GET', '/api/missions/active', { token: second.body.token })).status, 200);
+
+  // A Phantom token cannot mint a token or fetch the program.
+  assert.equal((await call(db, 'POST', '/api/me/watcher-token', { token: second.body.token })).status, 403);
+  assert.equal((await call(db, 'GET', '/api/phantom.zip', { token: second.body.token })).status, 403);
+  // Nobody at all gets 401, not a redirect.
+  assert.equal((await call(db, 'GET', '/api/phantom.zip')).status, 401);
+});
+
 test('a Phantom token cannot set the password of the account it belongs to', async () => {
   const { db } = await setup();
   const res = await call(db, 'POST', '/api/me/password', { token: TOKEN, body: { password: 'a-real-password-now' } });

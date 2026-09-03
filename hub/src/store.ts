@@ -952,6 +952,19 @@ export async function setUserToken(db: Sql, handle: string, tokenHash: string): 
 }
 
 /**
+ * The same, by id, for the account that asks for its own token at the front
+ * door. Enabled accounts only: a switched-off person must not be able to
+ * mint a way back in for their Phantom.
+ */
+export async function setUserTokenById(db: Sql, userId: number, tokenHash: string): Promise<boolean> {
+  const rows = await db.query<{ id: number }>(
+    'UPDATE users SET token_hash = $2 WHERE id = $1 AND enabled = true RETURNING id',
+    [userId, tokenHash],
+  );
+  return rows.length > 0;
+}
+
+/**
  * Grant or withdraw the right to arm — to run a Phantom that buys.
  *
  * This is the one permission that turns into money, so it is a deliberate act

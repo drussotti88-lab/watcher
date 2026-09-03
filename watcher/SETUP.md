@@ -1,7 +1,10 @@
 # Setting up Phantom
 
-You were given an **invite link** (or a name and password) for the app, and a
-**token** for this program. Treat the token like a password.
+You were given an **invite link** (or a name and password) for the app. The
+app itself gives you this program and a **token** for it — the "Phantom on
+your computer" step of the tour, or the same card in Settings. Treat the token
+like a password: it is shown once, and pressing the button again makes a new
+one.
 
 ## What this is
 
@@ -32,8 +35,8 @@ Unzip this folder somewhere you'll find again. Documents is fine; a synced
 cloud folder is not.
 
 **1 — Set up.** Double-click once. It installs what's needed, then asks for the
-app address and your token, and checks both against the live app before
-writing anything.
+app address and your token — both are on that card in the app, with a Copy
+button — and checks them against the live app before writing anything.
 
 **2 — Start watching.** Double-click. A terminal opens, then a Chrome window.
 **Leave both alone.** That Chrome is signed out on purpose — it looks and
@@ -120,7 +123,7 @@ announces itself there.
 |---|---|
 | `Unknown file extension ".ts"` | Node is too old. Install the LTS from nodejs.org, then reopen the window. |
 | `npm is not recognised` | Node isn't installed, or the window was open before you installed it. Close it and open a new one. |
-| `did not recognise the token` | Ask for a fresh token. A new one retires the old one. |
+| `did not recognise the token` | Press **Show my token** in the app again and run **1 — Set up** again. A new token retires the old one. |
 | `Could not reach …` | The address is wrong, or you're offline. |
 | `challenged — standing down` | A shop asked to check you're human. It backs off and tries later. Nothing is broken. |
 | `stopped on the line before the button` | `live` is false. That's the dry run working. |

@@ -254,8 +254,9 @@ async function main(): Promise<void> {
         console.log('  That only takes effect on a Phantom running with THEIR token, on');
         console.log('  their own computer, signed into their own Target account. Yours');
         console.log('  will never buy for them. Next:');
-        console.log(`    npm run user token ${handle}     a token for their Phantom`);
-        console.log('    npm run package                 the zip to send them\n');
+        console.log('  The app now hands them the rest: the front door (and Settings) shows');
+        console.log('  a Download Phantom button and a Show my token button. Nothing more');
+        console.log('  to send. (npm run user token still works if you would rather.)\n');
       } else {
         console.log(`\n  "${handle}" is back to watching only. Any armed mission of theirs`);
         console.log('  now just watches; their Phantom will not buy.\n');
