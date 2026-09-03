@@ -35,22 +35,39 @@ const CODE_NAME: Record<string, string> = {
 
 // ── the table against the code ───────────────────────────────────────────────
 
-test('EVERY CLAIMED CHECKOUT HAS A DRIVER, AND EVERY DRIVER IS CLAIMED', (t) => {
+test('EVERY CLAIMED CHECKOUT HAS A DRIVER THAT CAN ACTUALLY CLICK', (t) => {
   const dir = join(phantomSrc, 'checkout');
   if (!existsSync(dir)) return t.skip('Phantom is not checked out beside the Hub');
 
-  // A driver file per shop that can buy: checkout/target.ts is Target's.
-  const drivers = new Set(
-    readdirSync(dir).filter((f) => f.endsWith('.ts')).map((f) => f.replace(/\.ts$/, '')),
-  );
+  /*
+   * A file is not a capability.
+   *
+   * This used to ask whether checkout/<shop>.ts existed, and that was right
+   * while every driver on disk was a finished one. On 3 Sep 2026 it stopped
+   * being right: checkout/walmart.ts was written with every selector marked
+   * `verified: false`, which means the code will look for a control and refuse
+   * to click it until a person has matched it against a real page. That file
+   * exists and Walmart still cannot buy anything.
+   *
+   * So the question is now whether the driver has at least one VERIFIED
+   * selector, which is the same discipline Target's place-order button went
+   * through. A shop is only claimed as live when something on it can be
+   * pressed.
+   */
+  const files = readdirSync(dir).filter((f) => f.endsWith('.ts'));
+  const canClick = new Set<string>();
+  for (const f of files) {
+    const src = readFileSync(join(dir, f), 'utf8');
+    if (/verified:\s*true/.test(src)) canClick.add(f.replace(/\.ts$/, ''));
+  }
 
   for (const r of RETAILERS) {
     const claimed = statusOf(r.key, 'autoCheckout') === 'live';
     // 'pokemon-center' → 'pokemoncenter', the shape the reader files use.
-    const hasDriver = drivers.has(r.key) || drivers.has(r.key.replace(/-/g, ''));
+    const usable = canClick.has(r.key) || canClick.has(r.key.replace(/-/g, ''));
     assert.equal(
-      claimed, hasDriver,
-      `${r.name}: table says checkout ${claimed ? 'live' : 'not live'}, disk says ${hasDriver ? 'a driver exists' : 'no driver'}`,
+      claimed, usable,
+      `${r.name}: table says checkout ${claimed ? 'live' : 'not live'}, disk says ${usable ? 'a driver with verified selectors' : 'no driver it may click'}`,
     );
   }
 });

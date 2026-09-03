@@ -425,13 +425,39 @@ test('adding a listing also creates the mission to watch it', async () => {
 
 // ── What the page says ───────────────────────────────────────────────────────
 
-test('a marketplace price over MSRP is called out, not just displayed', async () => {
+test('A LISTING THAT IS NOT THE SHOP AND NOT MSRP SAYS BOTH, LOUDLY', async () => {
+  // The two disqualifiers, in the loudest words the card has. A reseller
+  // listing is not a smaller version of the thing we want — it is the thing we
+  // are racing, and every mission refuses it. The pill leads with NOT and the
+  // retailer's name, because "marketplace: Rares Market" read as a label
+  // rather than as a warning.
   const h = await boot();
   const card = $(h, '#missions .card');
   const text = card.textContent;
-  assert.match(text, /marketplace: Rares Market/, 'the seller has to be visible');
-  assert.match(text, /over MSRP/, 'and so does the fact that it is above retail');
+  assert.match(text, /NOT Target · Rares Market/, 'the seller has to be visible');
+  assert.match(text, /OVER MSRP · \+48% · \$49\.99 list/, 'and the size of the gap');
+  assert.ok(card.querySelector('.pill.notshop'), 'filled, not tinted — this is a warning');
+  assert.ok(card.querySelector('.pill.overmsrp'));
   assert.ok(card.querySelector('.price.over'), 'the price itself should read as wrong');
+});
+
+test('a small overage is not called a markup', async () => {
+  // Five per cent of slack, so a $59.99 box listed at $60.49 is not accused.
+  const h = await boot({
+    ...DASHBOARD,
+    missions: [{ ...DASHBOARD.missions[0], sellerKind: 'retailer', price: 51.99, msrp: 49.99 }],
+  });
+  assert.doesNotMatch($(h, '#missions .card').textContent, /OVER MSRP/);
+});
+
+test('a seller nobody could identify is refused out loud too', async () => {
+  // judge() asks whether the seller IS the retailer, so unknown is declined
+  // exactly like a marketplace. The card must not imply it is fine.
+  const h = await boot({
+    ...DASHBOARD,
+    missions: [{ ...DASHBOARD.missions[0], sellerKind: 'unknown', state: 'in' }],
+  });
+  assert.match($(h, '#missions .card').textContent, /SELLER UNKNOWN/);
 });
 
 test('an empty state explains the next step rather than showing nothing', async () => {
@@ -1607,36 +1633,59 @@ test('and when it is over it offers another', async () => {
   assert.equal($(h, '#sweep-now').disabled, false);
 });
 
-test('NO TAB CAN RUN OFF THE EDGE OF A PHONE', async () => {
-  // The original bug: six tabs are wider than a phone and the sixth was simply
-  // gone — no scrollbar, no affordance, just off the right-hand side. It used
-  // to be fixed by wrapping onto two rows; it is now fixed by the six of them
-  // sharing the width. Either way the rule is that nothing is off-screen.
-  const h = await boot();
-  const style = h.doc.querySelector('style').textContent;
-  const phone = /@media \(max-width: 899px\) \{([\s\S]*?)\n\}/.exec(style)?.[1] ?? '';
-  assert.match(phone, /\.tab \{[^}]*flex:\s*1 1 0/, 'every tab takes an equal share');
-  assert.match(phone, /min-width:\s*0/, 'and none of them can refuse to shrink');
-});
+// ── The sidebar ──────────────────────────────────────────────────────────────
+//
+// These three replace the bottom-bar tests. The bar was not broken — it was
+// replaced, on 3 Sep 2026, because the app had two navigations with different
+// manners (labels-under-icons in a strip on a phone, a list on a browser) and
+// neither looked like DNA Card Vault, which is the other half of the same
+// account. What the old tests protected still matters and is kept: nothing
+// off-screen, nothing under the home indicator, every item named.
 
-test('THE PHONE NAV IS AT THE BOTTOM, WHERE THE THUMB IS', async () => {
+test('THE PHONE MENU IS A DRAWER THAT STARTS CLOSED', async () => {
+  // Off-canvas, not hidden: it has to animate in, and a display:none panel
+  // cannot. The old bug this inherits is that nothing may sit off the right
+  // edge with no way to reach it — here the way to reach it is the hamburger,
+  // which is why that button is not allowed to disappear on a phone.
   const h = await boot();
   const style = h.doc.querySelector('style').textContent;
   const phone = /@media \(max-width: 899px\) \{([\s\S]*?)\n\}/.exec(style)?.[1] ?? '';
   assert.match(phone, /\.tabs \{[^}]*position:\s*fixed/);
-  assert.match(phone, /\.tabs \{[^}]*bottom:\s*0/);
-  assert.match(phone, /\.tabs \{[^}]*top:\s*auto/, 'and explicitly not stuck to the top');
+  assert.match(phone, /\.tabs \{[^}]*transform:\s*translateX\(-101%\)/, 'parked off-canvas');
+  assert.match(style, /\.tabs\.open \{[^}]*transform:\s*none/, 'and slides in');
+  assert.equal(h.doc.getElementById('nav').classList.contains('open'), false);
+  assert.equal(h.doc.getElementById('nav-backdrop').hidden, true);
 });
 
-test('CONTENT CLEARS THE BOTTOM BAR, INCLUDING THE HOME INDICATOR', async () => {
-  // A fixed bar with nothing reserved for it hides the last card on the page,
-  // and on an iPhone the labels sit under the home indicator and read as
-  // clipped. Both are the same one-line mistake.
+test('THE DRAWER CLEARS THE HOME INDICATOR', async () => {
+  // Kept from the bottom bar: on an iPhone the last item sat under the home
+  // indicator and read as clipped. A full-height drawer has the same edge.
   const h = await boot();
   const style = h.doc.querySelector('style').textContent;
   const phone = /@media \(max-width: 899px\) \{([\s\S]*?)\n\}/.exec(style)?.[1] ?? '';
-  assert.match(phone, /padding-bottom:\s*calc\(58px \+ env\(safe-area-inset-bottom/);
-  assert.match(phone, /\.tabs \{[^}]*padding-bottom:\s*env\(safe-area-inset-bottom/);
+  assert.match(phone, /env\(safe-area-inset-bottom/);
+});
+
+test('THE HAMBURGER IS THE ONLY WAY IN ON A PHONE, SO IT CANNOT BE HIDDEN THERE', async () => {
+  const h = await boot();
+  const style = h.doc.querySelector('style').textContent;
+  const open = h.doc.getElementById('nav-open');
+  assert.ok(open, 'the button exists');
+  assert.equal(open.getAttribute('aria-controls'), 'nav');
+  assert.equal(open.getAttribute('aria-expanded'), 'false');
+  // Hidden on a browser, where the rail is always there — and only there.
+  assert.match(style, /@media \(min-width: 900px\) \{[\s\S]{0,120}\.navopen \{ display: none/);
+});
+
+test('THE RAIL COLLAPSES TO ICONS, AND EVERY ITEM STILL HAS A NAME', async () => {
+  // Collapsed, the label is display:none — so the title attribute is the only
+  // thing left naming each item, and a tab without one becomes a mystery glyph.
+  const h = await boot();
+  const style = h.doc.querySelector('style').textContent;
+  assert.match(style, /body\.nav-collapsed .tab .lbl[\s\S]{0,120}display: none/);
+  for (const tab of h.doc.querySelectorAll('.tab')) {
+    assert.ok(tab.getAttribute('title'), 'every tab carries a title for the collapsed rail');
+  }
 });
 
 test('every nav item has an icon and a label, and the icon is not announced', async () => {
@@ -3887,4 +3936,61 @@ test('THE IN-STOCK HEADLINE IS BRIGHT WHEN THERE IS STOCK, AND GREY WHEN THERE I
   const css = on.doc.querySelector('style').textContent;
   assert.match(css, /\.livetitle \{[^}]*color: var\(--in\)/, 'the app\'s own in-stock green');
   assert.match(css, /\.livetitle\.none \{[^}]*color: var\(--muted\)/);
+});
+
+// ── "In stock" has to mean now ───────────────────────────────────────────────
+//
+// On 2 Sep 2026 the header read "15 in stock" while Phantom was checking
+// thirteen listings, all Target, exactly one in stock. The other fourteen were
+// Walmart and Pokémon Center missions frozen at 4:18pm — the minute those
+// shops were switched off. A switched-off shop was invisible from the front of
+// the app, and the headline number was actively saying everything was fine.
+
+const mission = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+  id: 1, listingId: 1, productName: 'A box', retailer: 'Target',
+  state: 'in', confidence: 'exact', armed: false, enabled: true,
+  lastCheckedAt: new Date().toISOString(), price: 10, ...over,
+});
+
+const summaryOf = async (missions: unknown[], pausedRetailers: string[] = []): Promise<string> => {
+  const data = withSettings({ pausedRetailers }) as Record<string, unknown>;
+  data.missions = missions;
+  const h = await boot(data);
+  return $(h, '#summary').textContent ?? '';
+};
+
+test('A FROZEN READING AT A SWITCHED-OFF SHOP IS NOT "IN STOCK"', async () => {
+  const text = await summaryOf(
+    [
+      mission({ id: 1, retailer: 'Target' }),
+      mission({ id: 2, retailer: 'Walmart' }),
+      mission({ id: 3, retailer: 'Walmart' }),
+    ],
+    ['Walmart'],
+  );
+  assert.match(text, /1 in stock/, 'only the shop still being checked counts');
+  assert.match(text, /2 not being checked/);
+});
+
+test('a reading nobody has refreshed in an hour is stale, not in stock', async () => {
+  const old = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
+  const text = await summaryOf([mission({ lastCheckedAt: old })]);
+  assert.doesNotMatch(text, /in stock/);
+  assert.match(text, /1 not being checked/);
+});
+
+test('a fresh reading at a live shop still counts, obviously', async () => {
+  const text = await summaryOf([mission(), mission({ id: 2 })]);
+  assert.match(text, /2 in stock/);
+  assert.doesNotMatch(text, /not being checked/);
+});
+
+test('never checked keeps its own word and is not double-counted as stale', async () => {
+  const text = await summaryOf([
+    mission({ id: 1 }),
+    mission({ id: 2, state: 'unchecked', lastCheckedAt: null }),
+  ]);
+  assert.match(text, /1 in stock/);
+  assert.match(text, /1 never checked/);
+  assert.doesNotMatch(text, /not being checked/);
 });

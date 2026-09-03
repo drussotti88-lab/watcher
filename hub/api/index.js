@@ -3053,6 +3053,9 @@ function esc(s) {
 var FONTS = '<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap">';
 var svg = (paths) => `<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
 var ICONS = {
+  // Three lines. The one control on the page whose meaning is universal, so it
+  // carries no label even when everything else does.
+  menu: svg('<path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h16"/>'),
   // A bell, for the things that want a person.
   bell: svg('<path d="M18 8a6 6 0 1 0-12 0c0 7-3 8-3 8h18s-3-1-3-8"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/>'),
   // Discord's mark is theirs; this is a plain game controller, which is what
@@ -3247,68 +3250,95 @@ a { color: var(--accent); text-underline-offset: 2px; }
 /* The header's copy of the wordmark. Shown only when the side panel is not. */
 .phonebrand { display: none; padding: 0 0 2px; width: 100%; }
 @media (max-width: 899px) { .phonebrand { display: flex; } }
-.tab { cursor: pointer; border: none; background: none; border-radius: 0;
+.tab { cursor: pointer; border: none; background: none;
+       display: flex; align-items: center; gap: 12px; width: 100%; text-align: left;
+       padding: 11px 12px; border-radius: 10px; position: relative;
        font: 500 14px/1.4 var(--sans); color: var(--muted);
        transition: color .12s, background .12s; }
-.tab:hover { color: var(--ink); }
-.tab .count { font-family: var(--mono); font-size: 12px; opacity: .6; }
-.tab .ico { flex: none; display: block; }
-/* One tab needs two names. "Dashboard" is nine characters in a bar with seven
-   slots, and an ellipsis on the landing tab's own name reads as a bug rather
-   than as tight spacing. */
-.l-narrow { display: none; }
-@media (max-width: 899px) { .l-wide { display: none; } .l-narrow { display: inline; } }
+.tab:hover { color: var(--ink); background: rgba(255, 255, 255, .04); }
+.tab .ico { flex: none; display: block; width: 19px; height: 19px; }
+.tab .lbl { flex: 1 1 auto; min-width: 0; overflow: hidden;
+            text-overflow: ellipsis; white-space: nowrap; }
+.tab .count { flex: none; font-family: var(--mono); font-size: 11px;
+              color: var(--muted); padding: 1px 6px; border-radius: 999px;
+              background: rgba(255, 255, 255, .06); }
+.tab .count:empty { display: none; }
+/* The active row, as the vault draws it: a soft filled pill in the accent, the
+   label at full ink, and a short bar on the left edge so the current section is
+   findable without reading. */
+.tab.on { color: var(--ink); background: var(--accent-soft); font-weight: 600; }
+.tab.on::before { content: ''; position: absolute; left: 0; top: 50%;
+                  transform: translateY(-50%); width: 3px; height: 20px;
+                  border-radius: 0 3px 3px 0; background: var(--accent); }
+.tab.on .ico { color: var(--accent); }
 
-/* \u2500\u2500 Phone: the bottom bar \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */
+/* A labelled break, not a bare rule: "why is there a gap here" is a question a
+   divider on its own does not answer. */
+.navgroup { display: flex; align-items: center; gap: 10px;
+            padding: 18px 12px 7px; }
+.navgroup span { font: 600 10px/1 var(--sans); letter-spacing: .12em;
+                 text-transform: uppercase; color: var(--dim); white-space: nowrap; }
+.navgroup::after { content: ''; flex: 1; height: 1px; background: var(--line); }
+.navspacer { flex: 1 1 auto; min-height: 12px; }
+
+.navtop { display: flex; align-items: center; gap: 6px; }
+.navtop .brand { flex: 1 1 auto; min-width: 0; }
+.navtoggle, .navopen { flex: none; cursor: pointer; display: flex;
+       align-items: center; justify-content: center; width: 34px; height: 34px;
+       border: 1px solid var(--line); border-radius: 9px; background: none;
+       color: var(--muted); transition: color .12s, background .12s; }
+.navtoggle:hover, .navopen:hover { color: var(--ink); background: rgba(255,255,255,.05); }
+.navtoggle .ico, .navopen .ico { width: 17px; height: 17px; }
+
+#nav-backdrop { position: fixed; inset: 0; z-index: 40;
+                background: rgba(4, 3, 8, .6); backdrop-filter: blur(2px); }
+#nav-backdrop[hidden] { display: none; }
+
+/* \u2500\u2500 Phone: the same panel, slid in over the content \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */
 @media (max-width: 899px) {
-  .tabs { position: fixed; left: 0; right: 0; bottom: 0; top: auto;
-          border-top: 1px solid var(--line); padding-top: 2px;
-          /* The home-indicator strip on an iPhone. Without this the last row
-             of labels sits under it and reads as clipped. */
-          padding-bottom: env(safe-area-inset-bottom, 0px); }
-  /* The brand lives in the header on a phone. A wordmark in a bottom bar is
-     six percent of the width spent saying something the user already knows. */
-  .tabs .brand { display: none; }
-  .tab { position: relative; flex: 1 1 0; min-width: 0;
-         display: flex; flex-direction: column; align-items: center; gap: 3px;
-         padding: 7px 1px 6px; font-size: 10px; letter-spacing: .01em; }
-  /* Seven items, and the longest label is nine characters. The label is
-     allowed to shrink rather than to collide: two words touching is how a
-     bottom bar stops reading as a bar. */
-  .tab > span:not(.count) { max-width: 100%; overflow: hidden; text-overflow: ellipsis;
-                            white-space: nowrap; }
-  @media (max-width: 400px) { .tab { font-size: 9px; letter-spacing: 0; } }
-  .tab .ico { width: 21px; height: 21px; }
-  .tab.on { color: var(--accent); font-weight: 600; }
-  /* A badge on the icon, not a number after the label: at 10px an inline
-     count is indistinguishable from the word it follows. */
-  .tab .count { position: absolute; top: 4px; left: 50%; margin-left: 5px;
-                font-size: 9.5px; line-height: 1; opacity: 1; padding: 2px 4px;
-                border-radius: 6px; background: var(--accent-soft);
-                color: var(--ink); }
-  .tab .count:empty { display: none; }
-  /* Content must clear the bar. 58px is the bar, and the inset is whatever
-     the phone adds under it. */
-  .shell > main { padding-bottom: calc(58px + env(safe-area-inset-bottom, 0px)); }
+  .tabs { position: fixed; z-index: 50; left: 0; top: 0; bottom: 0; width: 268px;
+          max-width: 84vw; display: flex; flex-direction: column; gap: 2px;
+          padding: 14px 12px calc(14px + env(safe-area-inset-bottom, 0px));
+          border-right: 1px solid var(--line); background: var(--panel, #0b0a12);
+          transform: translateX(-101%); transition: transform .2s ease;
+          overflow-y: auto; }
+  .tabs.open { transform: none; box-shadow: 0 0 60px rgba(0, 0, 0, .6); }
+  .navtoggle { display: none; }
+  .phonebrand { display: none; }
 }
+/* The hamburger is the phone's only way in, so it is hidden on a browser where
+   the rail is always there. */
+@media (min-width: 900px) { .navopen { display: none; } }
 
-/* \u2500\u2500 Browser: the side panel \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */
+/* \u2500\u2500 Browser: the rail \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */
 @media (min-width: 900px) {
   .shell { flex-direction: row; }
-  .tabs { flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 3px;
-          width: 218px; flex: none; height: 100vh;
-          position: sticky; top: 0;
-          padding: 16px 12px;
+  .tabs { display: flex; flex-direction: column; flex-wrap: nowrap;
+          align-items: stretch; gap: 2px;
+          width: 244px; flex: none; height: 100vh;
+          position: sticky; top: 0; padding: 16px 12px;
           border-right: 1px solid var(--line);
-          background: rgba(9, 8, 14, .55); }
-  /* The stacked lockup fits 194px at full size, so nothing is shrunk here any
-     more \u2014 only spaced for the top of a panel. */
-  .brand { padding: 4px 6px 20px; }
-  .tab { display: flex; align-items: center; gap: 10px; text-align: left; width: 100%;
-         padding: 10px 12px; border-radius: 10px; }
-  .tab .ico { width: 17px; height: 17px; }
-  .tab.on { color: var(--ink); background: var(--accent-soft); font-weight: 600; }
-  .tab .count { margin-left: auto; }
+          background: rgba(9, 8, 14, .55);
+          transition: width .16s ease; }
+  .brand { padding: 4px 2px 18px; }
+
+  /* Collapsed: icons only, and everything that was text stops taking width
+     rather than being squeezed into an ellipsis. The title attribute on each
+     button is what still names it, which is why every tab carries one. */
+  body.nav-collapsed .tabs { width: 68px; padding: 16px 10px; }
+  body.nav-collapsed .tab { justify-content: center; padding: 11px 0; gap: 0; }
+  body.nav-collapsed .tab .lbl,
+  body.nav-collapsed .brand-name,
+  body.nav-collapsed .navgroup span { display: none; }
+  body.nav-collapsed .navgroup { padding: 14px 4px 8px; }
+  body.nav-collapsed .navtop { flex-direction: column; gap: 10px; }
+  body.nav-collapsed .brand { padding: 2px 0 8px; }
+  /* The count becomes a dot on the icon: a pill with a number in it does not
+     fit 68px, and hiding it entirely would lose the one thing the collapsed
+     rail is still trying to tell you. */
+  body.nav-collapsed .tab .count { position: absolute; top: 6px; right: 12px;
+        min-width: 7px; height: 7px; padding: 0; font-size: 0; line-height: 0;
+        background: var(--accent); border-radius: 999px; }
 }
 
 .bar { display: flex; gap: 8px; align-items: center; margin-bottom: 18px; flex-wrap: wrap; }
@@ -3809,6 +3839,19 @@ button.small { padding: 4px 10px; font-size: 12px; border-radius: var(--r-sm); b
    state, not a shade of in or out \u2014 and a bright one, because it is the hour
    before a drop and the whole point is that it catches your eye. */
 .staged { background: var(--alert-bg); color: var(--alert); font-weight: 700; }
+/*
+ * \u2500\u2500 The two disqualifiers \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+ *
+ * Not the retailer, and not the price. Both are reasons a listing is not the
+ * thing we are chasing, and both were being said quietly \u2014 one in a muted pill
+ * among five others, the other not at all.
+ *
+ * Filled rather than tinted, on purpose. Every other pill on the card is a
+ * status; these two are a warning, and a warning that looks like a status gets
+ * read at the same speed as one.
+ */
+.pill.notshop { background: var(--alert); color: #fff; font-weight: 800; }
+.pill.overmsrp { background: var(--warn); color: #16110a; font-weight: 800; }
 .meta.staged { background: none; letter-spacing: 0; text-transform: none; }
 /* The grid restyles the same cards; it lives below the rules it overrides so
    the pinned .pill/.right definitions stay the first (and canonical) ones. */
@@ -4125,21 +4168,42 @@ function dashboardPage() {
 <meta name="apple-mobile-web-app-title" content="Phantom">
 ${FONTS}<style>${STYLE}</style></head>
 <body><div class="shell">
-  <nav class="tabs" aria-label="Sections">
-    <div class="brand"><span class="mark"></span><span class="brand-name"><b>Phantom</b> <i>by DNA</i></span></div>
-    <button class="tab on" data-tab="home">${ICONS.home}<span class="l-wide">Dashboard</span><span class="l-narrow">Home</span></button>
-    <button class="tab" data-tab="missions">${ICONS.missions}<span>Missions</span><span class="count" id="c-missions"></span></button>
-    <button class="tab" data-tab="products">${ICONS.products}<span>Products</span><span class="count" id="c-products"></span></button>
-    <button class="tab" data-tab="activity">${ICONS.activity}<span>Activity</span><span class="count" id="c-activity"></span></button>
-    <button class="tab" data-tab="finds">${ICONS.finds}<span id="finds-tab-label">Discovery</span><span class="count" id="c-finds"></span></button>
-    <button class="tab" data-tab="wins">${ICONS.wins}<span>Wins</span><span class="count" id="c-vault"></span></button>
-    <button class="tab" data-tab="settings">${ICONS.settings}<span>Settings</span></button>
+  <!-- \u2500\u2500 The sidebar \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+       One nav at every width, matching DNA Card Vault: a rail on a browser
+       that collapses to icons, and the same panel sliding in over the content
+       on a phone. It replaces the bottom bar, which was a second navigation
+       with different manners \u2014 a phone got labels under icons in a strip, a
+       browser got a list, and neither looked like the vault the account also
+       lives in.
+
+       Grouped, because seven flat items is a list and four-plus-two is a
+       shape: the first group is what the machine is doing, the second is what
+       is waiting on a person, and Settings sits apart at the bottom where it
+       is not in the way of either. -->
+  <div id="nav-backdrop" hidden></div>
+  <nav class="tabs" id="nav" aria-label="Sections">
+    <div class="navtop">
+      <div class="brand"><span class="mark"></span><span class="brand-name"><b>Phantom</b> <i>by DNA</i></span></div>
+      <button class="navtoggle" id="nav-collapse" type="button"
+              aria-label="Collapse the menu" title="Collapse the menu">${ICONS.menu}</button>
+    </div>
+    <button class="tab on" data-tab="home" title="Dashboard">${ICONS.home}<span class="lbl">Dashboard</span></button>
+    <button class="tab" data-tab="missions" title="Missions">${ICONS.missions}<span class="lbl">Missions</span><span class="count" id="c-missions"></span></button>
+    <button class="tab" data-tab="products" title="Products">${ICONS.products}<span class="lbl">Products</span><span class="count" id="c-products"></span></button>
+    <button class="tab" data-tab="activity" title="Activity">${ICONS.activity}<span class="lbl">Activity</span><span class="count" id="c-activity"></span></button>
+    <div class="navgroup"><span>Waiting on you</span></div>
+    <button class="tab" data-tab="finds" title="Discovery">${ICONS.finds}<span class="lbl" id="finds-tab-label">Discovery</span><span class="count" id="c-finds"></span></button>
+    <button class="tab" data-tab="wins" title="Wins">${ICONS.wins}<span class="lbl">Wins</span><span class="count" id="c-vault"></span></button>
+    <div class="navspacer"></div>
+    <button class="tab" data-tab="settings" title="Settings">${ICONS.settings}<span class="lbl">Settings</span></button>
   </nav>
 <main>
   <header>
     <!-- The wordmark on a phone. The side panel carries it on a browser; a
          bottom bar cannot spare the width, and a nameless app is a worse
          trade than a header line. -->
+    <button class="navopen" id="nav-open" type="button" aria-label="Menu"
+            aria-expanded="false" aria-controls="nav">${ICONS.menu}</button>
     <div class="brand phonebrand"><span class="mark"></span><span class="brand-name"><b>Phantom</b> <i>by DNA</i></span></div>
     <div>
       <span class="sub" id="summary">loading\u2026</span>
@@ -4321,7 +4385,9 @@ ${FONTS}<style>${STYLE}</style></head>
       <div class="card span2"><div class="kpis" id="home-kpis"></div></div>
 
       <div class="card" id="funnel-card">
-        <div class="name">Where it goes</div>
+        <!-- Named for what it shows. "Where it goes" was a heading that
+             assumed you already knew what "it" was and where "there" was. -->
+        <div class="name">From watching to bought</div>
         <div class="sub" id="funnel-sub"></div>
         <div id="funnel"></div>
         <div id="funnel-verdict"></div>
@@ -5212,9 +5278,41 @@ function missionCard(m) {
   } else if (m.enabled) {
     flags.appendChild(el('span', 'pill info', 'watching only'));
   }
-  // The Walmart trap, made visible rather than buried in a note nobody reads.
+  /*
+   * \u2500\u2500 Not the shop, and not the price \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+   *
+   * The Walmart trap, said in the loudest words the card has. A listing whose
+   * buy box has fallen to a reseller is not a smaller version of the thing we
+   * want \u2014 it is the thing we are racing, and every mission refuses it. The
+   * old pill said "marketplace: <name>", which reads as a label; this one
+   * leads with the retailer's name and the word NOT, because that is the fact.
+   */
   if (m.sellerKind === 'marketplace') {
-    flags.appendChild(el('span', 'pill flag', 'marketplace: ' + (m.sellerName || 'third party')));
+    flags.appendChild(el('span', 'pill notshop',
+      'NOT ' + (m.retailer || 'the shop') + ' \xB7 ' + (m.sellerName || 'third-party seller')));
+  } else if (m.sellerKind === 'unknown' && m.state === 'in') {
+    // Unknown is refused too. judge() asks whether the seller IS the retailer,
+    // not whether it is a marketplace, so anything it cannot identify is
+    // declined \u2014 and the card must not imply otherwise.
+    // (No backticks in here: this comment lives inside a template literal, and
+    //  one backtick ends the whole script. It has cost an evening before.)
+    flags.appendChild(el('span', 'pill notshop', 'SELLER UNKNOWN'));
+  }
+  /*
+   * And what it costs against what it should cost.
+   *
+   * Shown whenever we have both numbers and the price is meaningfully over,
+   * regardless of seller: a retailer can price above MSRP too, and the point
+   * of the pill is the gap rather than who opened it. Five per cent of slack
+   * before it fires, so a $59.99 box listed at $60.49 is not called out as a
+   * markup.
+   */
+  if (m.price !== null && m.price !== undefined && m.msrp > 0) {
+    const over = (m.price - m.msrp) / m.msrp;
+    if (over > 0.05) {
+      flags.appendChild(el('span', 'pill overmsrp',
+        'OVER MSRP \xB7 +' + Math.round(over * 100) + '% \xB7 ' + money(m.msrp) + ' list'));
+    }
   }
   // Only 'inferred' is worth a pill. 'exact' is the norm and needs no badge,
   // and 'unknown' is already said by the state above.
@@ -6362,16 +6460,52 @@ function render() {
     changesCard.appendChild(table);
   }
 
-  const inStock = DATA.missions.filter((m) => m.state === 'in').length;
+  /*
+   * \u2500\u2500 "In stock" has to mean now, not last time anybody looked \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+   *
+   * On 2 Sep 2026 this line read "15 in stock" while Phantom was checking
+   * thirteen listings, all Target, exactly one of them in stock. The other
+   * fourteen were Walmart and Pok\xE9mon Center missions frozen at whatever they
+   * said at 4:18pm, the minute those shops were switched off. The Iron Boulder
+   * Tin had read in stock at 4:17pm and the header was still counting it six
+   * hours later.
+   *
+   * That is the same failure as the drop we missed, wearing different clothes:
+   * a switched-off shop is invisible from the front of the app, and here it
+   * was worse than invisible, because the headline number was actively saying
+   * everything was fine.
+   *
+   * So a reading only counts as current when the shop is on AND the check is
+   * recent. Anything else is counted as stale and said out loud \u2014 a number
+   * nobody is refreshing is not a smaller number, it is an unknown one.
+   */
+  const shopOff = (m) => (DATA.settings?.pausedRetailers || [])
+    .some((r) => String(r).toLowerCase() === String(m.retailer || '').toLowerCase());
+  // Generous next to the card's own 5-minute mark: a rotation across a dozen
+  // listings can legitimately leave one of them twenty minutes old, and the
+  // header should shout about a shop that stopped, not about pacing.
+  const STALE_HEADER_MS = 45 * 60 * 1000;
+  const fresh = (m) => !!m.lastCheckedAt &&
+    Date.now() - new Date(m.lastCheckedAt).getTime() < STALE_HEADER_MS;
+  const current = (m) => !shopOff(m) && fresh(m);
+
+  const inStock = DATA.missions.filter((m) => m.state === 'in' && current(m)).length;
   const armed = DATA.missions.filter((m) => m.armed).length;
   const never = DATA.missions.filter((m) => m.state === 'unchecked').length;
   const blind = DATA.missions.filter(notReading).length;
+  // Checked once, and not lately. Never-checked is its own word already, so it
+  // is excluded here rather than counted twice.
+  const stale = DATA.missions.filter(
+    (m) => m.state !== 'unchecked' && !current(m)).length;
   const parts = [];
   // First, because a Phantom that cannot read pages is not watching, and that
   // outranks anything else the line could say.
   if (blind) parts.push(blind + ' NOT READING');
   if (inStock) parts.push(inStock + ' in stock');
   if (armed) parts.push(armed + ' armed');
+  // Before "never checked": a shop that went quiet is a thing that changed,
+  // and a mission that has never run is a thing that never started.
+  if (stale) parts.push(stale + ' not being checked');
   if (never) parts.push(never + ' never checked');
   document.getElementById('summary').textContent =
     parts.length ? parts.join(' \xB7 ') : 'nothing in stock';
@@ -7545,7 +7679,7 @@ function renderHome() {
   const label = (RANGES.find((r) => r.hours === INSIGHTS.hours) || {}).label || 'the window';
   document.getElementById('range-note').textContent = 'over the last ' + label;
   document.getElementById('funnel-sub').textContent =
-    'The first two are what is true now. The rest is what happened in the last ' + label + '.';
+    'Top two: right now. The rest: the last ' + label + '.';
 
   const top = Math.max(1, f.watching);
   stage(funnelHost, 'Watching', f.watching, top, 'listings with a mission on them');
@@ -7561,24 +7695,24 @@ function renderHome() {
    * quietly omits the signal we most want and lets us assume it is working.
    */
   const stagedN = f.staged || 0;
-  stage(funnelHost, 'Stock staged, not sellable yet', stagedN, top,
+  stage(funnelHost, 'Stock in the warehouse', stagedN, top,
     stagedN
-      ? 'counted in the warehouse while the shop still said no' +
-        (f.stagedPeak ? ' \xB7 biggest load-in ' + f.stagedPeak + ' units' : '')
-      : 'nothing has been counted before it was sellable \u2014 the pre-drop signal has not fired');
+      ? 'counted before the shop would sell it' +
+        (f.stagedPeak ? ' \xB7 biggest ' + f.stagedPeak + ' units' : '')
+      : 'never seen yet');
 
-  stage(funnelHost, 'Came in stock at the shop', f.sawStock, top,
-    (f.watching ? pct(f.sawStock, f.watching) + ' of what is watched' : '') +
-    (f.resellerOnly
-      ? ' \xB7 ' + f.resellerOnly + ' more were resellers only, which every mission refuses'
-      : ''));
-  stage(funnelHost, 'Armed when it did', f.sawStockArmed, top,
+  stage(funnelHost, 'Came in stock', f.sawStock, top,
+    (f.watching ? pct(f.sawStock, f.watching) + ' of what you watch' : '') +
+    (f.resellerOnly ? ' \xB7 ' + f.resellerOnly + ' more were resellers only' : ''));
+  stage(funnelHost, 'Armed at the time', f.sawStockArmed, top,
     f.sawStock
-      ? pct(f.sawStockArmed, f.sawStock) + ' of the real ones were armed to act'
+      ? (f.sawStockArmed === 0
+          ? 'none of the ' + f.sawStock
+          : pct(f.sawStockArmed, f.sawStock) + ' of those')
       : '',
     f.sawStock > 0 && f.sawStockArmed === 0);
-  stage(funnelHost, 'Authorised', f.authorised, top, 'the Hub agreed to spend');
-  stage(funnelHost, 'Bought', f.bought, top, 'the retailer confirmed an order');
+  stage(funnelHost, 'Money approved', f.authorised, top, 'the Hub cleared the spend');
+  stage(funnelHost, 'Bought', f.bought, top, 'the retailer confirmed the order');
 
   /*
    * The verdict, in a sentence.
@@ -7598,35 +7732,32 @@ function renderHome() {
     say.textContent = 'Nothing is being watched yet. Add a listing and this fills in.';
   } else if (f.sawStock === 0) {
     say.textContent = f.resellerOnly
-      ? 'Nothing dropped at the shops in the last ' + label + '. ' + f.resellerOnly +
-        ' listings were in stock from marketplace resellers, which every mission ' +
-        'refuses on purpose \u2014 those are the thing you are racing, not the thing you want.'
-      : 'Nothing you watch has come in stock in the last ' + label + '. That is not a ' +
-        'fault \u2014 it is what watching mostly looks like.';
+      ? 'Nothing came in stock at the shops in the last ' + label + '. ' +
+        f.resellerOnly + ' listings had stock from resellers, which missions refuse.'
+      : 'Nothing you watch came in stock in the last ' + label + '.';
   } else if (f.sawStockArmed === 0) {
     say.textContent = win +
-      'Stock appeared on ' + f.sawStock + ' listing' + (f.sawStock === 1 ? '' : 's') +
-      ' and none of them were armed, so nothing could be bought. Arming is the ' +
-      'step that is missing, not speed.';
+      f.sawStock + ' listing' + (f.sawStock === 1 ? '' : 's') +
+      ' came in stock and none were armed, so nothing could be bought. ' +
+      'Arming is what is missing, not speed.';
   } else if (f.sawStockArmed < f.sawStock / 2) {
     // The common case, and the one the old wording hid behind a win: it did
     // buy, and it was only ever in a position to buy a fraction of what it saw.
     if (win) say.className = 'verdict ok';
     say.textContent = win +
-      'Stock appeared on ' + f.sawStock + ' listings and ' + f.sawStockArmed +
-      ' of them ' + (f.sawStockArmed === 1 ? 'was' : 'were') + ' armed \u2014 ' +
-      pct(f.sawStockArmed, f.sawStock) + '. The other ' +
+      f.sawStock + ' listings came in stock, ' + f.sawStockArmed + ' armed (' +
+      pct(f.sawStockArmed, f.sawStock) + '). The other ' +
       (f.sawStock - f.sawStockArmed) + ' were never in play.';
   } else if (f.bought === 0 && f.authorised > 0) {
     say.textContent =
-      'Money was authorised ' + f.authorised + ' time' + (f.authorised === 1 ? '' : 's') +
-      ' and no order came of it. The reasons are below \u2014 that is the list worth reading.';
+      'Money was approved ' + f.authorised + ' time' + (f.authorised === 1 ? '' : 's') +
+      ' and no order came of it. The reasons are below.';
   } else if (f.bought > 0) {
     say.className = 'verdict ok';
     say.textContent = win + 'Everything armed that came in stock was acted on.';
   } else {
     say.textContent =
-      'Stock appeared and nothing was armed far enough to authorise a purchase.';
+      'Stock came in and nothing was armed far enough to approve a purchase.';
   }
   verdict.appendChild(say);
 
@@ -7637,7 +7768,7 @@ function renderHome() {
   kpi(kpis, 'Runs', String(runs), 'times a mission acted, or could not');
   kpi(kpis, 'Real stock', String(f.sawStock),
     f.resellerOnly ? '+' + f.resellerOnly + ' reseller-only, refused' : 'from the shop itself');
-  kpi(kpis, 'Armed now', String(f.sawStockArmed) + ' / ' + f.sawStock,
+  kpi(kpis, 'Armed', String(f.sawStockArmed) + ' / ' + f.sawStock,
     'of those, armed to buy', f.sawStock && !f.sawStockArmed ? 'bad' : '');
 
   // \u2500\u2500 why not \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
@@ -8355,8 +8486,60 @@ function showTab(name) {
 }
 
 for (const tab of document.querySelectorAll('.tab')) {
-  tab.addEventListener('click', () => showTab(tab.dataset.tab));
+  tab.addEventListener('click', () => { showTab(tab.dataset.tab); closeNav(); });
 }
+
+/*
+ * \u2500\u2500 The sidebar \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+ *
+ * One panel at both widths. On a phone it slides in over the content and shuts
+ * the moment you pick something \u2014 a drawer you have to dismiss yourself is a
+ * drawer people stop opening. On a browser it is always there and collapses to
+ * icons, and the choice is remembered per device.
+ *
+ * localStorage is wrapped because it throws outright in a few contexts (a
+ * private window with site data blocked, an embedded preview). A menu that
+ * cannot remember its width is a small loss; a menu that throws on load and
+ * takes the page's scripts down with it is the whole app.
+ */
+const navEl = document.getElementById('nav');
+const navBackdrop = document.getElementById('nav-backdrop');
+
+function closeNav() {
+  navEl.classList.remove('open');
+  navBackdrop.hidden = true;
+  document.getElementById('nav-open').setAttribute('aria-expanded', 'false');
+}
+function openNav() {
+  navEl.classList.add('open');
+  navBackdrop.hidden = false;
+  document.getElementById('nav-open').setAttribute('aria-expanded', 'true');
+}
+
+document.getElementById('nav-open').addEventListener('click', () => {
+  navEl.classList.contains('open') ? closeNav() : openNav();
+});
+navBackdrop.addEventListener('click', closeNav);
+// Escape closes it, because a full-height panel over the content is a modal
+// whether or not it was built as one.
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && navEl.classList.contains('open')) closeNav();
+});
+
+function setCollapsed(on) {
+  document.body.classList.toggle('nav-collapsed', on);
+  const btn = document.getElementById('nav-collapse');
+  const label = on ? 'Expand the menu' : 'Collapse the menu';
+  btn.setAttribute('aria-label', label);
+  btn.title = label;
+  try { localStorage.setItem('phantom.nav.collapsed', on ? '1' : '0'); } catch (err) { /* fine */ }
+}
+try {
+  if (localStorage.getItem('phantom.nav.collapsed') === '1') setCollapsed(true);
+} catch (err) { /* fine */ }
+document.getElementById('nav-collapse').addEventListener('click', () => {
+  setCollapsed(!document.body.classList.contains('nav-collapsed'));
+});
 
 document.getElementById('see-wins').addEventListener('click', () => showTab('wins'));
 document.getElementById('live-all').addEventListener('click', () => showTab('missions'));
