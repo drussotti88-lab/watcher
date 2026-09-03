@@ -224,3 +224,30 @@ test('a big empty-looking page is not called blank either', () => {
   const html = '<html><body>' + '<div class="a"></div>'.repeat(2000) + '</body></html>';
   assert.equal(detectChallenge('', '', html).challenged, false);
 });
+
+// ── Walmart's bot check, captured live ───────────────────────────────────────
+
+/** walmart.com/blocked, 8:04pm on 2 Sep 2026. Verbatim. */
+const WALMART_BLOCKED =
+  'Robot or human?\n\nActivate and hold the button to confirm that you’re human. Thank You!\n\n' +
+  'Terms of Use Privacy Policy Do Not Sell My Personal Information Request My Personal Information\n\n' +
+  '©2026 Walmart Stores, Inc.';
+
+test("WALMART SAYS ACTIVATE AND HOLD, NOT PRESS AND HOLD", () => {
+  // Missing this is worse than missing the queue. An unnamed wall does not
+  // stand the pacer down, so we keep knocking at a door that just shut — which
+  // is how a soft block becomes a hard one.
+  const { challenged, reason } = detectChallenge('Robot or human?', WALMART_BLOCKED);
+  assert.equal(challenged, true);
+  assert.equal(reason, 'Press-and-hold check');
+  assert.equal(isQueue(reason), false);
+});
+
+test('the title alone is enough, and only when it starts the title', () => {
+  assert.equal(detectChallenge('Robot or human?', '').challenged, true);
+  // Ordinary copy that happens to contain the phrase is not a wall.
+  assert.equal(
+    detectChallenge('Toy review: robot or human?', 'A fun build for kids.').challenged,
+    false,
+  );
+});

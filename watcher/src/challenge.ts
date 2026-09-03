@@ -34,8 +34,22 @@ const CHALLENGE_PATTERNS: {
       /access denied/i.test(`${t} ${x}`) && /reference\s*#|error\s*reference/i.test(x),
   },
   {
+    // ── Walmart says "activate", not "press" ────────────────────────────────
+    //
+    // Captured live at 8:04pm on 2 Sep 2026 from walmart.com/blocked, title
+    // "Robot or human?", body "Activate and hold the button to confirm that
+    // you're human." Matching only "press and hold" missed it, so every
+    // Walmart bot check has been landing as an unreadable page — which means
+    // the pacer never stood down and we kept knocking at a door that had just
+    // been shut. The same failure as the waiting room, in the other direction:
+    // there we shouted nothing, here we stood down for nothing.
     name: 'Press-and-hold check',
-    test: (_t, x) => /press\s*(?:&|and)\s*hold/i.test(x) && /human|robot|verify/i.test(x),
+    test: (t, x) =>
+      (/(?:press|activate|tap|click)\s*(?:&|and)\s*hold/i.test(x) &&
+        /human|robot|verify/i.test(x)) ||
+      // Walmart's own title for the page, on its own. Anchored, because "robot
+      // or human" is a perfectly ordinary phrase in the middle of a sentence.
+      /^robot or human/i.test(t.trim()),
   },
   // ── Waiting rooms ─────────────────────────────────────────────────────────
   //
