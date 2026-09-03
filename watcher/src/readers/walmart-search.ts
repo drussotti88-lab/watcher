@@ -42,6 +42,17 @@ export interface WalmartRow {
   state: StockState;
   /** Their name for whoever is selling. "Walmart.com" is first-party. */
   sellerName: string;
+  /**
+   * Walmart's own id for that seller, which is the half a name cannot fake.
+   *
+   * Measured 2 Sep 2026 on `pokemon elite trainer box` with no facet: 49 rows,
+   * 27 distinct seller ids, and exactly ONE of them Walmart's. The other 48
+   * rows were Rares Market, DealDudes, Icy Society, Troll and Toad and two
+   * dozen more — every one of them `IN_STOCK` and `canAddToCart: true`, which
+   * is precisely how a reseller listing looks more buyable than the real
+   * thing.
+   */
+  sellerId: string;
   isPreOrder: boolean;
   /** The publisher's street date, when Walmart has one. */
   releaseDate: string | null;
@@ -153,6 +164,7 @@ export function readWalmartSearch(data: unknown): WalmartRow[] {
         price: num(i.price) ?? num(i.priceInfo?.currentPrice?.price),
         state: stockFromWalmart(i.availabilityStatusV2?.value ?? i.availabilityStatus),
         sellerName: String(i.sellerName ?? '').trim(),
+        sellerId: String(i.sellerId ?? '').trim(),
         isPreOrder: i.preOrder?.isPreOrder === true,
         releaseDate: isoDate(i.preOrder?.streetDate ?? i.preOrder?.releaseDate),
         imageUrl: String(i.imageInfo?.thumbnailUrl ?? '').trim(),
@@ -181,7 +193,56 @@ export function walmartMeta(data: unknown): WalmartMeta {
  * first-party defeated `retailer_only` on an armed mission, and the money-safe
  * direction is to verify rather than to trust the parameter we sent.
  */
-export function soldByWalmart(sellerName: string): boolean {
+/**
+ * Walmart's own seller id.
+ *
+ * One constant, read off their own rows. A name is a display string a
+ * marketplace seller chooses; this is the key Walmart joins on, and no
+ * reseller can call themselves it.
+ */
+export const WALMART_SELLER_ID = 'F55CDC31AB754BB68FE0B39041159D63';
+
+export function soldByWalmart(sellerName: string, sellerId = ''): boolean {
+  /*
+   * The id decides when we have it.
+   *
+   * Not belt and braces for its own sake. Under `facet=retailer_type:Walmart`
+   * EVERY row says "Walmart.com" — the facet selects listings Walmart's
+   * catalogue owns, not listings Walmart is currently selling — so within a
+   * faceted sweep the name distinguishes nothing at all. It is only load-
+   * bearing on an unfaceted query, and there it is a string a seller picked.
+   *
+   * So: trust the id when Walmart sends one, and fall back to the name only
+   * when it is absent, which is the case an older capture and every existing
+   * fixture is in.
+   */
+  const id = String(sellerId ?? '').trim().toUpperCase();
+  if (id) return id === WALMART_SELLER_ID;
   const s = String(sellerName ?? '').trim().toLowerCase();
   return s === 'walmart.com' || s === 'walmart';
+}
+
+/**
+ * What a Walmart find is actually offering, once you know Walmart owns it.
+ *
+ * Three states wearing one word. The sweep has all of this at parse time and
+ * used to collapse it to "in stock" or "out", which is how a find that opens
+ * onto a $3,999 reseller page looked identical to one worth watching.
+ */
+export type WalmartOffer =
+  /** Walmart is selling it right now. */
+  | 'walmart-selling'
+  /** Walmart owns it, nobody is selling it. The best thing to watch. */
+  | 'nobody-selling'
+  /** Walmart is out and resellers hold the buy box. The page will not look like the find. */
+  | 'resellers-hold-it';
+
+export function walmartOffer(row: {
+  state: StockState;
+  canAddToCart: boolean;
+  otherOffers: number | null;
+}): WalmartOffer {
+  if (row.state === 'in' && row.canAddToCart) return 'walmart-selling';
+  if ((row.otherOffers ?? 0) > 0) return 'resellers-hold-it';
+  return 'nobody-selling';
 }

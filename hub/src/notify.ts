@@ -176,6 +176,34 @@ export interface StockItem {
   sellerName: string;
   quantity: number | null;
   orderLimit: number | null;
+  /**
+   * Whether the retailer will actually put it in a cart. null = did not say.
+   *
+   * Only Walmart states it, and it is the difference between an alert that is
+   * true and an alert that is useful.
+   */
+  addToCart?: boolean | null;
+}
+
+/**
+ * In stock, or in stock AND buyable?
+ *
+ * Learned at 8pm on 2 Sep 2026, from Walmart's own page data during a live
+ * drop: `IN_STOCK`, sold by `Walmart.com`, `canAddToCart: false`, all true at
+ * the same instant. The item was real and it was behind a per-item waiting
+ * room that only a signed-in person could join.
+ *
+ * A competing tracker alerted "In Stock" on that data, and it was not wrong —
+ * it was just not useful, because it sent a room full of people to a page with
+ * no button on it. Saying which of the two states this is costs one field and
+ * is the whole difference.
+ */
+export function buyablePhrase(addToCart: boolean | null | undefined): string | null {
+  if (addToCart === true) return '✅ add to cart works';
+  if (addToCart === false) return '⏳ NOT addable — queue or hold';
+  // Target and Pokémon Center never say. Silence is not "no", and a field
+  // reading "unknown" on two retailers out of three is noise.
+  return null;
 }
 
 export function buildStockEmbeds(items: StockItem[], now: string, note?: string): Embed[] {
@@ -185,6 +213,11 @@ export function buildStockEmbeds(items: StockItem[], now: string, note?: string)
       inline('Stock', stockPhrase(i.quantity, i.orderLimit, true)),
       inline('Retailer', i.retailer || '—'),
     ];
+
+    // Directly after Stock, because it qualifies it. A reader who sees "In
+    // stock" and stops reading has to hit this next.
+    const buyable = buyablePhrase(i.addToCart);
+    if (buyable) fields.push(inline('Buyable', buyable));
 
     // MSRP and the gap to it, which is the whole question on a resale-priced
     // listing. Shown as a pair so the second number has something to mean.

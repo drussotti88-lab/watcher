@@ -302,6 +302,9 @@ export function readTargetBodies(
     price,
     state: contradiction ? 'unknown' : state,
     confidence,
+    // Target does not publish a separate buyable flag; stock is the only
+    // answer it gives. null says so rather than guessing either way.
+    addToCart: null,
     availableQuantity: quantity,
     orderLimit,
     pickupAvailable: pickup,

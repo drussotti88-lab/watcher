@@ -92,6 +92,7 @@ export function judge(
     sellerName: reading.seller.name,
     availableQuantity: reading.availableQuantity,
     orderLimit: reading.orderLimit,
+    addToCart: reading.addToCart,
     isPreOrder: reading.preOrder.isPreOrder,
     releaseDate: reading.preOrder.releaseDate,
     imageUrl: reading.imageUrl,
@@ -173,6 +174,39 @@ export function judge(
         ...base,
         outcome: 'declined',
         reason: `sold by ${who}, and this mission is retailer-only`,
+      },
+    };
+  }
+
+  /*
+   * ── In stock is not the same as buyable ──────────────────────────────────
+   *
+   * Learned on 2 Sep 2026 at 8pm, from Walmart's own node during a live drop:
+   *
+   *     availabilityStatusV2  IN_STOCK
+   *     sellerName            Walmart.com
+   *     canAddToCart          false
+   *
+   * All three true at once. The item was real, it was Walmart's own, and it
+   * was behind a per-item waiting room that only a signed-in person could
+   * join. A competing tracker alerted "In Stock" on that same data and sent a
+   * room full of people to a page they could not buy from.
+   *
+   * So an armed mission stops here rather than driving a checkout at a page
+   * with no button on it. `declined` and not `failed`: nothing went wrong, the
+   * answer is simply no for now, and the next pass asks again.
+   *
+   * Only `false` stops it. `null` means the retailer did not say — Target and
+   * Pokémon Center never do — and treating silence as refusal would disarm
+   * two retailers out of three.
+   */
+  if (reading.addToCart === false) {
+    return {
+      observation,
+      run: {
+        ...base,
+        outcome: 'declined',
+        reason: 'in stock but the retailer will not add it to a cart — a queue or a hold',
       },
     };
   }

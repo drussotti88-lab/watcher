@@ -48,6 +48,7 @@ const reading = (): Reading => ({
   orderLimit: 2,
   preOrder: { isPreOrder: false, releaseDate: null },
   pickupAvailable: false,
+  addToCart: null,
   note: '',
   challenged: false,
   challengeReason: '',

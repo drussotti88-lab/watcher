@@ -22,7 +22,7 @@ const read = (over: Partial<ProductRead> = {}): ProductRead => ({
   confidence: 'exact',
   availableQuantity: null,
   orderLimit: null,
-  pickupAvailable: false,
+  pickupAvailable: false, addToCart: null,
   seller: { kind: 'retailer', name: 'Target' },
   preOrder: { isPreOrder: false, releaseDate: null },
   note: '',

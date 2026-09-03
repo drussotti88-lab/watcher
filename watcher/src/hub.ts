@@ -127,6 +127,14 @@ export interface ObservationOut {
   sellerName: string;
   availableQuantity: number | null;
   orderLimit: number | null;
+  /**
+   * Whether the retailer will put it in a cart right now, when it says.
+   *
+   * Optional on the wire so an older Hub reading a newer Phantom, or the
+   * reverse, is unaffected. `null` is "did not say" and is what Target and
+   * Pokémon Center always send.
+   */
+  addToCart?: boolean | null;
   isPreOrder: boolean;
   releaseDate: string | null;
   imageUrl: string;

@@ -36,6 +36,7 @@
  */
 import type { Mission, Settings } from './hub.ts';
 import { STOCK_LOADED_MIN } from './watch.ts';
+import { LEAD_MINUTES, upcomingDrop } from './schedule.ts';
 
 /**
  * Stock counted against a listing that cannot be sold yet.
@@ -104,6 +105,32 @@ export function dropWindow(
     const names = ms.slice(0, 2).map((m) => m.productName).join(', ');
     return names + (ms.length > 2 ? ` +${ms.length - 2} more` : '');
   };
+
+  /*
+   * ── A drop with an appointment ──────────────────────────────────────────
+   *
+   * Checked before staged stock because it is the more certain signal: staged
+   * stock infers a drop from inventory, this one knows the hour. Walmart's
+   * queue drops land at 8pm Chicago on Wednesdays, and on 2 Sep 2026 the first
+   * alert was thirty-four seconds after the hour. Nothing about waiting for
+   * that by luck is defensible once you know the time.
+   *
+   * It opens five minutes early and shuts forty-five minutes later on its own.
+   * The retailer still has to be switched on for any of it to matter — that is
+   * checked per mission further down the pass, and it is exactly what the
+   * readiness warning exists to shout about beforehand.
+   */
+  const scheduled = upcomingDrop(new Date(now), LEAD_MINUTES);
+  if (scheduled?.running) {
+    const when =
+      scheduled.minutesUntil > 0
+        ? `in ${scheduled.minutesUntil}m`
+        : `${scheduled.minutesSince}m ago`;
+    return {
+      open: true,
+      reason: `scheduled ${scheduled.slot.retailer} drop, ${when}`,
+    };
+  }
 
   const loaded = missions.filter((m) => m.enabled && staged(m));
   if (loaded.length) {

@@ -15,6 +15,8 @@ import {
   walmartMeta,
   searchUrl,
   soldByWalmart,
+  walmartOffer,
+  WALMART_SELLER_ID,
   stockFromWalmart,
   nextData,
   SOLD_BY_WALMART,
@@ -153,4 +155,63 @@ test('nothing on this page can be put in a basket', async () => {
   for (const r of rows) {
     assert.equal(r.canAddToCart, false, `${r.name} claims to be addable`);
   }
+});
+
+// ── Who is really selling this ───────────────────────────────────────────────
+//
+// Measured 2 Sep 2026 in a live browser. `pokemon elite trainer box`, no
+// facet: 49 rows, 27 distinct seller ids, exactly one of them Walmart's. The
+// other 48 were Rares Market, DealDudes, Icy Society, Troll and Toad and two
+// dozen more — every one IN_STOCK with canAddToCart true, which is exactly how
+// a reseller listing looks more buyable than the real thing.
+
+test('THE SELLER ID DECIDES, BECAUSE A NAME IS A STRING A SELLER PICKED', () => {
+  assert.equal(soldByWalmart('Walmart.com', WALMART_SELLER_ID), true);
+  assert.equal(soldByWalmart('Walmart.com', '5811F7C53AB1...'), false, 'Rares Market');
+  // Lower case, as some captures render it.
+  assert.equal(soldByWalmart('', WALMART_SELLER_ID.toLowerCase()), true);
+  // A reseller calling itself Walmart cannot get past the id.
+  assert.equal(soldByWalmart('Walmart.com', '6AFD69479079'), false);
+});
+
+test('the name still answers when Walmart sent no id', () => {
+  // Older captures and every existing fixture are in this case. Falling back
+  // to the name keeps them working; falling back to `false` would empty the
+  // sweep.
+  assert.equal(soldByWalmart('Walmart.com'), true);
+  assert.equal(soldByWalmart('Walmart', ''), true);
+  assert.equal(soldByWalmart('Rares Market L.L.C.', ''), false);
+  assert.equal(soldByWalmart('', ''), false);
+});
+
+test('A FIND KNOWS WHICH OF THREE THINGS IT IS', () => {
+  // Walmart selling it right now.
+  assert.equal(
+    walmartOffer({ state: 'in', canAddToCart: true, otherOffers: null }),
+    'walmart-selling',
+  );
+  // Walmart owns it, nobody has it. The best thing to watch — this is what a
+  // restock happens to.
+  assert.equal(
+    walmartOffer({ state: 'out', canAddToCart: false, otherOffers: null }),
+    'nobody-selling',
+  );
+  assert.equal(
+    walmartOffer({ state: 'out', canAddToCart: false, otherOffers: 0 }),
+    'nobody-selling',
+  );
+  // Walmart out, twelve resellers on the listing. The find will say Walmart at
+  // Walmart's price and the page will show a scalper.
+  assert.equal(
+    walmartOffer({ state: 'out', canAddToCart: false, otherOffers: 12 }),
+    'resellers-hold-it',
+  );
+});
+
+test('in stock but not addable is not Walmart selling it', () => {
+  // The 8pm state: IN_STOCK, Walmart.com, canAddToCart false, behind a queue.
+  assert.notEqual(
+    walmartOffer({ state: 'in', canAddToCart: false, otherOffers: null }),
+    'walmart-selling',
+  );
 });

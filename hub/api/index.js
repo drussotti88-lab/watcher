@@ -2358,6 +2358,172 @@ async function sweepAll(db2, userId, fetchText2 = fetchText) {
   return results;
 }
 
+// src/schedule.ts
+var KNOWN_DROPS = [
+  {
+    retailer: "Walmart",
+    weekday: 3,
+    at: "20:00",
+    timezone: "America/Chicago",
+    note: "Walmart queue drops. Confirmed 2 Sep 2026: opened 20:00:00, first alert 20:00:34, over by 20:43."
+  }
+];
+var LEAD_MINUTES = 5;
+var TAIL_MINUTES = 45;
+var WARN_MINUTES = 90;
+var MINUTES_IN_WEEK = 7 * 24 * 60;
+var DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+function zonedWeekMinutes(now, timezone) {
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    ...timezone ? { timeZone: timezone } : {},
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  });
+  let weekday = 0;
+  let hours = 0;
+  let minutes = 0;
+  for (const part of fmt.formatToParts(now)) {
+    if (part.type === "weekday") {
+      const i = DAYS.indexOf(part.value);
+      if (i >= 0) weekday = i;
+    }
+    if (part.type === "hour") hours = Number(part.value);
+    if (part.type === "minute") minutes = Number(part.value);
+  }
+  if (hours === 24) hours = 0;
+  return weekday * 1440 + hours * 60 + minutes;
+}
+function slotWeekMinutes(slot) {
+  const parts = slot.at.split(":");
+  if (parts.length !== 2) return null;
+  const h = Number(parts[0]);
+  const m = Number(parts[1]);
+  if (!Number.isInteger(h) || !Number.isInteger(m)) return null;
+  if (h < 0 || h > 23 || m < 0 || m > 59) return null;
+  return slot.weekday * 1440 + h * 60 + m;
+}
+function minutesUntil(slot, now) {
+  const target = slotWeekMinutes(slot);
+  if (target === null) return null;
+  const here = zonedWeekMinutes(now, slot.timezone);
+  return ((target - here) % MINUTES_IN_WEEK + MINUTES_IN_WEEK) % MINUTES_IN_WEEK;
+}
+function upcomingDrop(now, withinMinutes, slots = KNOWN_DROPS) {
+  let best = null;
+  for (const slot of slots) {
+    const until = minutesUntil(slot, now);
+    if (until === null) continue;
+    const since = MINUTES_IN_WEEK - until;
+    const running = until <= LEAD_MINUTES || since <= TAIL_MINUTES;
+    const soon = until <= withinMinutes;
+    if (!running && !soon) continue;
+    const found = {
+      slot,
+      minutesUntil: until,
+      minutesSince: until === 0 ? 0 : since,
+      running
+    };
+    if (!best) best = found;
+    else if (found.running && !best.running) best = found;
+    else if (found.running === best.running && found.minutesUntil < best.minutesUntil) best = found;
+  }
+  return best;
+}
+
+// src/readiness.ts
+var SILENT_MINUTES = 10;
+var toMinutes = (hhmm) => {
+  const parts = hhmm.split(":");
+  if (parts.length !== 2) return null;
+  const h = Number(parts[0]);
+  const m = Number(parts[1]);
+  if (!Number.isInteger(h) || !Number.isInteger(m) || h < 0 || h > 23 || m < 0 || m > 59) {
+    return null;
+  }
+  return h * 60 + m;
+};
+function asleepAtDrop(from, until, dropAt) {
+  const a = toMinutes(from);
+  const b = toMinutes(until);
+  const d = toMinutes(dropAt);
+  if (a === null || b === null || d === null) return false;
+  if (a === b) return false;
+  const awake = a < b ? d >= a && d < b : d >= a || d < b;
+  return !awake;
+}
+function dropReadiness(input) {
+  const drop = upcomingDrop(input.now, WARN_MINUTES);
+  if (!drop) return null;
+  const s = input.settings ?? {};
+  const retailer = drop.slot.retailer;
+  const blockers = [];
+  const off = (s.pausedRetailers ?? []).some(
+    (r) => String(r).toLowerCase() === retailer.toLowerCase()
+  );
+  if (off) {
+    blockers.push({
+      what: `${retailer} is switched off \u2014 nothing is watching it`,
+      fix: "Settings \u2192 Which shops, and how hard"
+    });
+  }
+  if (s.paused === true) {
+    blockers.push({
+      what: "Everything is paused",
+      fix: "Settings \u2192 When to watch \u2192 Pause everything"
+    });
+  }
+  const seen = input.agentSeenAt ? Date.parse(input.agentSeenAt) : NaN;
+  if (!Number.isFinite(seen)) {
+    blockers.push({ what: "Phantom has never reported in", fix: "Start it on the machine" });
+  } else {
+    const silentFor = Math.round((input.now.getTime() - seen) / 6e4);
+    if (silentFor > SILENT_MINUTES) {
+      blockers.push({
+        what: `Phantom has been silent for ${silentFor} minutes`,
+        fix: "Settings \u2192 Phantom, or restart it on the machine"
+      });
+    }
+  }
+  const watching = (input.missions ?? []).filter(
+    (m) => String(m.retailer ?? "").toLowerCase() === retailer.toLowerCase() && m.enabled !== false
+  );
+  if (watching.length === 0) {
+    blockers.push({
+      what: `No live mission at ${retailer}`,
+      fix: "Add a product, or resume a paused mission"
+    });
+  }
+  if (!s.burstSpacingSeconds || Number(s.burstSpacingSeconds) <= 0) {
+    blockers.push({
+      what: "Drop-window spacing is unset, so the scheduled window cannot speed anything up",
+      fix: "Settings \u2192 Which shops, and how hard \u2192 Drop-window spacing"
+    });
+  }
+  if (
+    // Both clocks are the owner's own, so the comparison is like for like:
+    // watching hours are stored in `settings.timezone` and the drop is defined
+    // in the retailer's, which for a US retailer and a US owner is the same
+    // wall clock. If we ever watch a shop that drops on another continent this
+    // has to convert, and the test that catches it should be written then.
+    asleepAtDrop(String(s.activeFrom ?? ""), String(s.activeUntil ?? ""), drop.slot.at)
+  ) {
+    blockers.push({
+      what: `Watching hours have Phantom asleep at ${drop.slot.at}`,
+      fix: "Settings \u2192 When to watch"
+    });
+  }
+  return {
+    retailer,
+    minutesUntil: drop.minutesUntil,
+    minutesSince: drop.minutesSince,
+    running: drop.running,
+    note: drop.slot.note,
+    blockers
+  };
+}
+
 // src/notify.ts
 var COLOR_NEW = 2059087;
 var COLOR_OPS = 9069584;
@@ -2422,6 +2588,11 @@ async function post(url, embeds) {
     console.warn("discord unreachable", err instanceof Error ? err.message : String(err));
   }
 }
+function buyablePhrase(addToCart) {
+  if (addToCart === true) return "\u2705 add to cart works";
+  if (addToCart === false) return "\u23F3 NOT addable \u2014 queue or hold";
+  return null;
+}
 function buildStockEmbeds(items, now, note) {
   return items.slice(0, 10).map((i) => {
     const fields = [
@@ -2429,6 +2600,8 @@ function buildStockEmbeds(items, now, note) {
       inline("Stock", stockPhrase(i.quantity, i.orderLimit, true)),
       inline("Retailer", i.retailer || "\u2014")
     ];
+    const buyable = buyablePhrase(i.addToCart);
+    if (buyable) fields.push(inline("Buyable", buyable));
     fields.push(inline("MSRP", dollars(i.msrp)));
     if (i.price !== null && i.msrp !== null && i.msrp > 0) {
       const over = i.price - i.msrp;
@@ -4089,6 +4262,12 @@ ${FONTS}<style>${STYLE}</style></head>
   </div>
 
   <div class="card banner alert" id="queue-banner" hidden></div>
+
+  <!-- A drop with an appointment, and whatever would stop it working.
+       Above the load-in banner because a switch that is off ninety minutes
+       before a known drop is more urgent than stock arriving in a warehouse:
+       one of them you have time to fix, and only if you are told. -->
+  <div class="card banner" id="ready-banner" hidden></div>
 
   <!-- Warehouse stock appearing on a watched listing that had none \u2014 hours of
        warning before a scheduled drop turns buyable. Warn, not alert: nothing
@@ -6287,6 +6466,51 @@ function render() {
     'Walmart': 'https://www.walmart.com',
     'Pokemon Center': 'https://www.pokemoncenter.com',
   };
+  /*
+   * \u2500\u2500 The readiness warning \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+   *
+   * Walmart's queue drops are at 8pm Chicago on Wednesdays. In the ninety
+   * minutes before one, this says what would stop it working \u2014 and on 2 Sep
+   * 2026 the answer would have been "Walmart is switched off", three and a
+   * half hours before anybody noticed.
+   *
+   * Two tones on purpose. Something wrong is an alert, because it needs
+   * fixing now and there is a deadline. Nothing wrong is quiet and green-ish:
+   * a countdown that shouts every Wednesday afternoon for no reason is a
+   * banner people learn to look past, and then it is not there when it
+   * matters.
+   */
+  const rb = document.getElementById('ready-banner');
+  const ready = DATA.readiness;
+  rb.textContent = '';
+  rb.hidden = !ready;
+  if (ready) {
+    const bad = (ready.blockers || []).length > 0;
+    rb.className = 'card banner' + (bad ? ' alert' : ' warn');
+    // A weekly clock has no negatives: after the hour, minutesUntil is
+    // counting down to NEXT week. minutesSince is what says "this is running".
+    const when = ready.minutesSince > 0
+      ? 'started ' + ready.minutesSince + ' min ago'
+      : 'in ' + ready.minutesUntil + ' min';
+    rb.appendChild(el('div', 'name',
+      bad
+        ? ready.retailer.toUpperCase() + ' DROP ' + when.toUpperCase() +
+          ' \u2014 ' + ready.blockers.length +
+          (ready.blockers.length === 1 ? ' THING IS' : ' THINGS ARE') + ' IN THE WAY'
+        : ready.retailer + ' drop ' + when + ' \u2014 ready'));
+    if (bad) {
+      for (const b of ready.blockers) {
+        const line = el('div', 'meta');
+        line.appendChild(el('strong', '', b.what));
+        line.append(' \u2014 ' + b.fix);
+        rb.appendChild(line);
+      }
+    } else {
+      rb.appendChild(el('div', 'meta',
+        'Shop on, Phantom reporting, missions live, window will tighten by itself.'));
+    }
+  }
+
   const qb = document.getElementById('queue-banner');
   qb.textContent = '';
   const queues = DATA.queues || [];
@@ -9189,6 +9413,12 @@ function createHandler(db2, env2) {
       const canCurate = await canWriteCatalogue(db2, userId);
       const canArm2 = await canArm(db2, userId);
       const agentSeenAt = await agentLastSeen(db2, userId);
+      const readiness = dropReadiness({
+        now: new Date(now),
+        settings,
+        agentSeenAt,
+        missions
+      });
       const shopStatus = capabilityTable().retailers.map((r) => ({
         name: r.name,
         watch: r.abilities.watch ?? "none",
@@ -9216,6 +9446,7 @@ function createHandler(db2, env2) {
         capabilities: shopStatus,
         agentSeenAt,
         me,
+        readiness,
         // Whether alerts have anywhere to go. A boolean, never the URL.
         discord: Boolean(env2.DISCORD_WEBHOOK_URL)
       });
@@ -9819,7 +10050,8 @@ function createHandler(db2, env2) {
               seller: o.sellerKind ?? "",
               sellerName: o.sellerName ?? (m ? m.sellerName : "") ?? "",
               quantity: o.availableQuantity ?? null,
-              orderLimit: o.orderLimit ?? (m ? m.orderLimit : null)
+              orderLimit: o.orderLimit ?? (m ? m.orderLimit : null),
+              addToCart: o.addToCart ?? null
             };
           }),
           now,

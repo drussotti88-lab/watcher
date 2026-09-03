@@ -138,7 +138,24 @@ export function readWalmartNextData(nextData: unknown, itemId: string): ProductR
     if (type === 'PICKUP' && opt.selected === true) pickupAvailable = true;
   }
 
+  /*
+   * Walmart is the only retailer that says this, and it is the field that
+   * answers the question a buyer is actually asking. Read with the same
+   * discipline as sellerType: an absent value is `null`, never `false`,
+   * because "the page did not say" and "the page said no" are different facts
+   * and only one of them should stop a buy.
+   */
+  const addToCart =
+    typeof product.canAddToCart === 'boolean' ? product.canAddToCart : null;
+
   const notes: string[] = [`availability ${status || '(absent)'}`];
+
+  // The state the drop taught us about: real, in stock, and not buyable. Worth
+  // saying in the note because "out" would be a lie and "in" is not the whole
+  // truth.
+  if (state === 'in' && addToCart === false) {
+    notes.push('in stock but NOT addable to cart — a queue or a hold');
+  }
 
   // A used or refurbished listing is a different product wearing the same name.
   const conditionNew = product.isConditionNew !== false;
@@ -166,6 +183,7 @@ export function readWalmartNextData(nextData: unknown, itemId: string): ProductR
     orderLimit,
     pickupAvailable,
     seller,
+    addToCart,
     preOrder,
     note: notes.join('; '),
   };

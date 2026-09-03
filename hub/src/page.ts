@@ -1302,6 +1302,12 @@ ${FONTS}<style>${STYLE}</style></head>
 
   <div class="card banner alert" id="queue-banner" hidden></div>
 
+  <!-- A drop with an appointment, and whatever would stop it working.
+       Above the load-in banner because a switch that is off ninety minutes
+       before a known drop is more urgent than stock arriving in a warehouse:
+       one of them you have time to fix, and only if you are told. -->
+  <div class="card banner" id="ready-banner" hidden></div>
+
   <!-- Warehouse stock appearing on a watched listing that had none — hours of
        warning before a scheduled drop turns buyable. Warn, not alert: nothing
        is buyable YET, and the queue banner keeps the louder colour for the
@@ -3499,6 +3505,51 @@ function render() {
     'Walmart': 'https://www.walmart.com',
     'Pokemon Center': 'https://www.pokemoncenter.com',
   };
+  /*
+   * ── The readiness warning ────────────────────────────────────────────────
+   *
+   * Walmart's queue drops are at 8pm Chicago on Wednesdays. In the ninety
+   * minutes before one, this says what would stop it working — and on 2 Sep
+   * 2026 the answer would have been "Walmart is switched off", three and a
+   * half hours before anybody noticed.
+   *
+   * Two tones on purpose. Something wrong is an alert, because it needs
+   * fixing now and there is a deadline. Nothing wrong is quiet and green-ish:
+   * a countdown that shouts every Wednesday afternoon for no reason is a
+   * banner people learn to look past, and then it is not there when it
+   * matters.
+   */
+  const rb = document.getElementById('ready-banner');
+  const ready = DATA.readiness;
+  rb.textContent = '';
+  rb.hidden = !ready;
+  if (ready) {
+    const bad = (ready.blockers || []).length > 0;
+    rb.className = 'card banner' + (bad ? ' alert' : ' warn');
+    // A weekly clock has no negatives: after the hour, minutesUntil is
+    // counting down to NEXT week. minutesSince is what says "this is running".
+    const when = ready.minutesSince > 0
+      ? 'started ' + ready.minutesSince + ' min ago'
+      : 'in ' + ready.minutesUntil + ' min';
+    rb.appendChild(el('div', 'name',
+      bad
+        ? ready.retailer.toUpperCase() + ' DROP ' + when.toUpperCase() +
+          ' — ' + ready.blockers.length +
+          (ready.blockers.length === 1 ? ' THING IS' : ' THINGS ARE') + ' IN THE WAY'
+        : ready.retailer + ' drop ' + when + ' — ready'));
+    if (bad) {
+      for (const b of ready.blockers) {
+        const line = el('div', 'meta');
+        line.appendChild(el('strong', '', b.what));
+        line.append(' — ' + b.fix);
+        rb.appendChild(line);
+      }
+    } else {
+      rb.appendChild(el('div', 'meta',
+        'Shop on, Phantom reporting, missions live, window will tighten by itself.'));
+    }
+  }
+
   const qb = document.getElementById('queue-banner');
   qb.textContent = '';
   const queues = DATA.queues || [];

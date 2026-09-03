@@ -2306,6 +2306,16 @@ export interface ObservationIn {
   sellerName?: string;
   availableQuantity?: number | null;
   orderLimit?: number | null;
+  /**
+   * Whether the retailer will put it in a cart right now.
+   *
+   * Read but not stored, deliberately: it is true for a matter of minutes and
+   * its whole job is to qualify the alert going out in this same request. A
+   * column would need a migration to hold a value nothing reads afterwards.
+   * `null` — and absent, from an older Phantom — both mean "did not say", and
+   * neither may be treated as "no".
+   */
+  addToCart?: boolean | null;
   isPreOrder?: boolean;
   releaseDate?: string | null;
   imageUrl?: string;

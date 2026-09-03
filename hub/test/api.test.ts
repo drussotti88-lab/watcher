@@ -544,3 +544,42 @@ test('an unknown shop still gets an alert, just without a link', async () => {
   assert.match(e.title, /WAITING ROOM UP AT A SHOP/);
   assert.equal(e.url, undefined);
 });
+
+// ── In stock is not the same as buyable ──────────────────────────────────────
+
+test('THE ALERT SAYS WHETHER YOU CAN ACTUALLY BUY IT', async () => {
+  // 8pm, 2 Sep 2026: Walmart said IN_STOCK, sold by Walmart.com, and
+  // canAddToCart false, all at once. A competing tracker alerted "In Stock" on
+  // that data and sent a room full of people to a page with no button on it.
+  const { buildStockEmbeds, buyablePhrase } = await import('../src/notify.ts');
+  const [e] = buildStockEmbeds(
+    [{
+      name: 'Pitch Black Booster Bundle', retailer: 'Walmart', price: 31.97, msrp: 26.94,
+      url: 'https://www.walmart.com/ip/20243261734', imageUrl: '', seller: 'retailer',
+      sellerName: 'Walmart.com', quantity: null, orderLimit: null, addToCart: false,
+    }],
+    '2026-09-03T01:00:34Z',
+  );
+  const buyable = (e!.fields ?? []).find((f) => f.name === 'Buyable');
+  assert.ok(buyable, 'the field has to be there when the retailer said');
+  assert.match(buyable!.value, /NOT addable/);
+
+  assert.match(buyablePhrase(true) ?? '', /add to cart works/);
+  // Silence is not "no". Target and Pokemon Center never say, and a field
+  // reading "unknown" on two retailers out of three is noise.
+  assert.equal(buyablePhrase(null), null);
+  assert.equal(buyablePhrase(undefined), null);
+});
+
+test('a Target alert carries no Buyable field at all', async () => {
+  const { buildStockEmbeds } = await import('../src/notify.ts');
+  const [e] = buildStockEmbeds(
+    [{
+      name: 'Chaos Rising ETB', retailer: 'Target', price: 59.99, msrp: 59.99,
+      url: 'https://www.target.com/p/x', imageUrl: '', seller: 'retailer',
+      sellerName: 'Target', quantity: 10, orderLimit: 2, addToCart: null,
+    }],
+    '2026-09-03T01:00:00Z',
+  );
+  assert.equal((e!.fields ?? []).some((f) => f.name === 'Buyable'), false);
+});

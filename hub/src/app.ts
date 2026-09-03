@@ -24,6 +24,7 @@ import type { Env, Discovered, SweepResult } from './types.ts';
 import type { Sql } from './db.ts';
 import { sweepAll, sweepSource } from './discover.ts';
 import * as store from './store.ts';
+import { dropReadiness } from './readiness.ts';
 import {
   announce,
   announceQueues,
@@ -361,6 +362,22 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       // page reads. The front door tells a new member which retailers are
       // watched — and a hard-coded list of three would go on promising a shop
       // the day it goes behind a wall.
+      /*
+       * What would stop the next scheduled drop working.
+       *
+       * Computed here rather than on the page because the page cannot see
+       * whether Phantom has reported in, and the switch that cost us the 2 Sep
+       * drop was invisible from the front of the app: Walmart had been off for
+       * three and a half hours and the only evidence was seventy identical
+       * lines in the run log.
+       */
+      const readiness = dropReadiness({
+        now: new Date(now),
+        settings,
+        agentSeenAt,
+        missions,
+      });
+
       const shopStatus = capabilityTable().retailers.map((r) => ({
         name: r.name,
         watch: r.abilities.watch ?? 'none',
@@ -369,7 +386,7 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       return json({
         missions, runs, changes, products, listings, settings, discoveries, sweep, now, you,
         authorisations, committed, queues, stockLoads, acquisitions, requests, canCurate, canArm,
-        capabilities: shopStatus, agentSeenAt, me,
+        capabilities: shopStatus, agentSeenAt, me, readiness,
         // Whether alerts have anywhere to go. A boolean, never the URL.
         discord: Boolean(env.DISCORD_WEBHOOK_URL),
       });
@@ -1387,6 +1404,7 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
               sellerName: o.sellerName ?? (m ? m.sellerName : '') ?? '',
               quantity: o.availableQuantity ?? null,
               orderLimit: o.orderLimit ?? (m ? m.orderLimit : null),
+              addToCart: o.addToCart ?? null,
             };
           }),
           now,

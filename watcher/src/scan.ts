@@ -614,7 +614,11 @@ export async function scanWalmartSearch(
 export function walmartCandidates(rows: WalmartRow[], foundBy = ''): Candidate[] {
   const out: Candidate[] = [];
   for (const row of rows) {
-    if (!soldByWalmart(row.sellerName)) continue;
+    // The id, not the name. Measured 2 Sep 2026: an unfaceted Pokémon search
+    // returned 49 rows from 27 sellers, one of them Walmart. If the facet is
+    // ever dropped, changed or quietly ignored, this is what stops two dozen
+    // resellers walking into Discovery.
+    if (!soldByWalmart(row.sellerName, row.sellerId)) continue;
     const tcg = classifyTcg(row.name);
     if (tcg.verdict === 'no') continue;
     out.push({

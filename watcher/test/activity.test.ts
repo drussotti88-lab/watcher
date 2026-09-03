@@ -169,7 +169,7 @@ const mission = (over: Partial<Mission> = {}): Mission => ({
 
 const reading = (over: Partial<Reading> = {}): Reading => ({
   name: 'Mega Evolution ETB', price: 49.99, state: 'out', confidence: 'exact',
-  availableQuantity: null, orderLimit: null, pickupAvailable: false,
+  availableQuantity: null, orderLimit: null, pickupAvailable: false, addToCart: null,
   seller: { kind: 'retailer', name: 'Target' },
   preOrder: { isPreOrder: false, releaseDate: null },
   note: '', challenged: false, challengeReason: '', imageUrl: '', ms: 812, ...over,

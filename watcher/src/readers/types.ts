@@ -42,6 +42,21 @@ export interface ProductRead {
   /** Available for store pickup, which is not the same as shippable. */
   pickupAvailable: boolean;
   seller: Seller;
+  /**
+   * Can this be put in a basket right now?
+   *
+   * In stock and buyable are different questions, and during a drop they give
+   * different answers. At 8:00pm on 2 Sep 2026 Walmart's own node said
+   * `availabilityStatusV2: IN_STOCK`, `sellerName: Walmart.com` and
+   * `canAddToCart: false` in the same breath — the item was real, Walmart's
+   * own, and behind a waiting room. A competing tracker alerted "In Stock" on
+   * that data and sent a room full of people to a page they could not buy
+   * from.
+   *
+   * `null` means the retailer did not say, which is not the same as "no" and
+   * must never be treated as one. Only Walmart states it today.
+   */
+  addToCart: boolean | null;
   preOrder: PreOrder;
   note: string;
   /**
@@ -104,6 +119,7 @@ export function unknownRead(note: string, name = ''): ProductRead {
     orderLimit: null,
     pickupAvailable: false,
     seller: { kind: 'unknown', name: '' },
+    addToCart: null,
     preOrder: { isPreOrder: false, releaseDate: null },
     note,
   };

@@ -74,6 +74,8 @@ export function readPokemonCenterOffers(offers: LdOffer[], sku: string): Product
     price: offer.price,
     state,
     confidence,
+    // JSON-LD availability is the whole story here. No separate buyable flag.
+    addToCart: null,
     availableQuantity: null,
     orderLimit: null,
     pickupAvailable: false,
