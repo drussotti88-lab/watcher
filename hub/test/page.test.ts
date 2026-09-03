@@ -15,6 +15,8 @@
  */
 import { test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { JSDOM } from 'jsdom';
 
 import { dashboardPage } from '../src/page.ts';
@@ -2098,17 +2100,24 @@ test('a list that is ALL back catalogue is not an empty page', async () => {
   assert.equal(findNames(h).length, 2);
 });
 
-test('A FIND WARNS YOU WHEN RESELLERS HOLD THE BUY BOX', async () => {
-  // The find is right: Walmart's own listing, Walmart's own price, out of
-  // stock. Then the link opens a page showing a marketplace seller at forty
-  // times the money. Clicking through should never be a surprise.
+test("A WALMART LISTING WITH RESELLERS ON IT READS AS WAITING, NOT AS A WARNING", async () => {
+  // Measured 3 Sep 2026: under the Walmart-only facet every out-of-stock row
+  // is Walmart's own listing with no price and resellers camped on the page.
+  // That is the exact set that restocks. The old pill said "6 resellers have
+  // the buy box" in the alert colour, and a page of those read as a page of
+  // scalpers. Same fact, said as what it means.
   const h = await boot(withFinds([
     { ...RICH_FIND, retailer: 'Walmart', state: 'out', isPreOrder: false,
       releaseDate: '', signal: 'recent', price: 49.87, otherOffers: 6 },
   ]));
-  assert.ok(findPills(h).includes('6 resellers have the buy box'),
-    findPills(h).join(' | '));
-  // And the price is labelled as the retailer's, not the page's.
+  const pills = findPills(h);
+  assert.ok(pills.includes('waiting for Walmart to restock'), pills.join(' | '));
+  assert.ok(pills.includes('6 resellers meanwhile'), pills.join(' | '));
+  assert.ok(!pills.some((p) => /buy box/.test(p)), 'the warning wording is gone');
+  // Neither is drawn in the alert colour.
+  const alert = [...h.doc.querySelectorAll('#finds-list .pill.flag')].map((p) => p.textContent);
+  assert.ok(!alert.some((t) => /reseller|waiting/.test(t ?? '')), alert.join(' | '));
+  // And a price, when there is one, is labelled as the retailer's.
   assert.match(h.doc.querySelector('#finds-list .meta')?.textContent ?? '',
     /\$49\.87 at Walmart/);
 });
@@ -2117,7 +2126,21 @@ test('one reseller is singular', async () => {
   const h = await boot(withFinds([
     { ...RICH_FIND, retailer: 'Walmart', state: 'out', releaseDate: '', otherOffers: 1 },
   ]));
-  assert.ok(findPills(h).includes('1 reseller has the buy box'));
+  assert.ok(findPills(h).includes('1 reseller meanwhile'));
+});
+
+test('WALMART OUT OF STOCK HAS NO PRICE, AND THE CARD SAYS SO RATHER THAN INVENTING ONE', async () => {
+  // Walmart publishes no price without an offer; the only price on the page
+  // is a reseller's. price is null on the find, and the card must not fill
+  // the gap.
+  const h = await boot(withFinds([
+    { ...RICH_FIND, retailer: 'Walmart', state: 'out', releaseDate: '', price: null, otherOffers: 4 },
+  ]));
+  const meta = h.doc.querySelector('#finds-list .meta')?.textContent ?? '';
+  assert.match(meta, /no Walmart price while out/);
+  // "usually $49.99" is a fact about the kind of thing and is allowed to
+  // stay; what must not appear is a price presented as THIS listing's.
+  assert.doesNotMatch(meta, /\$0|at Walmart/);
 });
 
 test('no warning when the retailer has it in stock itself', async () => {
@@ -2126,7 +2149,7 @@ test('no warning when the retailer has it in stock itself', async () => {
   const h = await boot(withFinds([
     { ...RICH_FIND, retailer: 'Walmart', state: 'in', releaseDate: '', otherOffers: 6 },
   ]));
-  assert.ok(!findPills(h).some((p) => p.includes('buy box')));
+  assert.ok(!findPills(h).some((p) => /reseller|waiting/.test(p)));
   assert.match(h.doc.querySelector('#finds-list .meta')?.textContent ?? '', /\$59\.99$|\$59\.99 ·/);
 });
 
@@ -3883,14 +3906,19 @@ test('THE HERO NUMBER IS WHAT IS BUYABLE FROM THE SHOP, NOT WHAT IS LISTED', asy
   assert.equal($(h, '#live-n').textContent, '1', 'one, from the shop itself');
   assert.match($(h, '#live-label').textContent, /from the shop/i);
 
+  // The list is the same set the headline counts. On 3 Sep the panel said
+  // "NOTHING IN STOCK / from the shops themselves" over a reseller's $42.88
+  // listing — both halves true, and the card contradicting itself. The
+  // reseller still appears on the watchlist, with the NOT-the-shop pill; it
+  // does not appear here.
   const text = $(h, '#live-list').textContent;
   assert.match(text, /Chaos Rising/);
-  assert.match(text, /Rares Market/, 'the reseller is shown, because it IS in stock');
-  assert.match(text, /⚠️/, 'and flagged, because it is not what you came for');
-  assert.equal(h.doc.querySelectorAll('#live-list .live').length, 2, 'the paused one is not stock');
+  assert.doesNotMatch(text, /Rares Market/, 'a reseller is not what this panel is for');
+  assert.equal(h.doc.querySelectorAll('#live-list .live').length, 1,
+    'one row: not the reseller, not the paused one');
 });
 
-test('the shop comes before the reseller, and the cheaper before the dearer', async () => {
+test('the cheaper shop box comes before the dearer, and the reseller is not listed', async () => {
   const d = JSON.parse(JSON.stringify(DASHBOARD));
   d.missions = [
     { ...DASHBOARD.missions[0], id: 1, state: 'in', price: 199, sellerKind: 'marketplace',
@@ -3902,9 +3930,9 @@ test('the shop comes before the reseller, and the cheaper before the dearer', as
   ];
   const h = await boot(d);
   const names = [...h.doc.querySelectorAll('#live-list .nm')].map((n) => n.textContent);
-  assert.match(names[0], /Cheaper/);
-  assert.match(names[1], /Dearer/);
-  assert.match(names[2], /Reseller/);
+  assert.equal(names.length, 2);
+  assert.match(names[0]!, /Cheaper/);
+  assert.match(names[1]!, /Dearer/);
 });
 
 test('nothing in stock says so, rather than showing an empty panel', async () => {
@@ -4050,4 +4078,22 @@ test('"See it in Wins" goes there', async () => {
   assert.equal(h.doc.getElementById('tab-wins')!.hidden, false);
   // The Wins tab fetches its own data; let that land before the window goes.
   await h.settle();
+});
+
+test('NO BACKTICK ANYWHERE INSIDE THE PAGE TEMPLATE', () => {
+  // The page is one template literal. A backtick in a comment inside it ends
+  // the script — and it has ended the script three times on 3 Sep 2026 alone,
+  // each time in a comment written by someone who knew the rule. The
+  // template's own delimiters are the only two allowed.
+  const src = readFileSync(resolve(import.meta.dirname, '../src/page.ts'), 'utf8');
+  const start = src.indexOf('const STYLE = `');
+  const end = src.lastIndexOf('`;');
+  assert.ok(start > 0 && end > start);
+  // Every backtick between the outer delimiters is one too many, unless it is
+  // a delimiter of a sibling top-level literal (STYLE, then the page). Count
+  // the literals: each contributes exactly two.
+  const inside = src.slice(start, end + 1);
+  const ticks = (inside.match(/`/g) ?? []).length;
+  const literals = (src.match(/^(?:const|export const|export function [a-zA-Z]+\([^)]*\): string \{\n  return) [A-Za-z_]* ?=? ?`/gm) ?? []).length;
+  assert.ok(ticks % 2 === 0, `odd number of backticks (${ticks}) — one is loose`);
 });

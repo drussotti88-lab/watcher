@@ -115,6 +115,11 @@ function num(value: unknown): number | null {
   return null;
 }
 
+/** A price is never zero. Zero is Walmart's way of saying "no offer". */
+function positive(n: number | null): number | null {
+  return n !== null && n > 0 ? n : null;
+}
+
 /** Walmart's availability vocabulary → ours. Unknown stays unknown. */
 export function stockFromWalmart(status: string): StockState {
   switch (String(status ?? '').toUpperCase()) {
@@ -161,7 +166,16 @@ export function readWalmartSearch(data: unknown): WalmartRow[] {
         // drop the query: a watchlist entry should be the product, not the
         // search that happened to find it.
         url: path ? `https://www.walmart.com${path.split('?')[0]}` : '',
-        price: num(i.price) ?? num(i.priceInfo?.currentPrice?.price),
+        /*
+         * Measured 3 Sep 2026 under facet=retailer_type:Walmart: every row
+         * Walmart is out of stock on carries `price: 0`. Walmart publishes no
+         * price when it has no offer; the only price on that product page is
+         * a reseller's. So zero is "Walmart has no price today", and a find
+         * that showed $0.00 — or worse, treated 0 as a number to compare
+         * against the usual price — would be reporting a fact that is not
+         * there. Null, like every other absent thing.
+         */
+        price: positive(num(i.price)) ?? positive(num(i.priceInfo?.currentPrice?.price)),
         state: stockFromWalmart(i.availabilityStatusV2?.value ?? i.availabilityStatus),
         sellerName: String(i.sellerName ?? '').trim(),
         sellerId: String(i.sellerId ?? '').trim(),

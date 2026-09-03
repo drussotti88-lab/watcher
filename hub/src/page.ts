@@ -4779,7 +4779,16 @@ function renderLive() {
     ? 'buyable right now, from the shop itself'
     : 'buyable right now, from the shops themselves';
 
-  if (rows.length === 0) {
+  /*
+   * The list under the headline is the SAME set the headline counts. It used
+   * to be every in-stock reading, with resellers marked by a warning
+   * icon, and on 3 Sep the panel said "NOTHING IN STOCK / buyable right now,
+   * from the shops themselves" over a $42.88 listing from 1000607114.ontario
+   * .inc. Both halves were true and the card contradicted itself. A reseller
+   * having stock is not the thing this panel is for, and the watchlist still
+   * shows it, with the NOT-the-shop pill.
+   */
+  if (shop.length === 0) {
     const none = el('div', 'meta');
     none.style.marginTop = '10px';
     none.textContent = 'Nothing you watch is in stock. That is what watching mostly looks like.';
@@ -4787,7 +4796,7 @@ function renderLive() {
     return;
   }
 
-  for (const m of rows.slice(0, 6)) {
+  for (const m of shop.slice(0, 6)) {
     const row = el('div', 'live');
     if (m.imageUrl) {
       const img = el('img');
@@ -5391,10 +5400,14 @@ function renderFinds() {
     if (d.retailer) facts.push(d.retailer);
     if (d.kind) facts.push(d.kind);
     // Whose price this is, when it is not the one the page will show you.
+    // No price at all is Walmart out of stock: it publishes none without an
+    // offer, and the card must not invent one from a reseller.
     if (d.price) {
       facts.push(d.state === 'out' && d.otherOffers > 0
         ? money(d.price) + ' at ' + (d.retailer || 'the retailer')
         : money(d.price));
+    } else if (d.state === 'out') {
+      facts.push('no ' + (d.retailer || 'shop') + ' price while out');
     }
     // What this kind of thing usually costs. Not "the MSRP of this product" —
     // no retailer publishes one, and two honest shops price the same box
@@ -5462,9 +5475,24 @@ function renderFinds() {
       tags.appendChild(el('span', 'pill flag', over.toFixed(1) + '× the usual price'));
     }
 
+    /*
+     * ── Walmart's own listing, waiting ───────────────────────────────────
+     *
+     * Measured 3 Sep 2026: under the Walmart-only facet, every out-of-stock
+     * row is Walmart's own listing with no price and a handful of resellers
+     * camped on the product page. That is not a bad find — it is the exact
+     * set that restocks, and the reason the sweep exists. But the old pill
+     * said "7 resellers have the buy box" in the alert colour, and a page of
+     * those read as a page of scalpers. Same fact, said as what it means:
+     * this is the shop's listing, the shop has none, and we are waiting for
+     * the shop. The reseller count stays, smaller, because it is the reason
+     * the product page will not look like this card.
+     */
     if (d.state === 'out' && d.otherOffers > 0) {
-      tags.appendChild(el('span', 'pill flag',
-        d.otherOffers + (d.otherOffers === 1 ? ' reseller has' : ' resellers have') + ' the buy box'));
+      tags.appendChild(el('span', 'pill info',
+        'waiting for ' + (d.retailer || 'the shop') + ' to restock'));
+      tags.appendChild(el('span', 'pill s-out',
+        d.otherOffers + (d.otherOffers === 1 ? ' reseller' : ' resellers') + ' meanwhile'));
     }
 
     if (d.confidence === 'unsure') {

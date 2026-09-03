@@ -215,3 +215,22 @@ test('in stock but not addable is not Walmart selling it', () => {
     'walmart-selling',
   );
 });
+
+test('WALMART OUT OF STOCK CARRIES NO PRICE, AND ZERO IS NOT ONE', () => {
+  // Measured 3 Sep 2026: every faceted out-of-stock row has price: 0. The
+  // only price on that product page is a reseller's, and Walmart's own is
+  // simply absent. A find must say nothing rather than $0.00.
+  const rows = readWalmartSearch({
+    props: { pageProps: { initialData: { searchResult: { itemStacks: [{ items: [{
+      usItemId: '7762615377', name: 'Pokemon Stellar Crown Elite Trainer Box',
+      canonicalUrl: '/ip/x/7762615377', price: 0,
+      priceInfo: { currentPrice: { price: 0 } },
+      availabilityStatusV2: { value: 'OUT_OF_STOCK' }, canAddToCart: false,
+      sellerName: 'Walmart.com', sellerId: WALMART_SELLER_ID, additionalOfferCount: 6,
+    }] }] } } } },
+  });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]!.price, null);
+  assert.equal(rows[0]!.state, 'out');
+  assert.equal(rows[0]!.otherOffers, 6);
+});
