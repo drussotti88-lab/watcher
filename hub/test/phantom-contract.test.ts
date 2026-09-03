@@ -492,3 +492,71 @@ test('an ordinary line is not mistaken for a queue', () => {
   // "QUEUE:" has to start the line, exactly as the SQL requires.
   assert.equal(store.isQueueLine('sweep finished, nothing in the QUEUE: today'), false);
 });
+
+// ── Only the retailer's own stock leaves the building ────────────────────────
+//
+// 11:16pm, 2 Sep 2026: two in-stock alerts went to the room for a Pitch Black
+// Booster Bundle at $42.00 from "Squeaks Game World LLC" — a Walmart
+// marketplace reseller, over MSRP, "0 available". The people in that room are
+// there for retail drops; a reseller coming into stock is the background state
+// of every marketplace all day. judge() already refuses to buy from anyone but
+// the retailer, and the alert has to hold the same line the buy does.
+
+async function postsMade(fn: () => Promise<void>): Promise<string[]> {
+  const real = globalThis.fetch;
+  const bodies: string[] = [];
+  globalThis.fetch = (async (url: any, init: any) => {
+    if (String(url).includes('discord')) {
+      bodies.push(String(init?.body ?? ''));
+      return new Response('', { status: 204 });
+    }
+    return real(url, init);
+  }) as unknown as typeof fetch;
+  try { await fn(); } finally { globalThis.fetch = real; }
+  return bodies;
+}
+
+const obs = (listingId: number, over: Record<string, unknown>) => ({
+  listingId, state: 'in', confidence: 'exact', price: 42, sellerKind: 'retailer',
+  sellerName: 'Walmart', availableQuantity: null, orderLimit: null, isPreOrder: false,
+  releaseDate: null, imageUrl: '', note: '', ...over,
+});
+
+test('A RESELLER COMING INTO STOCK IS NOT POSTED TO THE ROOM', async () => {
+  const { db, listingId } = await withMission();
+  const withHook = { ...env, DISCORD_WEBHOOK_URL: 'https://discord.test/hook' };
+  const handler = createHandler(db, withHook);
+  const send = (o: unknown) => handler(new Request('https://hub.test/observations', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ observations: [o] }),
+  }));
+
+  const quiet = await postsMade(async () => {
+    await send(obs(listingId, { sellerKind: 'marketplace', sellerName: 'Squeaks Game World LLC' }));
+  });
+  assert.equal(quiet.length, 0, 'nothing leaves for a reseller');
+
+  // The same listing, back out, then in from the retailer itself: that IS news.
+  await send(obs(listingId, { state: 'out' }));
+  const loud = await postsMade(async () => {
+    await send(obs(listingId, { sellerKind: 'retailer', sellerName: 'Walmart' }));
+  });
+  assert.equal(loud.length, 1, 'the retailer coming into stock is posted');
+  assert.match(loud[0]!, /"Seller","value":"Target"/);
+});
+
+test('an unidentifiable seller is held to the same line as a reseller', async () => {
+  // judge() asks whether the seller IS the retailer, so unknown is declined
+  // like a marketplace. Silence is not a retailer.
+  const { db, listingId } = await withMission();
+  const handler = createHandler(db, { ...env, DISCORD_WEBHOOK_URL: 'https://discord.test/hook' });
+  const posts = await postsMade(async () => {
+    await handler(new Request('https://hub.test/observations', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ observations: [obs(listingId, { sellerKind: 'unknown', sellerName: '' })] }),
+    }));
+  });
+  assert.equal(posts.length, 0);
+});

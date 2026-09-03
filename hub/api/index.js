@@ -10380,7 +10380,10 @@ function createHandler(db2, env2) {
         const m = byListing.get(listingId);
         return m ? m.alerts !== false : false;
       };
-      const freshAlerts = cameIntoStock.filter((c) => speaks(c.obs.listingId));
+      const fromTheShop = (sellerKind) => sellerKind === "retailer";
+      const freshAlerts = cameIntoStock.filter(
+        (c) => speaks(c.obs.listingId) && fromTheShop(c.obs.sellerKind)
+      );
       if (freshAlerts.length > 0 && env2.DISCORD_WEBHOOK_URL) {
         await announceStock(
           env2.DISCORD_WEBHOOK_URL,
@@ -10402,7 +10405,9 @@ function createHandler(db2, env2) {
           now
         );
       }
-      const againAlerts = stillIn.filter((o) => speaks(o.listingId));
+      const againAlerts = stillIn.filter(
+        (o) => speaks(o.listingId) && fromTheShop(o.sellerKind)
+      );
       if (againAlerts.length > 0 && env2.DISCORD_WEBHOOK_URL) {
         await announceStock(
           env2.DISCORD_WEBHOOK_URL,

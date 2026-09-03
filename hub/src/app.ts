@@ -1393,7 +1393,34 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
         return m ? m.alerts !== false : false;
       };
 
-      const freshAlerts = cameIntoStock.filter((c) => speaks(c.obs.listingId));
+      /*
+       * ── Only the retailer's own stock is news ───────────────────────────
+       *
+       * At 11:16pm on 2 Sep 2026 two alerts went to the room for a Pitch
+       * Black Booster Bundle at $42.00 from "Squeaks Game World LLC" — a
+       * Walmart marketplace reseller, over MSRP, with "0 available". The card
+       * carried a warning icon beside the seller, and the reader still had to
+       * read to the bottom of a green in-stock card to find out it was the
+       * thing they are racing rather than the thing they want.
+       *
+       * The people in that room are there for retail drops. A reseller
+       * listing coming into stock is not an event for them; it is the
+       * background state of every marketplace all day long. So it does not
+       * leave the building. `judge()` already refuses to buy from anyone but
+       * the retailer, and the alert now holds the same line the buy does —
+       * anything else is a channel that says one thing and a machine that
+       * does another.
+       *
+       * The page still shows these, with the NOT-the-shop pill: the watchlist
+       * is the owner's record and should be complete. The room is a broadcast
+       * and should be true.
+       */
+      const fromTheShop = (sellerKind: string | null | undefined): boolean =>
+        sellerKind === 'retailer';
+
+      const freshAlerts = cameIntoStock.filter(
+        (c) => speaks(c.obs.listingId) && fromTheShop(c.obs.sellerKind),
+      );
       if (freshAlerts.length > 0 && env.DISCORD_WEBHOOK_URL) {
         await announceStock(
           env.DISCORD_WEBHOOK_URL,
@@ -1422,7 +1449,9 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       // Same card, with a footer that says which kind of message it is. Without
       // it a reminder reads as a fresh drop and sends people running at
       // something they already missed or already bought.
-      const againAlerts = stillIn.filter((o) => speaks(o.listingId));
+      const againAlerts = stillIn.filter(
+        (o) => speaks(o.listingId) && fromTheShop(o.sellerKind),
+      );
       if (againAlerts.length > 0 && env.DISCORD_WEBHOOK_URL) {
         await announceStock(
           env.DISCORD_WEBHOOK_URL,
