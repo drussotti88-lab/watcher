@@ -896,6 +896,24 @@ export async function findUser(db: Sql, handle: string): Promise<UserRow | null>
  * this module never holds a plaintext password even briefly, and so the CLI
  * that reads one off a terminal is the only thing that ever has.
  */
+/** The account's current password hash, by id. Null when there is no such enabled account. */
+export async function passwordHashById(db: Sql, userId: number): Promise<string | null> {
+  const rows = await db.query<{ password_hash: string }>(
+    `SELECT password_hash FROM users WHERE id = $1 AND enabled = true`,
+    [userId],
+  );
+  return rows[0] ? String(rows[0].password_hash ?? '') : null;
+}
+
+/** Set a signed-in account's own password. Takes a hash, like upsertUser. */
+export async function setPasswordById(db: Sql, userId: number, passwordHash: string): Promise<boolean> {
+  const rows = await db.query<{ id: number }>(
+    `UPDATE users SET password_hash = $2 WHERE id = $1 AND enabled = true RETURNING id`,
+    [userId, passwordHash],
+  );
+  return rows.length > 0;
+}
+
 export async function upsertUser(
   db: Sql,
   handle: string,

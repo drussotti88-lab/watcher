@@ -28,6 +28,8 @@ import {
   identify,
   hashToken,
   COOKIE_NAME,
+  mintInvite,
+  readInvite,
 } from '../src/auth.ts';
 import type { Env } from '../src/types.ts';
 
@@ -623,4 +625,70 @@ test('a disabled account cannot sign in even with the right password', async () 
     form: 'handle=tester&password=a+password+for+the+tester',
   });
   assert.equal(res.status, 401);
+});
+
+// ── Invites ──────────────────────────────────────────────────────────────────
+//
+// A link that signs one person in once so they can choose their own password.
+// Nothing stored: the MAC covers the account's current password hash, so the
+// link dies the moment a password is set.
+
+const SECRET = 'session-secret-for-tests';
+
+test('AN INVITE ROUND-TRIPS, AND DIES WHEN THE PASSWORD CHANGES', async () => {
+  const hash1 = await hashPassword('throwaway-first-password');
+  const token = await mintInvite(SECRET, 7, hash1);
+  assert.equal(await readInvite(SECRET, token, async () => hash1), 7, 'the link works');
+
+  // They set a password. The hash changes. The same link is now nobody's.
+  const hash2 = await hashPassword('the-one-they-chose');
+  assert.equal(await readInvite(SECRET, token, async () => hash2), 0, 'used once, dead after');
+});
+
+test('an invite refuses the wrong secret, the future, a stranger and nonsense', async () => {
+  const hash = await hashPassword('x');
+  const token = await mintInvite(SECRET, 7, hash);
+  assert.equal(await readInvite('another-secret', token, async () => hash), 0);
+  const eightDays = Date.now() + 8 * 24 * 3600 * 1000;
+  assert.equal(await readInvite(SECRET, token, async () => hash, eightDays), 0, 'seven days, then gone');
+  assert.equal(await readInvite(SECRET, token, async () => null), 0, 'no such enabled account');
+  assert.equal(await readInvite(SECRET, 'not.a.token', async () => hash), 0);
+  assert.equal(await readInvite(SECRET, '', async () => hash), 0);
+});
+
+test('THE INVITE LINK SIGNS YOU IN, AND SETTING A PASSWORD ENDS IT', async () => {
+  const { db } = await setup();
+  const userId = await store.upsertUser(db, 'newtester', await hashPassword('temporary'));
+  const hash = (await store.passwordHashById(db, userId))!;
+  const token = await mintInvite(PASSWORD, userId, hash);
+
+  // Tap the link: the page posts the token and gets a session.
+  const res = await call(db, 'POST', '/api/invite', { body: { token } });
+  assert.equal(res.status, 200);
+  const setCookie = res.headers.get('set-cookie') ?? '';
+  assert.match(setCookie, /HttpOnly/);
+  const session = decodeURIComponent(/hub_session=([^;]+)/.exec(setCookie)![1]!);
+  const me = await call(db, 'GET', '/api/dashboard', { cookie: session });
+  assert.equal(me.status, 200);
+  assert.equal(me.body.you, 'newtester');
+
+  // Choose a password. Too short is refused; a real one is stored.
+  const short = await call(db, 'POST', '/api/me/password', { cookie: session, body: { password: 'short' } });
+  assert.equal(short.status, 400);
+  const ok = await call(db, 'POST', '/api/me/password', { cookie: session, body: { password: 'a-real-password-now' } });
+  assert.equal(ok.status, 200);
+
+  // The link is now dead, and the chosen password works at the door.
+  const again = await call(db, 'POST', '/api/invite', { body: { token } });
+  assert.equal(again.status, 401, 'used once');
+  const login = await call(db, 'POST', '/login', {
+    form: `handle=newtester&password=${encodeURIComponent('a-real-password-now')}`,
+  });
+  assert.equal(login.status, 303);
+});
+
+test('a Phantom token cannot set the password of the account it belongs to', async () => {
+  const { db } = await setup();
+  const res = await call(db, 'POST', '/api/me/password', { token: TOKEN, body: { password: 'a-real-password-now' } });
+  assert.equal(res.status, 403);
 });

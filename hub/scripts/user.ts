@@ -14,6 +14,7 @@
  *   npm run user add <name>
  *   npm run user passwd <name>
  *   npm run user token <name>
+ *   npm run user invite <name>
  *   npm run user disable <name>
  *   npm run user enable <name>
  */
@@ -22,7 +23,7 @@ import { writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import postgres from 'postgres';
 import { connectionStringFrom, fromPostgres, type PostgresLike } from '../src/db.ts';
-import { hashPassword, hashToken } from '../src/auth.ts';
+import { hashPassword, hashToken, mintInvite, sessionSecret } from '../src/auth.ts';
 import * as store from '../src/store.ts';
 
 /**
@@ -87,6 +88,7 @@ function usage(): never {
   npm run user add <name>
   npm run user passwd <name>
   npm run user token <name>
+  npm run user invite <name>     a link that signs them in once and asks for a password
   npm run user disable <name>
   npm run user enable <name>
 `);
@@ -188,6 +190,45 @@ async function main(): Promise<void> {
       console.log('  It is not printed here on purpose. Send it to them the way you');
       console.log('  would send a password, then delete the file.');
       console.log('\n  Any token they had before this has stopped working.\n');
+      return;
+    }
+
+    /*
+     * ── An invite link ──────────────────────────────────────────────────
+     *
+     * The easy way to hand somebody an account: a link they tap. It signs
+     * them in once and the front door asks them to choose a password, at
+     * which point the link stops working — the MAC covers the password
+     * hash, so setting one changes it. Seven days if they never tap it.
+     *
+     * Create the account first (npm run user add) with any throwaway
+     * password; the invite is what they actually use.
+     */
+    if (action === 'invite') {
+      const existing = await store.findUser(db, handle);
+      if (!existing) {
+        console.error(`\n  There is no "${handle}". Create them first: npm run user add ${handle}\n`);
+        process.exit(1);
+      }
+      const secret = sessionSecret({
+        APP_PASSWORD: process.env.APP_PASSWORD,
+        SESSION_SECRET: process.env.SESSION_SECRET,
+      });
+      if (!secret) {
+        console.error('\n  SESSION_SECRET (or APP_PASSWORD) is not in .env.local, so the link cannot be signed.\n');
+        process.exit(1);
+      }
+      const hash = await store.passwordHashById(db, existing.id);
+      const token = await mintInvite(secret, existing.id, hash ?? '');
+      const base = (process.env.HUB_URL || 'https://watcher-gold.vercel.app').replace(/\/$/, '');
+      const link = `${base}/invite#t=${encodeURIComponent(token)}`;
+
+      const file = `${existing.handle}-invite.txt`;
+      writeFileSync(file, link + '\n', { mode: 0o600 });
+      console.log(`\n  An invite link for "${existing.handle}" is in ${file}.`);
+      console.log('  Send them that link. It signs them in once, asks them to choose a');
+      console.log('  password, and then stops working. Unused, it expires in 7 days.');
+      console.log('  Delete the file once it is sent.\n');
       return;
     }
 

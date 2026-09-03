@@ -1220,6 +1220,49 @@ ${FONTS}<style>${STYLE}</style></head>
 </main></body></html>`;
 }
 
+/**
+ * The invite landing page. A copy of /sso with different words: lifts the
+ * token from the fragment, posts it, and lands on the dashboard with
+ * `?welcome=1`, which opens the front door on the choose-a-password step.
+ */
+export function invitePage(): string {
+  return `<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Phantom by DNA</title>
+<link rel="icon" href="/icon-192-v6.png" sizes="192x192" type="image/png">
+${FONTS}<style>${STYLE}</style></head>
+<body><main class="login">
+  <div class="card">
+    <h1><span class="mark"></span>Phantom by DNA</h1>
+    <p class="sub" id="inv-status" style="margin:6px 0 0">Opening your invite…</p>
+    <div class="err" id="inv-err" style="margin:9px 0"></div>
+  </div>
+<script>
+(function () {
+  var m = /[#&]t=([^&]+)/.exec(location.hash || '');
+  var token = m ? decodeURIComponent(m[1]) : '';
+  try { history.replaceState(null, '', '/invite'); } catch (e) {}
+  var fail = function (text) {
+    document.getElementById('inv-status').textContent = 'That invite didn’t work.';
+    document.getElementById('inv-err').textContent = text;
+  };
+  if (!token) { fail('The link carried no invite. Ask for a fresh one.'); return; }
+  fetch('/api/invite', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token: token }),
+  }).then(function (res) {
+    return res.json().catch(function () { return {}; }).then(function (data) {
+      if (res.ok && data.ok) { location.replace('/?welcome=1'); return; }
+      fail(data.error || 'The invite could not be verified.');
+    });
+  }).catch(function () { fail('The server could not be reached.'); });
+})();
+</script>
+</main></body></html>`;
+}
+
 export function dashboardPage(): string {
   return `<!doctype html>
 <html lang="en"><head>
@@ -4358,15 +4401,84 @@ function renderRadar() {
  */
 const WIZ_SEEN = 'phantom.frontdoor.v1';
 let WIZ_STEP = 0;
+// Arrived by invite link: the first thing to do is choose a password, because
+// the link that signed them in stops working the moment they have one.
+const ARRIVED_BY_INVITE = /[?&]welcome=1/.test(location.search);
+let PASSWORD_SET = false;
 
 /** What the steps ARE, so the count and the order have one definition. */
 function wizSteps() {
-  return [
+  const steps = [];
+  if (ARRIVED_BY_INVITE && !PASSWORD_SET) {
+    steps.push({ title: 'Choose a password', render: wizPassword });
+  }
+  steps.push(
     { title: 'What Phantom does', render: wizWhat },
     { title: 'Pick something to watch', render: wizPick },
     { title: 'Something missing?', render: wizAsk },
-    { title: 'What happens next', render: wizNext },
-  ];
+    { title: 'Get the alerts', render: wizAlerts },
+  );
+  return steps;
+}
+
+function wizPassword(body) {
+  const p = el('p');
+  p.textContent =
+    'The link that brought you here signs you in once. Pick a password now so ' +
+    'you can come back from any device.';
+  body.appendChild(p);
+
+  const form = el('form', 'stack');
+  form.style.marginTop = '12px';
+  const pw = el('input');
+  pw.type = 'password'; pw.placeholder = 'at least 10 characters';
+  pw.autocomplete = 'new-password'; pw.minLength = 10; pw.required = true;
+  const again = el('input');
+  again.type = 'password'; again.placeholder = 'and again';
+  again.autocomplete = 'new-password'; again.required = true;
+  form.appendChild(pw); form.appendChild(again);
+  const actions = el('div', 'actions');
+  const save = el('button', 'primary', 'Save password');
+  save.type = 'submit';
+  const msg = el('span', 'msg');
+  actions.appendChild(save); actions.appendChild(msg);
+  form.appendChild(actions);
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (pw.value !== again.value) { msg.textContent = 'those do not match'; return; }
+    withButton(save, 'Saving…', msg, async () => {
+      await api('POST', '/api/me/password', { password: pw.value });
+      PASSWORD_SET = true;
+      WIZ_STEP = 0;
+      renderWizard();
+      return 'saved';
+    });
+  });
+  body.appendChild(form);
+}
+
+function wizAlerts(body) {
+  const invite = (DATA.settings && DATA.settings.discordInvite) || '';
+  const p = el('p');
+  p.textContent = invite
+    ? 'Alerts go to a Discord room: one card per product the moment the shop ' +
+      'itself has it, and a shout when a waiting room goes up.'
+    : 'Alerts go to a Discord room. The invite is not set yet; ask Roberto for it.';
+  body.appendChild(p);
+  if (invite) {
+    const a = el('a', 'btn primary', 'Join the alerts room');
+    a.href = invite; a.target = '_blank'; a.rel = 'noopener';
+    const wrap = el('div', 'actions'); wrap.appendChild(a); body.appendChild(wrap);
+  }
+  const p2 = el('p', 'sub');
+  p2.style.marginTop = '14px';
+  p2.textContent =
+    'On a phone, add this page to your home screen — Share, then Add to Home ' +
+    'Screen — and it opens like an app.';
+  body.appendChild(p2);
+  const p3 = el('p', 'sub');
+  p3.textContent = 'Nothing here can spend money. You can reopen this from “How Phantom works” at the top.';
+  body.appendChild(p3);
 }
 
 function wizWhat(body) {
@@ -4461,8 +4573,8 @@ function wizAsk(body) {
     ? 'Paste a Target, Pokémon Center or Walmart product link and it goes ' +
       'straight into the catalogue, watched from the next pass.'
     : 'Paste a Target, Pokémon Center or Walmart product link. It goes to the ' +
-      'catalogue owner, and once it is added you will see it on your watchlist. ' +
-      'You can see what happened to anything you send under Discovery.';
+      'catalogue owner, and once it is added it lands on your Missions. ' +
+      'What happened to anything you sent is under Requests.';
   body.appendChild(p);
 
   const form = el('form', 'stack');
@@ -4495,30 +4607,6 @@ function wizAsk(body) {
     });
   });
   body.appendChild(form);
-}
-
-function wizNext(body) {
-  const list = el('ul');
-  const bits = [
-    'Readings land on the Missions tab. A page that has not been checked yet ' +
-      'says so rather than pretending to be out of stock.',
-    'Activity shows every check, with what the page said and why anything was ' +
-      'decided — including the checks that found nothing.',
-    'A release date or warehouse stock appearing is a warning that a drop is ' +
-      'near. Those get their own banner at the top.',
-  ];
-  if (!DATA.canCurate) {
-    bits.push(
-      'Arming — letting a machine buy — needs a Phantom of your own, signed ' +
-        'into your own accounts. Nothing here can spend your money.',
-    );
-  }
-  for (const b of bits) list.appendChild(el('li', null, b));
-  body.appendChild(list);
-
-  const p = el('p', 'sub');
-  p.textContent = 'You can reopen this any time from “How it works” at the top.';
-  body.appendChild(p);
 }
 
 function renderWizard() {
@@ -4566,6 +4654,9 @@ function closeWizard() {
  */
 function maybeOpenWizard() {
   if (!document.getElementById('wizard').hidden) return;
+  // An invite link always opens the door: the first step is the password, and
+  // a device that dismissed the tour last month must not swallow that.
+  if (ARRIVED_BY_INVITE && !PASSWORD_SET) { openWizard(0); return; }
   if ((DATA.missions || []).length > 0) return;
   let seen = false;
   try { seen = localStorage.getItem(WIZ_SEEN) === '1'; } catch (e) { seen = false; }

@@ -37,8 +37,10 @@ import {
 import { applyFilters, dedupe } from './filter.ts';
 import { probeUrl } from './fetcher.ts';
 import {
+  hashPassword,
   identify,
   mintSession,
+  readInvite,
   sessionCookie,
   clearCookie,
   sessionSecret,
@@ -52,7 +54,7 @@ import {
   searchVaultSealed,
   vaultConfigured,
 } from './vault.ts';
-import { loginPage, ssoPage, dashboardPage } from './page.ts';
+import { loginPage, ssoPage, invitePage, dashboardPage } from './page.ts';
 import { identifyListing } from './parsers/identify.ts';
 import { MANIFEST, SERVICE_WORKER, iconResponse } from './pwa.ts';
 import { capabilityTable } from './capabilities.ts';
@@ -233,6 +235,30 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
      */
     if (request.method === 'GET' && path === '/sso') {
       return html(ssoPage());
+    }
+
+    /*
+     * ── The invite link ──────────────────────────────────────────────────
+     *
+     * `npm run user invite <name>` writes a link; the person taps it, lands
+     * signed in, and the front door asks them to choose a password. Same
+     * shape as /sso: the token is in the fragment, the page posts it. The
+     * link cancels itself the moment a password is set (see auth.ts).
+     */
+    if (request.method === 'GET' && path === '/invite') {
+      return html(invitePage());
+    }
+    if (request.method === 'POST' && path === '/api/invite') {
+      const secret = sessionSecret(env);
+      if (!secret) return json({ error: 'no session secret is set on this deployment' }, 500);
+      const b = (await request.json().catch(() => null)) as { token?: string } | null;
+      const userId = await readInvite(secret, b?.token ?? '', (id) => store.passwordHashById(db, id));
+      if (!userId) {
+        return json({ error: 'that invite has expired or was already used — ask for a new one' }, 401);
+      }
+      return json({ ok: true }, 200, {
+        'Set-Cookie': sessionCookie(await mintSession(secret, userId), secure),
+      });
     }
     if (request.method === 'POST' && path === '/api/sso') {
       const secret = sessionSecret(env);
@@ -838,6 +864,22 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       if (!Number.isInteger(id)) return json({ error: 'bad acquisition id' }, 400);
       if (!(await store.dismissAcquisition(db, userId, id))) return json({ error: 'no queued acquisition with that id' }, 404);
       return json({ dismissed: id });
+    }
+
+    /**
+     * Choose (or change) your own password.
+     *
+     * Browser session only — a Phantom token must not be able to set the
+     * password of the account it belongs to. Ten characters is the floor;
+     * there is no upper rule, because the only wrong password is a short one.
+     */
+    if (request.method === 'POST' && path === '/api/me/password') {
+      if (caller.kind !== 'browser') return json({ error: 'sign in first' }, 403);
+      const b = await body<{ password?: string }>();
+      const pw = String(b?.password ?? '');
+      if (pw.length < 10) return json({ error: 'use at least 10 characters' }, 400);
+      const ok = await store.setPasswordById(db, userId, await hashPassword(pw));
+      return ok ? json({ ok: true }) : json({ error: 'no such account' }, 404);
     }
 
     if (request.method === 'GET' && path === '/api/settings') {

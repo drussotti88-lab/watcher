@@ -279,6 +279,70 @@ async function pbkdf2(
   return new Uint8Array(bits);
 }
 
+/*
+ * ── Invites ─────────────────────────────────────────────────────────────────
+ *
+ * A link that signs one person in once, so they can choose their own
+ * password. Sending someone a generated password to type on a phone is the
+ * step where onboarding stalls; a link they tap is not.
+ *
+ * Nothing is stored. The token is `<userId>.<expires>.<mac>`, and the MAC is
+ * over the id, the expiry, AND the account's current password hash. That last
+ * part is what makes the link single-use in practice without a table: the
+ * moment they set a password, the hash changes, the MAC no longer verifies,
+ * and the link is dead — including in whatever chat it was pasted into. Until
+ * then it is good for seven days.
+ *
+ * The WHOLE hash, not a prefix. The first draft took sixteen characters, and
+ * every hash this system writes begins with the same sixteen — the algorithm
+ * header — so "the password changed" changed nothing. A test caught it before
+ * a link did.
+ *
+ * The token rides in the URL FRAGMENT (`/invite#t=...`), which never reaches
+ * a server or a log, and the page posts it — the same shape as the vault's
+ * `/sso` link.
+ */
+const INVITE_DAYS = 7;
+
+function inviteSubject(userId: number, expires: number, passwordHash: string): string {
+  return `invite:${userId}:${expires}:${String(passwordHash ?? '') || 'none'}`;
+}
+
+export async function mintInvite(
+  secret: string,
+  userId: number,
+  passwordHash: string,
+  now = Date.now(),
+): Promise<string> {
+  const expires = now + INVITE_DAYS * 24 * 3600 * 1000;
+  const mac = await hmac(secret, inviteSubject(userId, expires, passwordHash));
+  return `${userId}.${expires}.${mac}`;
+}
+
+/**
+ * Whose invite is this, if anyone's. 0 for expired, forged, or already used.
+ *
+ * `lookupHash` fetches the account's CURRENT password hash by id, so a link
+ * minted against an older hash fails here — that is the single-use rule.
+ */
+export async function readInvite(
+  secret: string,
+  token: string,
+  lookupHash: (userId: number) => Promise<string | null>,
+  now = Date.now(),
+): Promise<number> {
+  const parts = String(token ?? '').split('.');
+  if (parts.length !== 3) return 0;
+  const userId = Number(parts[0]);
+  const expires = Number(parts[1]);
+  if (!Number.isInteger(userId) || userId <= 0 || !Number.isFinite(expires)) return 0;
+  if (expires < now) return 0;
+  const hash = await lookupHash(userId);
+  if (hash === null) return 0;
+  const expected = await hmac(secret, inviteSubject(userId, expires, hash));
+  return safeEqual(parts[2]!, expected) ? userId : 0;
+}
+
 /** Hash a password for storage. Never logged, never returned to a browser. */
 export async function hashPassword(
   password: string,

@@ -4097,3 +4097,69 @@ test('NO BACKTICK ANYWHERE INSIDE THE PAGE TEMPLATE', () => {
   const literals = (src.match(/^(?:const|export const|export function [a-zA-Z]+\([^)]*\): string \{\n  return) [A-Za-z_]* ?=? ?`/gm) ?? []).length;
   assert.ok(ticks % 2 === 0, `odd number of backticks (${ticks}) — one is loose`);
 });
+
+// ── The front door, by invite ────────────────────────────────────────────────
+
+test('ARRIVING BY INVITE OPENS THE DOOR ON "CHOOSE A PASSWORD"', async () => {
+  // The link that signed them in stops working the moment they have a
+  // password, so that is the first thing the door asks — and it asks even on
+  // a device that dismissed the tour before, and even when they already have
+  // missions (an invite can be re-sent to an existing account).
+  const h = await boot(DASHBOARD, 'https://hub.test/?welcome=1');
+  const wiz = h.doc.getElementById('wizard')!;
+  assert.equal(wiz.hidden, false);
+  assert.equal($(h, '#wiz-title').textContent, 'Choose a password');
+  assert.ok(wiz.querySelector('input[type=password]'));
+  assert.match($(h, '#wiz-step').textContent!, /1 \/ 5/);
+});
+
+test('mismatched passwords do not leave the page', async () => {
+  const h = await boot(DASHBOARD, 'https://hub.test/?welcome=1');
+  const inputs = [...h.doc.querySelectorAll('#wiz-body input[type=password]')] as HTMLInputElement[];
+  inputs[0]!.value = 'one-thing-here-ok';
+  inputs[1]!.value = 'another-thing-ok';
+  h.doc.querySelector('#wiz-body form')!.dispatchEvent(new h.dom.window.Event('submit', { cancelable: true }));
+  await h.settle();
+  assert.match($(h, '#wiz-body .msg').textContent!, /do not match/);
+  assert.equal(h.calls.some((c) => c.path === '/api/me/password'), false);
+});
+
+test('saving the password posts it and moves on to the tour', async () => {
+  const h = await boot(DASHBOARD, 'https://hub.test/?welcome=1');
+  h.reply('/api/me/password', { ok: true });
+  const inputs = [...h.doc.querySelectorAll('#wiz-body input[type=password]')] as HTMLInputElement[];
+  inputs[0]!.value = 'a-real-password-now';
+  inputs[1]!.value = 'a-real-password-now';
+  h.doc.querySelector('#wiz-body form')!.dispatchEvent(new h.dom.window.Event('submit', { cancelable: true }));
+  await h.settle();
+  const posted = h.calls.find((c) => c.path === '/api/me/password');
+  assert.ok(posted, 'the password was sent');
+  assert.equal($(h, '#wiz-title').textContent, 'What Phantom does');
+  assert.match($(h, '#wiz-step').textContent!, /1 \/ 4/, 'the password step is gone once it is done');
+});
+
+test('THE LAST STEP GETS THEM INTO THE ALERTS ROOM', async () => {
+  const d = JSON.parse(JSON.stringify(DASHBOARD));
+  d.missions = [];
+  d.settings = { ...(d.settings || {}), discordInvite: 'https://discord.gg/abc123' };
+  const h = await boot(d);
+  // Opens by itself for an empty account; walk to the end.
+  for (let i = 0; i < 3; i += 1) ($(h, '#wiz-next') as HTMLButtonElement).click();
+  assert.equal($(h, '#wiz-title').textContent, 'Get the alerts');
+  const join = h.doc.querySelector('#wiz-body a.btn') as HTMLAnchorElement;
+  assert.ok(join, 'a button into Discord');
+  assert.equal(join.href, 'https://discord.gg/abc123');
+  assert.match($(h, '#wiz-body').textContent!, /home screen/i);
+  assert.match($(h, '#wiz-body').textContent!, /Nothing here can spend money/);
+  assert.equal($(h, '#wiz-next').textContent, 'Done');
+});
+
+test('without an invite set, the alerts step says so instead of a dead button', async () => {
+  const d = JSON.parse(JSON.stringify(DASHBOARD));
+  d.missions = [];
+  d.settings = { ...(d.settings || {}), discordInvite: '' };
+  const h = await boot(d);
+  for (let i = 0; i < 3; i += 1) ($(h, '#wiz-next') as HTMLButtonElement).click();
+  assert.equal(h.doc.querySelector('#wiz-body a.btn'), null);
+  assert.match($(h, '#wiz-body').textContent!, /invite is not set yet/);
+});
