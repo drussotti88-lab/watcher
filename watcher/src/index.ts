@@ -35,6 +35,10 @@ import { isQueue } from './challenge.ts';
 import { Activity } from './activity.ts';
 import { runSetup } from './setup.ts';
 import { takeLock, releaseLock, heldMessage, type LockDeps } from './lock.ts';
+import { readVersion } from './version.ts';
+import { planUpdate, unpackOver, UPDATE_EVERY_MS } from './update.ts';
+import { buildReport, summarise } from './report.ts';
+import { upcomingDrop, WARN_MINUTES } from './schedule.ts';
 
 /**
  * What to sweep when nothing is named.
@@ -201,6 +205,8 @@ const COMMANDS = [
   'browser',
   'signin',
   'inspect',
+  'report',
+  'update',
   'help',
 ] as const;
 type Command = (typeof COMMANDS)[number];
@@ -239,6 +245,15 @@ function help(): void {
                      Watching is done signed out, on a separate profile, so the
                      noisy half can never cost you the account that holds your
                      payment details.
+
+  npm run report     Gathers what a person debugging this would look at - the
+                     last of the log, your settings with the token blanked,
+                     which Node and Chrome - and sends it to whoever runs the
+                     app. Add a sentence: npm run report "chrome never opens".
+
+  npm run update     Fetches the newest Phantom from the app and restarts into
+                     it. Happens by itself every six hours; this is for when
+                     you have been asked to do it now.
 
   npm run inspect <product-url>
                      Reports everything readable on one product page and saves
@@ -321,7 +336,7 @@ async function runPasses(once: boolean): Promise<void> {
   // Chrome upgrade or a Node version is answerable without asking.
   activity.record({
     kind: 'startup',
-    message: `Phantom started, checking every ${config.intervalSec}s`,
+    message: `Phantom ${readVersion()} started, checking every ${config.intervalSec}s`,
     detail:
       `node ${process.version} · ${process.platform}/${process.arch} · ` +
       `chrome channel ${config.browser.channel}${config.browser.headed ? ' (headed)' : ''} · ` +
@@ -708,6 +723,12 @@ async function runPasses(once: boolean): Promise<void> {
       });
   }, 3_000);
 
+  // First check happens one interval in, not at second zero: a Phantom that
+  // has just been started is often being started BECAUSE something is wrong,
+  // and replacing its code before it has completed one pass would make that
+  // impossible to reason about.
+  let lastUpdateCheck = Date.now();
+
   let heartbeat = Date.now();
   const STALL_MS = 10 * 60_000;
   const watchdog = setInterval(() => {
@@ -936,6 +957,52 @@ async function runPasses(once: boolean): Promise<void> {
 
       if (once) break;
 
+      // ── Staying current ──────────────────────────────────────────────────
+      //
+      // Every six hours, ask the Hub what it is handing out. If it differs
+      // from this copy, unpack it over this folder and exit WITHOUT writing
+      // the stopped marker — the launcher reads that as a crash and starts a
+      // fresh one, which is now the new code. See update.ts for every reason
+      // this declines.
+      if (Date.now() - lastUpdateCheck > UPDATE_EVERY_MS) {
+        lastUpdateCheck = Date.now();
+        const soon = upcomingDrop(new Date(), WARN_MINUTES);
+        const decision = planUpdate({
+          own: readVersion(),
+          hub: (await hub.phantomVersion())?.version ?? null,
+          enabled: config.autoUpdate,
+          once,
+          minutesToDrop: soon ? soon.minutesUntil : null,
+        });
+        if (decision.update) {
+          try {
+            console.log(`  ${timestamp()}  updating: ${decision.why}`);
+            const written = unpackOver(await hub.phantomZip(), process.cwd());
+            activity.record({
+              kind: 'startup',
+              message: `updating Phantom — ${decision.why}`,
+              detail: `${written.length} files replaced; restarting`,
+            });
+            await activity.flush(true);
+            await browser.close();
+            releaseLock(lockDeps);
+            console.log(`
+  Phantom has updated itself (${written.length} files) and is restarting.
+  If this window does not come back on its own, close it and double-click
+  "2 - Start watching".
+`);
+            // Deliberately NOT logs/.stopped: the supervisor must restart us.
+            process.exit(0);
+          } catch (err) {
+            // An update that fails is a log line, never an outage. The old
+            // copy is still here and still working.
+            const why = (err as Error).message;
+            console.log(`  ${timestamp()}  update failed, carrying on: ${why}`);
+            activity.record({ kind: 'startup', level: 'warn', message: `update failed: ${why}` });
+          }
+        }
+      }
+
       // ── The interval is a CADENCE, not a gap ────────────────────────────
       //
       // This used to sleep the full interval after the pass returned. Once a
@@ -1163,6 +1230,73 @@ async function main(): Promise<void> {
       }
       console.log('\n  Opening it…');
       console.log(renderInspection(await inspectUrl(browser, url)));
+      return;
+    }
+
+    /*
+     * ── Sending a report ─────────────────────────────────────────────────
+     *
+     * Runs without a browser and without the lock, so it works while Phantom
+     * is running, and works when Phantom is too broken to start — which is
+     * when it is wanted. If the Hub cannot be reached, the report is written
+     * next to the program so it can be attached to a message by hand: a
+     * diagnostic that needs the thing being diagnosed is no diagnostic.
+     */
+    if (command === 'report') {
+      const note = process.argv.slice(3).join(' ');
+      const report = buildReport({ dir: process.cwd(), version: readVersion(), note });
+      console.log(`\n  ${summarise(report)}\n`);
+
+      let config: ReturnType<typeof loadConfig> | null = null;
+      try {
+        config = loadConfig();
+      } catch {
+        /* no config is itself the report; fall through to the file */
+      }
+      if (config?.hub.url && config.hub.token) {
+        try {
+          const hub = new Hub({ url: config.hub.url, token: config.hub.token });
+          const id = await hub.sendReport(report);
+          console.log(`  Sent. It is report #${id} in the app.\n`);
+          console.log('  Nothing here included your token, your card, or any page');
+          console.log('  Phantom captured — only the log, your settings with the token');
+          console.log('  blanked, and which Node and Chrome you have.\n');
+          return;
+        } catch (err) {
+          console.log(`  Could not send it: ${(err as Error).message}`);
+        }
+      }
+      const file = `phantom-report-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+      writeFileSync(file, JSON.stringify(report, null, 2));
+      console.log(`\n  Written to ${file}. Send that file instead.\n`);
+      return;
+    }
+
+    /** Update on demand. The same path the loop takes every six hours. */
+    if (command === 'update') {
+      const config = loadConfig();
+      const hub = new Hub({ url: config.hub.url, token: config.hub.token });
+      const own = readVersion();
+      const theirs = await hub.phantomVersion();
+      const decision = planUpdate({
+        own,
+        hub: theirs?.version ?? null,
+        // Asked for by hand: the config switch and the drop window are about
+        // Phantom deciding on its own, and a person at the keyboard outranks
+        // both. The development-checkout rule is not negotiable and stays.
+        enabled: true,
+        once: false,
+        minutesToDrop: null,
+      });
+      if (!decision.update) {
+        console.log(`\n  Nothing to do — ${decision.why}.\n`);
+        return;
+      }
+      console.log(`\n  Updating: ${decision.why}`);
+      const written = unpackOver(await hub.phantomZip(theirs?.url), process.cwd());
+      console.log(`  ${written.length} files replaced.`);
+      console.log('\n  Now run "1 - Set up" once (it installs anything new), then');
+      console.log('  "2 - Start watching". If Phantom is running, stop it first.\n');
       return;
     }
 

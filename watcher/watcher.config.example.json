@@ -16,5 +16,6 @@
     "perDay": 400
   },
   "live": false,
-  "intervalSec": 90
+  "intervalSec": 90,
+  "autoUpdate": true
 }

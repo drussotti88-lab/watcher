@@ -754,6 +754,20 @@ async function setPasswordById(db2, userId, passwordHash) {
   );
   return rows.length > 0;
 }
+async function fileReport(db2, userId, input) {
+  const rows = await db2.query(
+    `INSERT INTO reports (user_id, note, summary, version, body)
+     VALUES ($1, left($2, 2000), left($3, 500), left($4, 60), $5) RETURNING id`,
+    [
+      userId,
+      String(input.note ?? ""),
+      String(input.summary ?? ""),
+      String(input.version ?? ""),
+      JSON.stringify(input.body ?? {})
+    ]
+  );
+  return Number(rows[0]?.id ?? 0);
+}
 async function setUserTokenById(db2, userId, tokenHash) {
   const rows = await db2.query(
     "UPDATE users SET token_hash = $2 WHERE id = $1 AND enabled = true RETURNING id",
@@ -2766,6 +2780,20 @@ async function announceBought(webhookUrl, item, now) {
 async function announceStaged(webhookUrl, items, now, note) {
   const embeds = buildStagedEmbeds(items, now, note);
   if (embeds.length) await post(webhookUrl, embeds);
+}
+function buildReportEmbed(input) {
+  return {
+    title: `REPORT #${input.id} FROM ${(input.handle || "someone").toUpperCase()}`,
+    description: input.note.slice(0, 400) || "(they did not add a note)",
+    color: COLOR_QUEUE,
+    fields: [
+      { name: "What the machine says", value: input.summary.slice(0, 900) || "nothing obvious", inline: false },
+      { name: "Read it", value: `npm run reports ${input.id}`, inline: false }
+    ]
+  };
+}
+async function announceReport(webhookUrl, input) {
+  await post(webhookUrl, [buildReportEmbed(input)]);
 }
 async function announce(webhookUrl, label, retailer, items, now) {
   if (items.length === 0) return;
@@ -7596,6 +7624,14 @@ function renderMachineSetup(body) {
   ]) ol.appendChild(el('li', null, line));
   body.appendChild(ol);
 
+  // Two things they will need later and will not think to ask about now.
+  const after = el('p', 'sub');
+  after.textContent =
+    'It keeps itself up to date on its own. If anything looks wrong, ' +
+    'double-click 10 - Send a report and it tells us what your machine is ' +
+    'doing \u2014 never your token, your card or anything it saved.';
+  body.appendChild(after);
+
   // \u2500\u2500 4. Proof of life \u2500\u2500
   const status = el('p', seen ? 'sub good' : 'sub');
   status.style.marginTop = '12px';
@@ -10434,6 +10470,35 @@ function createHandler(db2, env2) {
       if (pw.length < 10) return json({ error: "use at least 10 characters" }, 400);
       const ok = await setPasswordById(db2, userId, await hashPassword(pw));
       return ok ? json({ ok: true }) : json({ error: "no such account" }, 404);
+    }
+    if (request.method === "GET" && path === "/api/phantom/version") {
+      return json({
+        version: PHANTOM_ZIP_BASE64 ? PHANTOM_ZIP_META.sha : "",
+        url: "/api/phantom.zip",
+        builtAt: PHANTOM_ZIP_BASE64 ? PHANTOM_ZIP_META.builtAt : ""
+      });
+    }
+    if (request.method === "POST" && path === "/api/reports") {
+      const b = await body();
+      const report = b?.report;
+      if (!report || typeof report !== "object") return json({ error: "need a report" }, 400);
+      const id = await fileReport(db2, userId, {
+        note: String(report.note ?? ""),
+        summary: String(report.summary ?? ""),
+        version: String(report.version ?? ""),
+        body: report
+      });
+      const room = env2.DISCORD_OPS_WEBHOOK_URL || env2.DISCORD_WEBHOOK_URL;
+      if (room && id) {
+        await announceReport(room, {
+          id,
+          handle: (await profile(db2, userId)).handle,
+          note: String(report.note ?? ""),
+          summary: String(report.summary ?? "")
+        }).catch(() => {
+        });
+      }
+      return json({ id });
     }
     if (request.method === "GET" && path === "/api/phantom.zip") {
       if (caller.kind !== "browser") return json({ error: "sign in first" }, 403);

@@ -448,6 +448,37 @@ export async function announceStaged(
   if (embeds.length) await post(webhookUrl, embeds);
 }
 
+/**
+ * A tester's Phantom has filed a report.
+ *
+ * Deliberately thin: the note, the one-line summary, and where to read the
+ * rest. The report body is a console dump, and a chat room is neither the
+ * place to read one nor the place to test how well it was scrubbed.
+ */
+export function buildReportEmbed(input: {
+  id: number;
+  handle: string;
+  note: string;
+  summary: string;
+}): Embed {
+  return {
+    title: `REPORT #${input.id} FROM ${(input.handle || 'someone').toUpperCase()}`,
+    description: input.note.slice(0, 400) || '(they did not add a note)',
+    color: COLOR_QUEUE,
+    fields: [
+      { name: 'What the machine says', value: input.summary.slice(0, 900) || 'nothing obvious', inline: false },
+      { name: 'Read it', value: `npm run reports ${input.id}`, inline: false },
+    ],
+  };
+}
+
+export async function announceReport(
+  webhookUrl: string,
+  input: { id: number; handle: string; note: string; summary: string },
+): Promise<void> {
+  await post(webhookUrl, [buildReportEmbed(input)]);
+}
+
 export async function announce(
   webhookUrl: string,
   label: string,

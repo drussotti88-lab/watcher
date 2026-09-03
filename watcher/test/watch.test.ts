@@ -375,10 +375,13 @@ test('a challenge drops that retailer for the rest of the pass', async () => {
   // Retrying into a bot check is how a soft flag becomes a hard block.
   const { hub, runs } = recorder();
   const pacer = new Pacer(STEADY, () => 0);
+  // Three DIFFERENT listings: the retailer-wide drop is what is under test
+  // here, and sharing one listingId would let the per-listing rest (added
+  // 3 Sep) do the work instead and prove nothing.
   const missions = [
-    mission({ id: 1, retailer: 'Target' }),
-    mission({ id: 2, retailer: 'Target' }),
-    mission({ id: 3, retailer: 'Walmart' }),
+    mission({ id: 1, listingId: 11, retailer: 'Target' }),
+    mission({ id: 2, listingId: 12, retailer: 'Target' }),
+    mission({ id: 3, listingId: 13, retailer: 'Walmart' }),
   ];
 
   const result = await pass(missions, pacer, {
@@ -397,6 +400,11 @@ test('a challenge drops that retailer for the rest of the pass', async () => {
   assert.match(result.blocked[0]!, /Target: press and hold, 20m/);
   assert.equal(pacer.standingDown('Target', T0), true);
   assert.equal(pacer.standingDown('Walmart', T0), false);
+  // The page that refused is also resting on its own account, and the two
+  // that did not are free.
+  assert.ok(pacer.listingRestMs(11, T0) > 0, 'the page that refused rests');
+  assert.equal(pacer.listingRestMs(12, T0), 0);
+  assert.equal(pacer.listingRestMs(13, T0), 0);
   assert.deepEqual(runs.map((r) => r.outcome), ['blocked']);
 });
 

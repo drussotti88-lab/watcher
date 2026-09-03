@@ -513,6 +513,41 @@ export class Hub {
   }
 
   /**
+   * Which Phantom the Hub is handing out, and to whom.
+   *
+   * Returns null rather than throwing: a Hub too old to answer this, or one
+   * having a bad minute, must never stop a pass. Not knowing whether an
+   * update exists is the same as there not being one.
+   */
+  async phantomVersion(): Promise<{ version: string; url: string } | null> {
+    try {
+      const r = await this.call<{ version?: string; url?: string }>('GET', '/api/phantom/version');
+      return r?.version ? { version: String(r.version), url: String(r.url ?? '/api/phantom.zip') } : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Fetch the zip itself. Bytes, not JSON, so it does not go through call(). */
+  async phantomZip(path = '/api/phantom.zip'): Promise<Buffer> {
+    const res = await this.doFetch(`${this.base}${path}`, {
+      headers: { Authorization: `Bearer ${this.token}` },
+    });
+    if (!res.ok) throw new HubError(`GET ${path} → ${res.status}`, res.status);
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.length < 1000 || buf.subarray(0, 2).toString() !== 'PK') {
+      throw new HubError(`GET ${path} did not return a zip`, res.status);
+    }
+    return buf;
+  }
+
+  /** Send a report. Returns the id the Hub gave it, or 0. */
+  async sendReport(report: unknown): Promise<number> {
+    const r = await this.call<{ id?: number }>('POST', '/api/reports', { report });
+    return Number(r?.id ?? 0);
+  }
+
+  /**
    * Offer what a scan found to the discovery feed.
    *
    * The Hub owns the "is this new" judgement, and it has to: newness is a

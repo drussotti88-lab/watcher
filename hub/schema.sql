@@ -936,3 +936,33 @@ ALTER TABLE watch_state ADD COLUMN IF NOT EXISTS stock_alerts_sent INTEGER NOT N
 -- still bought if armed, and still on the page - it simply stops posting to a
 -- room of people who did not ask about that one.
 ALTER TABLE missions ADD COLUMN IF NOT EXISTS alerts BOOLEAN NOT NULL DEFAULT true;
+
+-- ---------------------------------------------------------------------------
+-- Reports from a tester's machine
+--
+-- A tester whose Phantom is misbehaving cannot be asked to find a log file and
+-- paste the interesting part: knowing which part is interesting is the whole
+-- problem they are reporting. So "10 - Send a report" gathers what somebody
+-- debugging would look at and posts it here, and the owner reads it with
+-- `npm run reports`.
+--
+-- The body is JSONB rather than columns because its shape belongs to the
+-- Watcher and will change with it, and a report is read by a person, not
+-- queried. `summary` is lifted out because it is what a list needs to show.
+--
+-- Everything in `body` was scrubbed on the machine that wrote it: the token is
+-- named to the scrubber by value, and captured pages are listed by name and
+-- never uploaded. Nothing here is a credential.
+CREATE TABLE IF NOT EXISTS reports (
+  id       BIGSERIAL PRIMARY KEY,
+  user_id  BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  -- What the tester typed, if anything. Their words, not ours.
+  note     TEXT NOT NULL DEFAULT '',
+  -- One line: version, platform, whether it is running, the obvious faults.
+  summary  TEXT NOT NULL DEFAULT '',
+  version  TEXT NOT NULL DEFAULT '',
+  body     JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
+CREATE INDEX IF NOT EXISTS reports_recent_idx ON reports (at DESC);

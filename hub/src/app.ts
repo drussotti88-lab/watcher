@@ -29,6 +29,7 @@ import {
   announce,
   announceBought,
   announceQueues,
+  announceReport,
   announceStaged,
   announceStock,
   announceTest,
@@ -901,6 +902,53 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
      * hash. Asking again mints a new one and retires this one, which is the
      * same rule the CLI has always had.
      */
+    /*
+     * Which Phantom this Hub hands out. Asked by a running Phantom every six
+     * hours; answered to any authenticated caller, because knowing the
+     * version of a program you were given is not a privilege.
+     */
+    if (request.method === 'GET' && path === '/api/phantom/version') {
+      return json({
+        version: PHANTOM_ZIP_BASE64 ? PHANTOM_ZIP_META.sha : '',
+        url: '/api/phantom.zip',
+        builtAt: PHANTOM_ZIP_BASE64 ? PHANTOM_ZIP_META.builtAt : '',
+      });
+    }
+
+    /*
+     * ── A report from a tester's machine ─────────────────────────────────
+     *
+     * Posted by their Phantom, so an AGENT token is the right credential
+     * here — the opposite of the two endpoints below it, and deliberately:
+     * this is the machine speaking about itself. It is also the one thing a
+     * Phantom too broken to watch anything must still manage, so it asks
+     * nothing of the account beyond existing.
+     */
+    if (request.method === 'POST' && path === '/api/reports') {
+      const b = await body<{ report?: Record<string, unknown> }>();
+      const report = b?.report;
+      if (!report || typeof report !== 'object') return json({ error: 'need a report' }, 400);
+      const id = await store.fileReport(db, userId, {
+        note: String(report.note ?? ''),
+        summary: String(report.summary ?? ''),
+        version: String(report.version ?? ''),
+        body: report,
+      });
+      // Tell the owner in the room they are already watching. The report
+      // itself stays in the database: a console dump does not belong in a
+      // chat window, and the ops room is not where secrets should be tested.
+      const room = env.DISCORD_OPS_WEBHOOK_URL || env.DISCORD_WEBHOOK_URL;
+      if (room && id) {
+        await announceReport(room, {
+          id,
+          handle: (await store.profile(db, userId)).handle,
+          note: String(report.note ?? ''),
+          summary: String(report.summary ?? ''),
+        }).catch(() => {});
+      }
+      return json({ id });
+    }
+
     if (request.method === 'GET' && path === '/api/phantom.zip') {
       if (caller.kind !== 'browser') return json({ error: 'sign in first' }, 403);
       if (!(await store.canArm(db, userId))) {

@@ -59,6 +59,13 @@ export interface Config {
   live: boolean;
   /** Seconds between sweeps in `watch` mode. */
   intervalSec: number;
+  /**
+   * Fetch a newer Phantom from the Hub and restart into it. On by default,
+   * because a tester's copy that never changes is a copy with every bug it
+   * shipped with. Never applies to a development checkout (see version.ts),
+   * never inside the run-up to a drop, never to a `once` run.
+   */
+  autoUpdate: boolean;
 }
 
 export const DEFAULTS: Config = {
@@ -74,6 +81,7 @@ export const DEFAULTS: Config = {
   budget: { perRun: 150, perDay: 400 },
   live: false,
   intervalSec: 90,
+  autoUpdate: true,
 };
 
 export const CONFIG_PATH = resolve(process.cwd(), 'watcher.config.json');
@@ -85,6 +93,7 @@ function merge(base: Config, over: Partial<Config>): Config {
     budget: { ...base.budget, ...(over.budget ?? {}) },
     live: over.live ?? base.live,
     intervalSec: over.intervalSec ?? base.intervalSec,
+    autoUpdate: over.autoUpdate ?? base.autoUpdate,
   };
 }
 

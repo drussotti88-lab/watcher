@@ -40,6 +40,25 @@ export interface Pacing {
  */
 export const MIN_SAFE_SPACING_MS = 5_000;
 
+/**
+ * ── Why a LISTING rests, and not only a retailer ─────────────────────────────
+ *
+ * On 3 Sep 2026 one Walmart listing — a Prismatic Evolutions ETB — served the
+ * press-and-hold on every read, three times an hour from 3:43pm. The
+ * retailer's own back-off never escalated past its first step, because the
+ * OTHER Walmart listing read cleanly each pass and a clean read forgives the
+ * retailer. So the two of them oscillated: wall, twenty minutes, wall, for
+ * hours, handing PerimeterX a fresh "this address runs a bot" signal each
+ * time, until the household's ordinary browsing started being challenged too.
+ *
+ * A page that has refused six times in a row is telling us something, and the
+ * fix is to believe it about THAT PAGE. So a listing keeps its own doubling
+ * rest, and — this is the part that was missing — another listing reading
+ * fine does not forgive it. Only the page itself coming back clean does.
+ */
+export const LISTING_REST_MS = 20 * 60_000;
+export const MAX_LISTING_REST_MS = 24 * 60 * 60_000;
+
 export const DEFAULT_PACING: Pacing = {
   // One request per retailer every 20s at the very fastest. A mission asking
   // for 30s intervals still gets them; three missions on one retailer share.
@@ -63,6 +82,8 @@ export class Pacer {
   private readonly pacing: Pacing;
   private readonly random: () => number;
   private readonly state = new Map<string, State>();
+  /** Per listing: when it may be read again, and how long the last rest was. */
+  private readonly listings = new Map<number, { until: number; restMs: number; walls: number }>();
   /** A tighter floor while a drop window is open. Null means the ordinary one. */
   private burstMs: number | null = null;
 
@@ -115,6 +136,37 @@ export class Pacer {
   /** True when we are standing down after a challenge rather than merely early. */
   standingDown(retailer: string, now: number): boolean {
     return this.get(retailer).standDownUntil > now;
+  }
+
+  /**
+   * This listing served a challenge. Rest it, doubling each consecutive time.
+   *
+   * Separate from the retailer's stand-down and longer-lived on purpose: the
+   * retailer resumes in twenty minutes and everything else on it goes back to
+   * being read, while this one page waits out its own, growing, silence.
+   */
+  listingChallenged(listingId: number, now: number): number {
+    const prev = this.listings.get(listingId);
+    const restMs = prev ? Math.min(MAX_LISTING_REST_MS, prev.restMs * 2) : LISTING_REST_MS;
+    const entry = { until: now + restMs, restMs, walls: (prev?.walls ?? 0) + 1 };
+    this.listings.set(listingId, entry);
+    return entry.until;
+  }
+
+  /** This listing read cleanly. Only this forgives it — see the note above. */
+  listingSucceeded(listingId: number): void {
+    this.listings.delete(listingId);
+  }
+
+  /** How long this listing is resting for. 0 means it may be read. */
+  listingRestMs(listingId: number, now: number): number {
+    const entry = this.listings.get(listingId);
+    return entry ? Math.max(0, entry.until - now) : 0;
+  }
+
+  /** How many times in a row this listing has refused. For the log. */
+  listingWalls(listingId: number): number {
+    return this.listings.get(listingId)?.walls ?? 0;
   }
 
   /** Note that a request just went out. Sets the next allowed time, with jitter. */
@@ -179,6 +231,7 @@ export function isDue(lastCheckedAt: string | null, everySeconds: number, now: n
 export function nextUp<
   T extends {
     retailer: string;
+    listingId?: number;
     checkEverySeconds: number;
     lastCheckedAt: string;
     checkNow?: boolean;
@@ -191,6 +244,10 @@ export function nextUp<
     // web page bypass the pacing is how you get a bot check while looking at
     // the screen that caused it.
     .filter((m) => pacer.waitMs(m.retailer, now) === 0)
+    // A page resting off its own refusals is skipped even when the retailer
+    // is answering, and even for a hand-pressed check: pressing the button
+    // harder is not an argument a bot check accepts.
+    .filter((m) => m.listingId === undefined || pacer.listingRestMs(m.listingId, now) === 0)
     .sort((a, b) => {
       // An explicitly requested check goes first: somebody is watching the page
       // waiting for it, and every other mission's schedule can absorb a turn.

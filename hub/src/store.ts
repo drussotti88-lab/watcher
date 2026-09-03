@@ -951,6 +951,74 @@ export async function setUserToken(db: Sql, handle: string, tokenHash: string): 
   return rows.length > 0;
 }
 
+// ── Reports from a tester's machine ──────────────────────────────────────────
+
+export interface ReportRow {
+  id: number;
+  userId: number;
+  handle: string;
+  at: string;
+  note: string;
+  summary: string;
+  version: string;
+  body: Record<string, unknown>;
+}
+
+/**
+ * File a report. Returns its id, which the tester is told so they can quote it.
+ *
+ * The body is stored as it arrived: it was scrubbed on the machine that wrote
+ * it, and re-scrubbing here would suggest the guarantee lives at this boundary
+ * when it lives at the point the text was gathered.
+ */
+export async function fileReport(
+  db: Sql,
+  userId: number,
+  input: { note?: string; summary?: string; version?: string; body: unknown },
+): Promise<number> {
+  const rows = await db.query<{ id: number }>(
+    `INSERT INTO reports (user_id, note, summary, version, body)
+     VALUES ($1, left($2, 2000), left($3, 500), left($4, 60), $5) RETURNING id`,
+    [
+      userId,
+      String(input.note ?? ''),
+      String(input.summary ?? ''),
+      String(input.version ?? ''),
+      JSON.stringify(input.body ?? {}),
+    ],
+  );
+  return Number(rows[0]?.id ?? 0);
+}
+
+/** Everyone's reports, newest first. For the owner's CLI. */
+export async function listReports(db: Sql, limit = 20): Promise<ReportRow[]> {
+  const rows = await db.query<{
+    id: number; user_id: number; handle: string; at: string;
+    note: string; summary: string; version: string; body: Record<string, unknown>;
+  }>(
+    `SELECT r.id, r.user_id, u.handle, r.at, r.note, r.summary, r.version, r.body
+       FROM reports r JOIN users u ON u.id = r.user_id
+      ORDER BY r.at DESC LIMIT $1`,
+    [Math.max(1, Math.min(100, limit))],
+  );
+  return rows.map((r) => ({
+    id: Number(r.id),
+    userId: Number(r.user_id),
+    handle: String(r.handle),
+    at: String(r.at),
+    note: String(r.note ?? ''),
+    summary: String(r.summary ?? ''),
+    version: String(r.version ?? ''),
+    body: (r.body ?? {}) as Record<string, unknown>,
+  }));
+}
+
+/** One report, whole. */
+export async function getReport(db: Sql, id: number): Promise<ReportRow | null> {
+  const all = await listReports(db, 100);
+  return all.find((r) => r.id === id) ?? null;
+}
+
 /**
  * The same, by id, for the account that asks for its own token at the front
  * door. Enabled accounts only: a switched-off person must not be able to

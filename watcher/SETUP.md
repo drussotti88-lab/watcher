@@ -114,10 +114,36 @@ person holding the button. So Walmart is not bought by Phantom. Instead:
    opens that page in your own browser, once. You take the place in line and
    buy it yourself.
 
+## Staying up to date
+
+Phantom updates itself. While it is running it asks the app every few hours
+whether there is a newer version, and if there is, it replaces its own files
+and restarts — you will see a line saying so and the window will come back on
+its own. Your settings, your sign-ins and your logs are never touched by an
+update.
+
+It will not do this in the ninety minutes before a scheduled drop, because
+restarting then costs a read exactly when reads matter.
+
+If you are asked to update right now: **3 — Stop watching**, then **11 —
+Update Phantom**, then **2 — Start watching**. To turn updates off, set
+`"autoUpdate": false` in `watcher.config.json`.
+
 ## When something looks wrong
 
-Run **2 — Start watching** and read the first lines. Almost everything
-announces itself there.
+**The short version: double-click 10 — Send a report.** It gathers what
+somebody debugging Phantom would look at — the last of the log, your settings
+with the token blanked out, which Node and Chrome you have, whether Phantom is
+running — and sends it to whoever runs the app, who can then look at it
+without you having to describe it. You can add a sentence about what you saw.
+
+It does **not** send your token, anything about your accounts or your card, or
+any page Phantom saved. Those stay on this computer. If the app cannot be
+reached, it writes the report to a file in this folder instead and tells you
+the name, so you can send that.
+
+If you would rather look yourself first: run **2 — Start watching** and read
+the first lines. Almost everything announces itself there.
 
 | What you see | What it means |
 |---|---|
@@ -129,6 +155,8 @@ announces itself there.
 | `stopped on the line before the button` | `live` is false. That's the dry run working. |
 | A gap in the log | It batches what it sends. A minute or two of quiet is it working. |
 | Chrome says "Restore pages?" | Something killed it rather than stopping it. Dismiss it; use **3** next time. |
+| `that page has refused N times running` | One product page keeps serving a bot check. Phantom rests that page, for longer each time, and carries on with the rest. |
+| `updating: … restarting` | It found a newer version and is replacing itself. The window comes back on its own. |
 
 If none of that fits, run `npm run once` in the folder — one pass, then it
 exits, printing what it saw.

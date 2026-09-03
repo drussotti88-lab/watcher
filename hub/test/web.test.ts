@@ -741,6 +741,64 @@ test('THE FRONT DOOR HANDS OVER PHANTOM AND A TOKEN, TO AN ACCOUNT THAT MAY BUY'
   assert.equal((await call(db, 'GET', '/api/phantom.zip')).status, 401);
 });
 
+test('A TESTER’S PHANTOM CAN FILE A REPORT, AND THE OWNER CAN READ IT', async () => {
+  // The one thing a Phantom too broken to watch anything must still manage.
+  // It is the MACHINE speaking about itself, so an agent token is the right
+  // credential here — the opposite of the zip and the token endpoints.
+  const { db } = await setup();
+  const report = {
+    at: '2026-09-03T22:00:00.000Z',
+    version: '1fd5043',
+    note: 'chrome never opens',
+    summary: 'Phantom 1fd5043 on win32 x64, Node v22.9.0 It is NOT running (no lock file).',
+    platform: 'win32 x64',
+    node: 'v22.9.0',
+    running: false,
+    shape: 'the app address is set, and the value it signs in with is 43 characters long',
+    config: '{ "hub": { "url": "https://hub.example", "token": "[redacted]" } }',
+    console: 'a few hundred lines of console',
+    files: ['console-run.log  12kb  2026-09-03T22:00:00.000Z'],
+    captures: ['walmart_2026-09-03_22-25-13  dir  2026-09-03T22:25:13.000Z'],
+  };
+
+  const filed = await call(db, 'POST', '/api/reports', { token: TOKEN, body: { report } });
+  assert.equal(filed.status, 200);
+  assert.ok(filed.body.id > 0);
+
+  // Nonsense is refused rather than filed as an empty row.
+  assert.equal((await call(db, 'POST', '/api/reports', { token: TOKEN, body: {} })).status, 400);
+  // And a stranger cannot file one at all.
+  assert.equal((await call(db, 'POST', '/api/reports', { body: { report } })).status, 401);
+
+  const rows = await store.listReports(db, 20);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]!.id, filed.body.id);
+  assert.equal(rows[0]!.version, '1fd5043');
+  assert.equal(rows[0]!.note, 'chrome never opens');
+  assert.match(rows[0]!.summary, /NOT running/);
+  assert.equal(rows[0]!.handle, 'owner', 'whose machine it was');
+  // The body is kept whole, because the owner reads it and its shape belongs
+  // to the Watcher.
+  assert.equal((rows[0]!.body as { console?: string }).console, 'a few hundred lines of console');
+  assert.deepEqual((rows[0]!.body as { captures?: string[] }).captures, report.captures);
+
+  const one = await store.getReport(db, filed.body.id);
+  assert.equal(one?.id, filed.body.id);
+  assert.equal(await store.getReport(db, 99999), null);
+});
+
+test('the Hub says which Phantom it is handing out', async () => {
+  // A running Phantom asks this every six hours and compares to its own
+  // VERSION. Answered to any authenticated caller: knowing the version of a
+  // program you were given is not a privilege.
+  const { db } = await setup();
+  const res = await call(db, 'GET', '/api/phantom/version', { token: TOKEN });
+  assert.equal(res.status, 200);
+  assert.match(res.body.version, /^[0-9a-f]{7}$/);
+  assert.equal(res.body.url, '/api/phantom.zip');
+  assert.equal((await call(db, 'GET', '/api/phantom/version')).status, 401);
+});
+
 test('a Phantom token cannot set the password of the account it belongs to', async () => {
   const { db } = await setup();
   const res = await call(db, 'POST', '/api/me/password', { token: TOKEN, body: { password: 'a-real-password-now' } });

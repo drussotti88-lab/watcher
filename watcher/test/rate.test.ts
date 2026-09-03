@@ -6,7 +6,9 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Pacer, isDue, nextUp, DEFAULT_PACING, type Pacing } from '../src/rate.ts';
+import {
+  Pacer, isDue, nextUp, DEFAULT_PACING, LISTING_REST_MS, MAX_LISTING_REST_MS, type Pacing,
+} from '../src/rate.ts';
 
 const T0 = 1_700_000_000_000;
 
@@ -204,4 +206,58 @@ test('two requested checks fall back to longest-waiting between themselves', () 
   const a = mission({ id: 1, lastCheckedAt: new Date(T0 - 10_000).toISOString(), checkNow: true });
   const b = mission({ id: 2, lastCheckedAt: new Date(T0 - 90_000).toISOString(), checkNow: true });
   assert.equal(nextUp([a, b], pacer, T0)?.id, 2);
+});
+
+test('A PAGE THAT KEEPS REFUSING RESTS ON ITS OWN, AND ONE GOOD PAGE DOES NOT FORGIVE IT', () => {
+  // 3 Sep 2026: one Walmart listing served the press-and-hold every read while
+  // a second Walmart listing read cleanly. The clean read forgave the
+  // retailer, the walled one was retried twenty minutes later, and the
+  // oscillation ran for hours — until the household's own browsing started
+  // getting challenged. The retailer's back-off cannot fix this on its own,
+  // because the retailer is not what is being refused.
+  const pacer = new Pacer(DEFAULT_PACING, () => 0);
+  const t = 1_000_000;
+  const BAD = 11;
+  const GOOD = 12;
+
+  assert.equal(pacer.listingRestMs(BAD, t), 0, 'nothing rests until it refuses');
+
+  pacer.listingChallenged(BAD, t);
+  assert.equal(pacer.listingRestMs(BAD, t), LISTING_REST_MS, 'twenty minutes, the first time');
+  assert.equal(pacer.listingWalls(BAD), 1);
+
+  // The other listing reads fine. That forgives the RETAILER and nothing else.
+  pacer.succeeded('Walmart');
+  pacer.listingSucceeded(GOOD);
+  assert.equal(pacer.waitMs('Walmart', t + 1), 0, 'the shop is answering again');
+  assert.equal(pacer.listingRestMs(BAD, t + 1), LISTING_REST_MS - 1, 'the page is still resting');
+
+  // It refuses again: the rest doubles rather than repeating.
+  const later = t + LISTING_REST_MS + 1;
+  pacer.listingChallenged(BAD, later);
+  assert.equal(pacer.listingRestMs(BAD, later), 2 * LISTING_REST_MS);
+  assert.equal(pacer.listingWalls(BAD), 2);
+
+  // nextUp skips it while it rests, even when the mission asks for a check by
+  // hand — and still offers the listing that has done nothing wrong.
+  const mission = (id: number) => ({
+    retailer: 'Walmart', listingId: id, checkEverySeconds: 60,
+    lastCheckedAt: new Date(later - 600_000).toISOString(), checkNow: true,
+  });
+  const picked = nextUp([mission(BAD), mission(GOOD)], pacer, later);
+  assert.equal(picked?.listingId, GOOD, 'pressing the button harder is not an argument');
+
+  // Its own clean read is the only thing that clears it.
+  pacer.listingSucceeded(BAD);
+  assert.equal(pacer.listingRestMs(BAD, later), 0);
+  assert.equal(pacer.listingWalls(BAD), 0);
+
+  // And the doubling has a ceiling, so a page that is gone for good is rested
+  // for a day and not for a fortnight.
+  let at = later;
+  for (let i = 0; i < 20; i += 1) {
+    at += 1;
+    pacer.listingChallenged(BAD, at);
+  }
+  assert.equal(pacer.listingRestMs(BAD, at), MAX_LISTING_REST_MS);
 });

@@ -4547,6 +4547,14 @@ function renderMachineSetup(body) {
   ]) ol.appendChild(el('li', null, line));
   body.appendChild(ol);
 
+  // Two things they will need later and will not think to ask about now.
+  const after = el('p', 'sub');
+  after.textContent =
+    'It keeps itself up to date on its own. If anything looks wrong, ' +
+    'double-click 10 - Send a report and it tells us what your machine is ' +
+    'doing — never your token, your card or anything it saved.';
+  body.appendChild(after);
+
   // ── 4. Proof of life ──
   const status = el('p', seen ? 'sub good' : 'sub');
   status.style.marginTop = '12px';

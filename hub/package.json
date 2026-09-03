@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Catalog discovery hub — knows when a SKU appears before it is buyable",
+  "description": "Catalog discovery hub \u2014 knows when a SKU appears before it is buyable",
   "engines": {
     "node": ">=22"
   },
@@ -14,6 +14,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit",
     "test": "node --experimental-strip-types --test-force-exit --test --test-concurrency=2 test/*.test.ts",
     "user": "node --experimental-strip-types --env-file-if-exists=.env.local scripts/user.ts",
+    "reports": "node --experimental-strip-types --env-file-if-exists=.env.local scripts/reports.ts",
     "doctor": "node --experimental-strip-types --env-file-if-exists=.env.local scripts/doctor.ts",
     "db:push": "node --experimental-strip-types --env-file-if-exists=.env.local scripts/migrate.ts schema.sql",
     "db:seed": "node --experimental-strip-types --env-file-if-exists=.env.local scripts/migrate.ts seed.sql",

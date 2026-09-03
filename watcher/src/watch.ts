@@ -672,14 +672,24 @@ export async function pass(missions: Mission[], pacer: Pacer, deps: WatchDeps): 
     } else if (reading.challenged) {
       const until = pacer.challenged(mission.retailer, now());
       const mins = Math.round((until - now()) / 60000);
+      // And rest THIS PAGE, for longer each time it refuses. A retailer that
+      // answers for everything else while one listing always walls is the
+      // shape that kept an address warm for hours — see rate.ts.
+      const listingUntil = pacer.listingChallenged(mission.listingId, now());
+      const listingMins = Math.round((listingUntil - now()) / 60000);
+      const walls = pacer.listingWalls(mission.listingId);
       result.blocked.push(`${mission.retailer}: ${reading.challengeReason}, ${mins}m`);
       log(`  ${mission.retailer} served a challenge — standing down ${mins}m`);
+      if (walls > 1) {
+        log(`  that page has refused ${walls} times running — resting it ${listingMins}m`);
+      }
       // Drop everything else queued for that retailer this pass.
       for (let i = remaining.length - 1; i >= 0; i -= 1) {
         if (remaining[i]!.retailer === mission.retailer) remaining.splice(i, 1);
       }
     } else {
       pacer.succeeded(mission.retailer);
+      pacer.listingSucceeded(mission.listingId);
     }
 
     const { sent } = await deps.hub.report([observation]);

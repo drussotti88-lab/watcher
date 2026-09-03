@@ -4132,6 +4132,8 @@ test('AN ACCOUNT THAT MAY BUY IS HANDED PHANTOM BY THE PAGE ITSELF', async () =>
   assert.match(body.textContent!, /hub\.test/, 'the address, to paste into 1 - Set up');
   assert.match(body.textContent!, /9 - Sign in to Target/);
   assert.match(body.textContent!, /No Phantom of yours has checked in yet/);
+  assert.match(body.textContent!, /10 - Send a report/, 'how to ask for help, before they need to');
+  assert.match(body.textContent!, /up to date on its own/);
   assert.equal(body.textContent!.includes('Your token'), false, 'nothing minted until asked');
 
   // Press Show my token: one POST, the token appears, and survives a re-render.
