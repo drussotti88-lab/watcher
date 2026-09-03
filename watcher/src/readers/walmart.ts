@@ -132,8 +132,16 @@ export function readWalmartNextData(nextData: unknown, itemId: string): ProductR
     if (!opt) continue;
     const type = String(opt.type ?? '').toUpperCase();
     if (type === 'SHIPPING') {
-      const q = Number(opt.availableQuantity);
-      if (Number.isFinite(q)) availableQuantity = q;
+      /*
+       * Only a number Walmart actually sent. `Number(null)` is 0, and for as
+       * long as this said `Number(opt.availableQuantity)` every page that
+       * stated no quantity was recorded as stating zero — the captured Rares
+       * Market page carries `availableQuantity: null` and read back as
+       * `qty 0`. Zero and silence are different facts, and only one of them
+       * is allowed to contradict IN_STOCK below.
+       */
+      const raw = opt.availableQuantity;
+      if (typeof raw === 'number' && Number.isFinite(raw)) availableQuantity = raw;
     }
     if (type === 'PICKUP' && opt.selected === true) pickupAvailable = true;
   }
@@ -149,6 +157,29 @@ export function readWalmartNextData(nextData: unknown, itemId: string): ProductR
     typeof product.canAddToCart === 'boolean' ? product.canAddToCart : null;
 
   const notes: string[] = [`availability ${status || '(absent)'}`];
+
+  /*
+   * ── IN_STOCK with nothing to ship ────────────────────────────────────────
+   *
+   * Target's sold_out trap, in Walmart's vocabulary. This rule was written on
+   * 2 Sep 2026 after a reading at 11:16pm said `IN_STOCK`, a marketplace
+   * seller, `qty 0`, $42 — and then the fixture proved that particular "0"
+   * was almost certainly `Number(null)` from the parse above, not Walmart
+   * saying zero. The rule stays, because a genuine zero against IN_STOCK is
+   * exactly Target's contradiction; the parse above is what makes it safe,
+   * by only ever setting a quantity Walmart actually sent.
+   *
+   * Same answer as target.ts: refuse to call it in stock. 'unknown' rather
+   * than 'out', because the page is contradicting itself and "out" would be
+   * us picking a side. Confidence follows, so the watcher does not write a
+   * "could not be read" run for it — the page was read fine; it is the page
+   * that cannot make up its mind.
+   */
+  const contradiction = state === 'in' && availableQuantity === 0;
+  if (contradiction) {
+    notes.push('IN_STOCK with zero available — refusing to call it in stock');
+    state = 'unknown';
+  }
 
   // The state the drop taught us about: real, in stock, and not buyable. Worth
   // saying in the note because "out" would be a lie and "in" is not the whole
@@ -173,6 +204,9 @@ export function readWalmartNextData(nextData: unknown, itemId: string): ProductR
   let confidence: Confidence = 'unknown';
   if (state !== 'unknown' && price !== null) confidence = 'exact';
   else if (state !== 'unknown') confidence = 'inferred';
+  // A contradiction was read exactly; it is the page that is unsure. Keeping
+  // confidence up stops the watcher filing it as an unreadable page.
+  else if (contradiction) confidence = 'inferred';
 
   return {
     name,

@@ -547,3 +547,70 @@ test('stock that IS sellable is just stock', async () => {
   assert.match(read.note, /atp 14/);
   assert.doesNotMatch(read.note, /STAGED/);
 });
+
+// ── IN_STOCK with nothing to ship ────────────────────────────────────────────
+
+test('Walmart: IN_STOCK WITH ZERO AVAILABLE IS NOT IN STOCK', () => {
+  // 11:16pm, 2 Sep 2026: IN_STOCK, a marketplace seller, qty 0, $42 — and two
+  // alerts went to a room on the strength of the first word. Target's
+  // sold_out trap, in Walmart's vocabulary.
+  const page = {
+    product: {
+      usItemId: ITEM,
+      sellerType: 'EXTERNAL',
+      sellerName: 'Squeaks Game World LLC',
+      availabilityStatus: 'IN_STOCK',
+      priceInfo: { currentPrice: { price: 42 } },
+      fulfillmentOptions: [{ type: 'SHIPPING', availableQuantity: 0 }],
+    },
+  };
+  const r = readWalmartNextData(page, ITEM);
+  assert.equal(r.state, 'unknown', 'refused, not "in"');
+  assert.match(r.note, /zero available — refusing to call it in stock/);
+  // Read exactly; it is the page that is unsure. Not 'unknown' confidence,
+  // or the watcher would file it as a page it could not read.
+  assert.equal(r.confidence, 'inferred');
+  assert.equal(r.availableQuantity, 0);
+});
+
+test('Walmart: a page that states no quantity is not accused of zero', () => {
+  // null is "did not say". Only an explicit SHIPPING quantity of 0 counts.
+  const page = {
+    product: {
+      usItemId: ITEM,
+      sellerType: 'INTERNAL',
+      sellerName: 'Walmart.com',
+      availabilityStatus: 'IN_STOCK',
+      priceInfo: { currentPrice: { price: 26.94 } },
+    },
+  };
+  const r = readWalmartNextData(page, ITEM);
+  assert.equal(r.state, 'in');
+  assert.equal(r.availableQuantity, null);
+});
+
+test('Walmart: a real quantity keeps it in stock', () => {
+  const page = {
+    product: {
+      usItemId: ITEM,
+      sellerType: 'INTERNAL',
+      sellerName: 'Walmart.com',
+      availabilityStatus: 'IN_STOCK',
+      priceInfo: { currentPrice: { price: 26.94 } },
+      fulfillmentOptions: [{ type: 'SHIPPING', availableQuantity: 7 }],
+    },
+  };
+  assert.equal(readWalmartNextData(page, ITEM).state, 'in');
+});
+
+test('Walmart: NULL IS NOT ZERO', () => {
+  // The captured Rares Market page carries availableQuantity: null on its
+  // SHIPPING option and, for as long as the reader said Number(null), came
+  // back as "qty 0". The contradiction rule above would then have refused
+  // every Walmart listing that simply did not state a count — which is most
+  // of them. Silence and zero are different facts.
+  const r = readWalmartNextData(walmartNext, ITEM);
+  assert.equal(r.availableQuantity, null, 'the page said nothing, so we say nothing');
+  assert.equal(r.state, 'in');
+  assert.doesNotMatch(r.note, /qty 0/);
+});
