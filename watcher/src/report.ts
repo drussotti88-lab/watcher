@@ -44,6 +44,8 @@ export interface ReportInput {
 export interface Report {
   at: string;
   version: string;
+  /** The one line the owner's list shows. Filled in by buildReport. */
+  summary: string;
   note: string;
   platform: string;
   node: string;
@@ -120,6 +122,14 @@ function listing(dir: string, limit = 40): string[] {
 }
 
 export function buildReport(input: ReportInput): Report {
+  const r = gather(input);
+  // Computed here rather than by the caller, because the Hub stores it as a
+  // column and the owner's list shows nothing else. It was left to the CLI
+  // once, and the first real report arrived with a blank summary.
+  return { ...r, summary: summarise(r) };
+}
+
+function gather(input: ReportInput): Report {
   const dir = resolve(input.dir);
   const configPath = join(dir, 'watcher.config.json');
   const rawConfig = existsSync(configPath) ? readFileSync(configPath, 'utf8') : '';
@@ -137,6 +147,7 @@ export function buildReport(input: ReportInput): Report {
   return {
     at: (input.now ?? new Date()).toISOString(),
     version: input.version,
+    summary: '',
     note: clean(String(input.note ?? '').slice(0, 2000)),
     platform: input.platform ?? `${process.platform} ${process.arch}`,
     node: input.nodeVersion ?? process.version,

@@ -62,6 +62,14 @@ test('what it gathers is what somebody debugging would ask for', () => {
   assert.equal(JSON.stringify(r).includes('<html'), false);
 });
 
+test('the report carries its own summary — the owner\'s list shows nothing else', () => {
+  // The first real report arrived with a blank summary because the CLI
+  // computed it and the payload did not carry it.
+  const r = buildReport({ dir: machine({ console: 'fine' }), version: '1fd5043' });
+  assert.equal(r.summary, summarise(r));
+  assert.match(r.summary, /Phantom 1fd5043/);
+});
+
 test('THE OBVIOUS FAULTS ARE NAMED IN ONE SENTENCE, BEFORE ANYONE OPENS THE DUMP', () => {
   const seen = (console_: string, extra: Parameters<typeof machine>[0] = {}) =>
     summarise(buildReport({ dir: machine({ console: console_, ...extra }), version: '1fd5043', platform: 'win32 x64', nodeVersion: 'v22.9.0' }));
