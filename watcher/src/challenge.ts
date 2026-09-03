@@ -153,7 +153,43 @@ export interface Challenge {
  * designed. What the design still refuses is getting *past* one — bot checks
  * and CAPTCHAs at the queue's end are a person's job, never this code's.
  */
-const QUEUE_REASONS = new Set(['Queue-it waiting room', 'Walmart waiting room']);
+const QUEUE_REASONS = new Set([
+  'Queue-it waiting room',
+  'Walmart waiting room',
+  'Walmart queue redirect',
+]);
+
+/**
+ * Is this URL Walmart's waiting room?
+ *
+ * Captured live at 8:13pm on 2 Sep 2026. Walmart does not overlay a queue on
+ * the product page; it REDIRECTS to
+ *
+ *     https://www.walmart.com/qp?qpdata={"queued":true,"queue":"q011b...", ...}
+ *
+ * and the document title stays "Walmart | Save Money. Live better." the whole
+ * time. So the page carries its state in the address bar and nowhere a title
+ * matcher can see it.
+ *
+ * That makes the URL the honest detector and the text a fallback. Text is
+ * copy — it gets rewritten by a marketing team on a Tuesday. `queued:true` in
+ * a query parameter is a state machine, and it is the same string whether the
+ * page says "in line", "hold tight", or nothing at all.
+ */
+export function isQueueUrl(url: string): boolean {
+  if (!/\/qp\b/.test(url)) return false;
+  try {
+    const raw = new URL(url).searchParams.get('qpdata');
+    if (!raw) return false;
+    return JSON.parse(raw)?.queued === true;
+  } catch {
+    // Malformed, truncated, or shaped differently than the night we captured
+    // it. Falling back to the substring is right: we would rather call a queue
+    // on a page that has `"queued":true` in its address than miss a drop over
+    // a JSON parse.
+    return /["']?queued["']?\s*[:=]\s*true/i.test(url) || /%22queued%22%3Atrue/i.test(url);
+  }
+}
 
 export function isQueue(reason: string): boolean {
   return QUEUE_REASONS.has(reason);
@@ -167,7 +203,16 @@ export function isQueue(reason: string): boolean {
  * exist because a wall can arrive with nothing readable on it at all — and it
  * is only ever consulted when the visible page is empty.
  */
-export function detectChallenge(title: string, visibleText: string, html = ''): Challenge {
+export function detectChallenge(
+  title: string,
+  visibleText: string,
+  html = '',
+  url = '',
+): Challenge {
+  // Before any pattern. The address bar is the only place Walmart's queue
+  // announces itself reliably, and a queue named early is a queue that never
+  // gets mistaken for the blank-page pattern at the bottom of the list.
+  if (url && isQueueUrl(url)) return { challenged: true, reason: 'Walmart queue redirect' };
   const text = visibleText.slice(0, 8000);
   for (const { name, test } of CHALLENGE_PATTERNS) {
     if (test(title, text, html)) return { challenged: true, reason: name };

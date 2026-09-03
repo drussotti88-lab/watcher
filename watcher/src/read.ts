@@ -232,7 +232,7 @@ export async function readListing(
     });
     await withTimeout(Promise.all(pending), BODIES_MS, [] as unknown[]);
 
-    const challenge = detectChallenge(read.title, read.text, read.html);
+    const challenge = detectChallenge(read.title, read.text, read.html, page.url());
     if (challenge.challenged) {
       // Written down before we return. A waiting room is the artifact every
       // piece of future queue work is blocked on, and it exists for the length

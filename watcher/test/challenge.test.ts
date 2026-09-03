@@ -12,7 +12,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { detectChallenge, isQueue } from '../src/challenge.ts';
+import { detectChallenge, isQueue, isQueueUrl } from '../src/challenge.ts';
 
 // -------------------------------------------------------------- healthy pages
 
@@ -250,4 +250,70 @@ test('the title alone is enough, and only when it starts the title', () => {
     detectChallenge('Toy review: robot or human?', 'A fun build for kids.').challenged,
     false,
   );
+});
+
+// ── The queue we actually caught ─────────────────────────────────────────────
+//
+// 8:13pm, 2 Sep 2026. Opening a Walmart product page during the drop
+// REDIRECTED to /qp with the queue state in the query string, while the
+// document title stayed "Walmart | Save Money. Live better." the whole time.
+// The address bar was the only place the page said what it was.
+
+/** Verbatim, trimmed of the image URL. */
+const REAL_QUEUE_URL =
+  'https://www.walmart.com/qp?qpdata=%7B%22queued%22%3Atrue%2C%22queue%22%3A%22q011b513268044%22' +
+  '%2C%22url%22%3A%22https%3A%2F%2Fq-api.www.walmart.com%2FissueTicket%3Fqueue%3Dq011b513268044%22' +
+  '%2C%22customMetadata%22%3A%7B%22item%22%3A%7B%22itemID%22%3A%2220243261734%22%7D%7D%7D';
+
+/** Verbatim body text of that page. */
+const REAL_QUEUE_TEXT =
+  'Skip to Main Content\nCancel\n$0.00\nSign in to join the line\n\n' +
+  "Once you're in line, we'll hold your spot and let you know when it's your turn.\n\n" +
+  'Sign in to join the line\nPokemon Trading Card Games Mega Evolution 5 Pitch Black Booster ' +
+  "Bundle\n$31.97\n\nDon't have an account?\n\nCreate account";
+
+test('THE REAL WALMART QUEUE IS CAUGHT BY ITS URL', () => {
+  assert.equal(isQueueUrl(REAL_QUEUE_URL), true);
+  const { challenged, reason } = detectChallenge(
+    'Walmart | Save Money. Live better.',
+    REAL_QUEUE_TEXT,
+    '',
+    REAL_QUEUE_URL,
+  );
+  assert.equal(challenged, true);
+  assert.equal(reason, 'Walmart queue redirect');
+  assert.equal(isQueue(reason), true);
+});
+
+test('and by its text alone, with no URL to help', () => {
+  // Belt and braces. Copy gets rewritten; a state machine does not. But if the
+  // URL ever stops carrying it, the words still have to work.
+  const { challenged, reason } = detectChallenge('Walmart | Save Money. Live better.', REAL_QUEUE_TEXT);
+  assert.equal(challenged, true);
+  assert.equal(isQueue(reason), true);
+});
+
+test('THE TITLE IS USELESS HERE, WHICH IS THE WHOLE POINT', () => {
+  // The queue page's title is Walmart's ordinary homepage title. Anything that
+  // leaned on the title would have called this a normal page.
+  assert.equal(
+    detectChallenge('Walmart | Save Money. Live better.', 'Shop deals on toys today.').challenged,
+    false,
+  );
+});
+
+test('an ordinary Walmart URL is not a queue', () => {
+  assert.equal(isQueueUrl('https://www.walmart.com/ip/20243261734'), false);
+  assert.equal(isQueueUrl('https://www.walmart.com/qp'), false);
+  // queued:false is a real state and means the opposite.
+  assert.equal(isQueueUrl('https://www.walmart.com/qp?qpdata=%7B%22queued%22%3Afalse%7D'), false);
+  assert.equal(isQueueUrl(''), false);
+  // A product whose slug happens to contain "qp".
+  assert.equal(isQueueUrl('https://www.walmart.com/ip/qp-brand-cards/12345'), false);
+});
+
+test('a mangled qpdata still calls the queue rather than missing it', () => {
+  // Truncated by a redirect chain, or reshaped next season. Missing a drop
+  // over a JSON parse is the worse failure.
+  assert.equal(isQueueUrl('https://www.walmart.com/qp?qpdata=%7B%22queued%22%3Atrue%2C%22que'), true);
 });
