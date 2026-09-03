@@ -15,6 +15,8 @@
  */
 import { execFileSync } from 'node:child_process';
 import { statSync, readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { readZip } from '../src/update.ts';
+import { parseVersion, DEV } from '../src/version.ts';
 import { resolve, dirname } from 'node:path';
 
 const OUT = 'Phantom-for-tester.zip';
@@ -32,17 +34,18 @@ const FORBIDDEN = [
 /**
  * git, always from the repository root.
  *
- * The cwd matters more than it looks. `git archive HEAD:<dir>` run from
- * inside that directory resolves the path against the current prefix, finds
- * nothing, and cheerfully writes a 132-byte zip containing one empty directory
- * — no error, no warning, and a "packaged!" message. The check below caught it
- * only because it counts what it packed.
+ * The cwd matters more than it looks, and so does passing a COMMIT.
  *
- * And the directory is `watcher/`, whatever the program is called: the app was
- * renamed Phantom on 1 Sep 2026 and this script said `HEAD:Phantom` from then
- * until 3 Sep, when somebody tried to build a zip and git said "not a valid
- * object name". The tree does not know the product's name; the prefix below
- * is what the tester sees.
+ * `git archive HEAD:<dir>` — a tree — cannot substitute `$Format:%h$` into
+ * VERSION, because a tree has no commit to name. It does not fail; it writes
+ * the placeholder, and every tester's Phantom then believes it is a
+ * development checkout and never updates itself. Caught on 3 Sep by opening
+ * the zip and reading the file.
+ *
+ * Run from inside watcher/ with a commit and a `.` pathspec, git resolves
+ * the pathspec against the current prefix and writes paths relative to it —
+ * so the archive is rooted at the folder, the prefix below is what the tester
+ * sees, and export-subst has the commit it needs.
  */
 function git(args: string[], cwd?: string): string {
   return execFileSync('git', args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, cwd });
@@ -89,9 +92,10 @@ function main(): void {
 
   // HEAD, not the working tree. Whatever is half-edited on this desk right now
   // is not what somebody else should be starting from.
+  const here = resolve(root, 'watcher');
   git(
-    ['archive', '--format=zip', '--prefix=Phantom/', '-o', resolve(root, OUT), 'HEAD:watcher'],
-    root,
+    ['archive', '--format=zip', '--prefix=Phantom/', '-o', resolve(root, OUT), 'HEAD', '.'],
+    here,
   );
 
   const listing = namesIn(resolve(root, OUT));
@@ -104,6 +108,26 @@ function main(): void {
   }
   if (bad.length) {
     console.error(`\n  REFUSING to ship this zip. It contains:\n\n${bad.join('\n')}\n`);
+    process.exit(1);
+  }
+
+  // Prove the substitution happened rather than trusting it. A zip whose
+  // VERSION still holds the placeholder is a fleet of Phantoms that will
+  // never update again, and it looks exactly like a working zip.
+  // Read it out properly rather than searching the zip's bytes: a small file
+  // is deflated, so the placeholder is not there as text even when it IS
+  // there. update.ts already has the reader, and using the same one means the
+  // check runs the code the tester's machine will run.
+  const versionEntry = readZip(readFileSync(resolve(root, OUT))).find(
+    (e) => e.name === 'Phantom/VERSION',
+  );
+  const version = parseVersion(versionEntry?.bytes.toString('utf8'));
+  if (version === DEV || version === 'unknown') {
+    console.error(
+      `\n  The zip's VERSION reads "${version}", not a commit.` +
+        `\n  Every Phantom from this zip would think it was a checkout and never` +
+        `\n  update itself. Nothing was sent.\n`,
+    );
     process.exit(1);
   }
 
@@ -141,7 +165,7 @@ function main(): void {
   const generated = resolve(root, 'hub', 'src', 'generated', 'phantom-zip.ts');
   let handed = '';
   if (existsSync(resolve(root, 'hub', 'src'))) {
-    const sha = git(['rev-parse', '--short', 'HEAD'], root).trim();
+    const sha = version;
     const b64 = readFileSync(resolve(root, OUT)).toString('base64');
     mkdirSync(dirname(generated), { recursive: true });
     writeFileSync(
