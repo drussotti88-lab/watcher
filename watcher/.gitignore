@@ -19,3 +19,19 @@ probe-artifacts/
 # The activity log. Scrubbed on the way in, but still a record of this
 # machine going about its business, and nobody else's business.
 logs/
+
+# Roberto's-machine-only helper scripts (hardcoded paths); never part of the tester zip
+/alive.ps1
+/bounce.ps1
+/count.ps1
+/cycle.ps1
+/hardbounce.ps1
+/keeper-try.ps1
+/now.ps1
+/queuewatch.ps1
+/restart.ps1
+/startup.ps1
+/status.ps1
+/stopqw.ps1
+/wmcheck.ps1
+
