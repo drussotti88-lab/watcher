@@ -125,6 +125,13 @@ export interface Env {
   DATABASE_URL: string;
   DISCORD_WEBHOOK_URL: string;
   DISCORD_OPS_WEBHOOK_URL?: string;
+  /**
+   * Where confirmed orders go. A separate channel, because a win is not an
+   * alert: alerts are for people racing to buy, and the wins channel is the
+   * Wins page, mirrored — the record of what this actually did. Falls back
+   * to the main webhook when unset, so a win is never lost to configuration.
+   */
+  DISCORD_WINS_WEBHOOK_URL?: string;
   /** Bearer token Phantom presents when posting findings. */
   INGEST_TOKEN?: string;
   /** Password for the web page, and the key its session cookie is signed with. */

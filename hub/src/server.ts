@@ -103,6 +103,7 @@ function env(): Env {
     DATABASE_URL: process.env.DATABASE_URL ?? '',
     DISCORD_WEBHOOK_URL: process.env.DISCORD_WEBHOOK_URL ?? '',
     DISCORD_OPS_WEBHOOK_URL: process.env.DISCORD_OPS_WEBHOOK_URL,
+    DISCORD_WINS_WEBHOOK_URL: process.env.DISCORD_WINS_WEBHOOK_URL,
     INGEST_TOKEN: process.env.INGEST_TOKEN,
     APP_PASSWORD: process.env.APP_PASSWORD,
   };

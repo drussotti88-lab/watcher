@@ -27,6 +27,7 @@ import * as store from './store.ts';
 import { dropReadiness } from './readiness.ts';
 import {
   announce,
+  announceBought,
   announceQueues,
   announceStaged,
   announceStock,
@@ -389,6 +390,7 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
         capabilities: shopStatus, agentSeenAt, me, readiness,
         // Whether alerts have anywhere to go. A boolean, never the URL.
         discord: Boolean(env.DISCORD_WEBHOOK_URL),
+        discordWins: Boolean(env.DISCORD_WINS_WEBHOOK_URL),
       });
     }
 
@@ -1189,6 +1191,39 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
         isPreOrder: b.isPreOrder === true,
         releaseDate: b.releaseDate ?? null,
       });
+
+      /*
+       * The win, said out loud.
+       *
+       * Every other alert in this file is a warning or a status. This is the
+       * one message the whole system exists to send, and it was the only event
+       * with no channel. Named from the watchlist, like the others, because the
+       * run knows a mission id and a price and a person wants a name and a
+       * photo. Best-effort: a Discord outage must not turn a confirmed order
+       * into a 500 that makes Phantom retry the report.
+       */
+      // Its own channel when there is one — the Wins page, mirrored — and the
+      // main one otherwise. A win must never be lost to a missing setting.
+      const winsUrl = env.DISCORD_WINS_WEBHOOK_URL || env.DISCORD_WEBHOOK_URL;
+      if (b.outcome === 'bought' && winsUrl) {
+        const m = (await store.listMissions(db, userId).catch(() => [])).find(
+          (x) => x.id === b.missionId,
+        );
+        await announceBought(
+          winsUrl,
+          {
+            name: m?.productName ?? `mission ${b.missionId}`,
+            retailer: m?.retailer ?? '',
+            price: b.price ?? null,
+            total: b.total ?? null,
+            quantity: b.quantity ?? null,
+            msrp: m?.msrp ?? null,
+            url: m?.url ?? '',
+            imageUrl: m?.imageUrl ?? '',
+          },
+          now,
+        ).catch(() => {});
+      }
       return json({ run: id });
     }
 

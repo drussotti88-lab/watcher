@@ -13,6 +13,9 @@ const COLOR_IN = 0x1f8b4c;
 // The queue gets its own colour, brighter than the staged red. A load-in is
 // "this will happen"; a waiting room is "this is happening, and you are late".
 const COLOR_QUEUE = 0xe67e22;
+// Gold. The only colour on this list that is not a warning, a status or a
+// category: it is the one message that means the whole system did its job.
+const COLOR_WIN = 0xf5c542;
 
 /** Discord caps embeds at 10 per message and 25 fields per embed. */
 const MAX_FIELDS = 20;
@@ -26,6 +29,8 @@ interface Embed {
   fields?: { name: string; value: string; inline?: boolean }[];
   /** The product photo, small and to the right — how you recognise it at 3am. */
   thumbnail?: { url: string };
+  /** The product photo, full width. Only the win uses it. */
+  image?: { url: string };
   footer?: { text: string };
   timestamp?: string;
 }
@@ -377,6 +382,60 @@ export async function announceQueues(
     webhookUrl,
     sightings.slice(0, 3).map((q) => buildQueueEmbed(q.retailer, q.at, now)),
   );
+}
+
+/**
+ * Something was bought.
+ *
+ * The one message everything else exists to make possible, and until 3 Sep
+ * 2026 it was never sent: a confirmed order wrote a row and said nothing. The
+ * staged alert, the stock alert and the queue alert had all been built, and
+ * the only event with no channel was the win.
+ *
+ * Written to be read once and felt, not scanned. The title is the verb. The
+ * description says the price actually paid, because a number in a field is a
+ * fact and a number in a sentence is a result. The photo is large rather than
+ * a thumbnail — this is the card you screenshot.
+ */
+export interface BoughtItem {
+  name: string;
+  retailer: string;
+  /** Per unit, as charged. */
+  price: number | null;
+  /** The whole order, when the cart said so. */
+  total: number | null;
+  quantity: number | null;
+  msrp: number | null;
+  url: string;
+  imageUrl: string;
+}
+
+export function buildBoughtEmbed(i: BoughtItem, now: string): Embed {
+  const qty = i.quantity && i.quantity > 1 ? `${i.quantity} × ` : '';
+  const paid = i.total !== null && i.total !== undefined ? dollars(i.total) : dollars(i.price);
+  const saved =
+    i.price !== null && i.msrp !== null && i.msrp > 0 && i.price <= i.msrp + 0.005
+      ? ' at retail'
+      : '';
+  return {
+    title: `BOUGHT — ${clip(i.name || 'a watched listing', 200)}`,
+    ...(i.url ? { url: i.url } : {}),
+    description: `**${qty}${paid}${saved}** from ${i.retailer || 'the shop'}. The retailer confirmed the order.`,
+    color: COLOR_WIN,
+    // Full-width image, not a thumbnail. See the note above.
+    ...(i.imageUrl ? { image: { url: i.imageUrl } } : {}),
+    fields: [
+      inline('Paid', paid),
+      inline('MSRP', dollars(i.msrp)),
+      inline('Retailer', i.retailer || '—'),
+    ],
+    footer: { text: 'Phantom · confirmed by the retailer, not by a click that seemed to work' },
+    timestamp: now,
+  };
+}
+
+export async function announceBought(webhookUrl: string, item: BoughtItem, now: string): Promise<void> {
+  await post(webhookUrl, [buildBoughtEmbed(item, now)]);
 }
 
 export async function announceStaged(

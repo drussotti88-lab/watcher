@@ -583,3 +583,34 @@ test('a Target alert carries no Buyable field at all', async () => {
   );
   assert.equal((e!.fields ?? []).some((f) => f.name === 'Buyable'), false);
 });
+
+// ── The win, on Discord ──────────────────────────────────────────────────────
+
+test('THE WIN CARD SAYS WHAT WAS PAID, IN A SENTENCE, WITH A BIG PHOTO', async () => {
+  // Every other alert is a warning or a status. This is the one message the
+  // whole system exists to send, and it was the only event with no channel.
+  const { buildBoughtEmbed } = await import('../src/notify.ts');
+  const e = buildBoughtEmbed(
+    {
+      name: 'Pitch Black Booster Bundle', retailer: 'Walmart', price: 26.94, total: 29.57,
+      quantity: 1, msrp: 26.94, url: 'https://www.walmart.com/ip/20243261734',
+      imageUrl: 'https://i5.walmartimages.com/x.jpg',
+    },
+    '2026-09-10T01:00:40Z',
+  );
+  assert.match(e.title ?? '', /^BOUGHT — Pitch Black Booster Bundle/);
+  assert.match(e.description ?? '', /\*\*\$29\.57 at retail\*\* from Walmart/);
+  assert.ok(e.image?.url, 'full-width photo, not a thumbnail — this is the card you screenshot');
+  assert.equal(e.thumbnail, undefined);
+  assert.match(e.footer?.text ?? '', /confirmed by the retailer/);
+});
+
+test('two of something says so, and over MSRP does not claim retail', async () => {
+  const { buildBoughtEmbed } = await import('../src/notify.ts');
+  const e = buildBoughtEmbed(
+    { name: 'Tin', retailer: 'Target', price: 34.99, total: 76.12, quantity: 2, msrp: 29.99, url: '', imageUrl: '' },
+    '2026-09-10T01:00:40Z',
+  );
+  assert.match(e.description ?? '', /2 × \$76\.12\*\* from Target/);
+  assert.doesNotMatch(e.description ?? '', /at retail/);
+});

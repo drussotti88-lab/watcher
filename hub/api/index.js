@@ -2530,6 +2530,7 @@ var COLOR_OPS = 9069584;
 var COLOR_STAGED = 12597547;
 var COLOR_IN = 2067276;
 var COLOR_QUEUE = 15105570;
+var COLOR_WIN = 16106818;
 var MAX_FIELDS = 20;
 var inline = (name, value) => ({ name, value, inline: true });
 var dollars = (n) => n === null || n === void 0 ? "\u2014" : `$${Number(n).toFixed(2)}`;
@@ -2690,6 +2691,29 @@ async function announceQueues(webhookUrl, sightings, now) {
     webhookUrl,
     sightings.slice(0, 3).map((q) => buildQueueEmbed(q.retailer, q.at, now))
   );
+}
+function buildBoughtEmbed(i, now) {
+  const qty = i.quantity && i.quantity > 1 ? `${i.quantity} \xD7 ` : "";
+  const paid = i.total !== null && i.total !== void 0 ? dollars(i.total) : dollars(i.price);
+  const saved = i.price !== null && i.msrp !== null && i.msrp > 0 && i.price <= i.msrp + 5e-3 ? " at retail" : "";
+  return {
+    title: `BOUGHT \u2014 ${clip(i.name || "a watched listing", 200)}`,
+    ...i.url ? { url: i.url } : {},
+    description: `**${qty}${paid}${saved}** from ${i.retailer || "the shop"}. The retailer confirmed the order.`,
+    color: COLOR_WIN,
+    // Full-width image, not a thumbnail. See the note above.
+    ...i.imageUrl ? { image: { url: i.imageUrl } } : {},
+    fields: [
+      inline("Paid", paid),
+      inline("MSRP", dollars(i.msrp)),
+      inline("Retailer", i.retailer || "\u2014")
+    ],
+    footer: { text: "Phantom \xB7 confirmed by the retailer, not by a click that seemed to work" },
+    timestamp: now
+  };
+}
+async function announceBought(webhookUrl, item, now) {
+  await post(webhookUrl, [buildBoughtEmbed(item, now)]);
 }
 async function announceStaged(webhookUrl, items, now, note) {
   const embeds = buildStagedEmbeds(items, now, note);
@@ -3851,6 +3875,48 @@ button.small { padding: 4px 10px; font-size: 12px; border-radius: var(--r-sm); b
  * read at the same speed as one.
  */
 .pill.notshop { background: var(--alert); color: #fff; font-weight: 800; }
+
+/* \u2500\u2500 The win \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */
+#win-moment { position: fixed; inset: 0; z-index: 80; display: flex;
+              align-items: center; justify-content: center; padding: 20px;
+              background: rgba(4, 3, 9, .86); backdrop-filter: blur(6px); }
+#win-moment[hidden] { display: none; }
+.wincard { position: relative; width: min(440px, 100%); text-align: center;
+           padding: 28px 26px 22px; border-radius: 22px;
+           background: var(--panel, #0f0d19); border: 1px solid rgba(245, 197, 66, .35);
+           box-shadow: 0 0 0 1px rgba(245, 197, 66, .12), 0 30px 90px rgba(0, 0, 0, .7),
+                       0 0 120px rgba(245, 197, 66, .18);
+           animation: winin .55s cubic-bezier(.2, 1.4, .4, 1) both; }
+@keyframes winin { from { transform: scale(.7) translateY(30px); opacity: 0; }
+                   to   { transform: none; opacity: 1; } }
+.winimg { width: 190px; height: 190px; margin: 0 auto 18px; border-radius: 18px;
+          background: #fff; display: flex; align-items: center; justify-content: center;
+          overflow: hidden; box-shadow: 0 12px 40px rgba(0, 0, 0, .5); }
+.winimg img { max-width: 92%; max-height: 92%; object-fit: contain; }
+.winimg:has(img:not([src])) , .winimg:has(img[src=""]) { background: var(--accent-soft); }
+.winword { font: 800 44px/1 var(--display); letter-spacing: -.02em;
+           text-transform: uppercase; color: #f5c542;
+           text-shadow: 0 0 30px rgba(245, 197, 66, .45); margin-bottom: 10px; }
+.winname { font: 600 17px/1.3 var(--sans); color: var(--ink); margin-bottom: 6px; }
+.winline { font: 500 15px/1.4 var(--sans); color: var(--muted); }
+.winline b { color: var(--ink); font-family: var(--mono); }
+.winwhen { font: 500 12px/1.4 var(--sans); color: var(--dim); margin: 8px 0 18px; }
+.wincard .actions { justify-content: center; }
+
+/* Confetti, in CSS, from a dozen spans. Not a library: it is a burst that
+   lasts three seconds and has to work on a phone in a car park. */
+.winburst { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+.winburst span { position: absolute; top: -12px; width: 9px; height: 14px;
+                 border-radius: 2px; opacity: 0;
+                 animation: winfall 2.8s ease-in both; }
+@keyframes winfall {
+  0%   { transform: translateY(0) rotate(0deg); opacity: 1; }
+  100% { transform: translateY(110vh) rotate(720deg); opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wincard { animation: none; }
+  .winburst { display: none; }
+}
 .pill.overmsrp { background: var(--warn); color: #16110a; font-weight: 800; }
 .meta.staged { background: none; letter-spacing: 0; text-transform: none; }
 /* The grid restyles the same cards; it lives below the rules it overrides so
@@ -4780,6 +4846,26 @@ ${FONTS}<style>${STYLE}</style></head>
     </div>
     </div>
   </section>
+  <!-- \u2500\u2500 The win \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+       The one moment everything else on this page exists to produce, and
+       until now it was a row in a table. This takes the whole screen once,
+       for each confirmed order, on the device that first sees it. It is
+       dismissed by hand rather than on a timer: a thing worth celebrating is
+       worth the second it takes to close it. -->
+  <div id="win-moment" hidden>
+    <div class="winburst" aria-hidden="true"></div>
+    <div class="wincard" role="dialog" aria-labelledby="win-title">
+      <div class="winimg"><img id="win-img" alt=""></div>
+      <div class="winword" id="win-title">Bought</div>
+      <div class="winname" id="win-name"></div>
+      <div class="winline" id="win-line"></div>
+      <div class="winwhen" id="win-when"></div>
+      <div class="actions">
+        <button type="button" class="primary" id="win-open">See it in Wins</button>
+        <button type="button" id="win-close">Close</button>
+      </div>
+    </div>
+  </div>
   <dialog id="add-dialog">
     <div class="card">
       <h3>Add a product</h3>
@@ -6517,6 +6603,7 @@ function render() {
   // right now" to an aggregate query is how the fastest answer on the page
   // ends up behind the slowest one.
   renderLive();
+  showWinMoment();
 
   /*
    * Whether alerts have anywhere to go.
@@ -6530,7 +6617,8 @@ function render() {
   if (dstate) {
     const on = DATA.discord === true;
     dstate.textContent = on
-      ? 'Connected. In-stock, staged stock and source failures are posted here.'
+      ? 'Connected. In stock, staged stock, waiting rooms and source failures post here.' +
+        (DATA.discordWins ? ' Confirmed orders post to their own wins channel.' : ' Confirmed orders post here too; set DISCORD_WINS_WEBHOOK_URL for their own channel.')
       : 'Not connected. Add DISCORD_WEBHOOK_URL to the Hub and redeploy, then test.';
     document.getElementById('discord-test').disabled = !on;
     document.getElementById('discord-preview').disabled = !on;
@@ -7567,6 +7655,81 @@ function liveNow() {
       if (ar !== br) return ar - br;
       return (a.price ?? Infinity) - (b.price ?? Infinity);
     });
+}
+
+/*
+ * \u2500\u2500 The win \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+ *
+ * Once per confirmed order, on the first device that sees it. The set of run
+ * ids already shown lives in localStorage, so a refresh does not replay it and
+ * a second phone gets its own. Limited to orders from the last day: an old win
+ * must not greet a brand-new device as though it just happened.
+ *
+ * Deliberately not on a timer. A thing worth celebrating is worth the second
+ * it takes to close it, and an overlay that vanishes while you are reaching
+ * for it is a notification, not a moment.
+ *
+ * (No backticks anywhere in this function or its comments: they live inside
+ *  the page template literal and one of them ends the script.)
+ */
+const WIN_SEEN_KEY = 'phantom.wins.seen';
+const WIN_FRESH_MS = 24 * 60 * 60 * 1000;
+const WIN_COLOURS = ['#f5c542', '#8b7cf6', '#3ddc97', '#ff8a5b', '#ffffff'];
+
+function winsSeen() {
+  try { return new Set(JSON.parse(localStorage.getItem(WIN_SEEN_KEY) || '[]')); }
+  catch (err) { return new Set(); }
+}
+function markWinSeen(id) {
+  try {
+    const seen = winsSeen(); seen.add(id);
+    // Keep the last hundred. This is a memory of moments, not a ledger.
+    localStorage.setItem(WIN_SEEN_KEY, JSON.stringify([...seen].slice(-100)));
+  } catch (err) { /* a device that cannot remember will show it again; fine */ }
+}
+
+function showWinMoment() {
+  const host = document.getElementById('win-moment');
+  if (!host || !host.hidden) return;
+  const seen = winsSeen();
+  const now = Date.now();
+  const fresh = (DATA.runs || [])
+    .filter((r) => r.outcome === 'bought' && !seen.has(r.id))
+    .filter((r) => now - new Date(r.finishedAt || r.startedAt).getTime() < WIN_FRESH_MS)
+    .sort((a, b) => new Date(b.finishedAt || b.startedAt) - new Date(a.finishedAt || a.startedAt));
+  const r = fresh[0];
+  if (!r) return;
+
+  const m = (DATA.missions || []).find((x) => x.id === r.missionId);
+  const img = document.getElementById('win-img');
+  const src = (m && m.imageUrl) || '';
+  if (src) img.src = src; else img.removeAttribute('src');
+  document.getElementById('win-name').textContent = r.productName || (m && m.productName) || 'a watched listing';
+  const paid = r.total !== null && r.total !== undefined ? r.total : r.price;
+  const qty = r.quantity && r.quantity > 1 ? r.quantity + ' \xD7 ' : '';
+  const line = document.getElementById('win-line');
+  line.textContent = '';
+  line.append(qty);
+  line.appendChild(el('b', null, money(paid)));
+  line.append(' from ' + (r.retailer || (m && m.retailer) || 'the shop'));
+  document.getElementById('win-when').textContent =
+    'confirmed by the retailer ' + ago(r.finishedAt || r.startedAt);
+
+  const burst = host.querySelector('.winburst');
+  burst.textContent = '';
+  for (let i = 0; i < 28; i += 1) {
+    const bit = document.createElement('span');
+    bit.style.left = Math.round(Math.random() * 100) + '%';
+    bit.style.background = WIN_COLOURS[i % WIN_COLOURS.length];
+    bit.style.animationDelay = (Math.random() * 0.9).toFixed(2) + 's';
+    bit.style.animationDuration = (2.2 + Math.random() * 1.4).toFixed(2) + 's';
+    burst.appendChild(bit);
+  }
+
+  const close = () => { host.hidden = true; markWinSeen(r.id); };
+  document.getElementById('win-close').onclick = close;
+  document.getElementById('win-open').onclick = () => { close(); showTab('wins'); };
+  host.hidden = false;
 }
 
 function renderLive() {
@@ -9631,7 +9794,8 @@ function createHandler(db2, env2) {
         me,
         readiness,
         // Whether alerts have anywhere to go. A boolean, never the URL.
-        discord: Boolean(env2.DISCORD_WEBHOOK_URL)
+        discord: Boolean(env2.DISCORD_WEBHOOK_URL),
+        discordWins: Boolean(env2.DISCORD_WINS_WEBHOOK_URL)
       });
     }
     if (request.method === "GET" && path.startsWith("/api/missions/") && path.endsWith("/runs")) {
@@ -10128,6 +10292,27 @@ function createHandler(db2, env2) {
         isPreOrder: b.isPreOrder === true,
         releaseDate: b.releaseDate ?? null
       });
+      const winsUrl = env2.DISCORD_WINS_WEBHOOK_URL || env2.DISCORD_WEBHOOK_URL;
+      if (b.outcome === "bought" && winsUrl) {
+        const m = (await listMissions(db2, userId).catch(() => [])).find(
+          (x) => x.id === b.missionId
+        );
+        await announceBought(
+          winsUrl,
+          {
+            name: m?.productName ?? `mission ${b.missionId}`,
+            retailer: m?.retailer ?? "",
+            price: b.price ?? null,
+            total: b.total ?? null,
+            quantity: b.quantity ?? null,
+            msrp: m?.msrp ?? null,
+            url: m?.url ?? "",
+            imageUrl: m?.imageUrl ?? ""
+          },
+          now
+        ).catch(() => {
+        });
+      }
       return json({ run: id });
     }
     if (request.method === "POST" && path === "/observations") {
@@ -10532,6 +10717,7 @@ function env() {
     DATABASE_URL: process.env.DATABASE_URL ?? "",
     DISCORD_WEBHOOK_URL: process.env.DISCORD_WEBHOOK_URL ?? "",
     DISCORD_OPS_WEBHOOK_URL: process.env.DISCORD_OPS_WEBHOOK_URL,
+    DISCORD_WINS_WEBHOOK_URL: process.env.DISCORD_WINS_WEBHOOK_URL,
     INGEST_TOKEN: process.env.INGEST_TOKEN,
     APP_PASSWORD: process.env.APP_PASSWORD
   };

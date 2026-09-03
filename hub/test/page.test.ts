@@ -3994,3 +3994,55 @@ test('never checked keeps its own word and is not double-counted as stale', asyn
   assert.match(text, /1 never checked/);
   assert.doesNotMatch(text, /not being checked/);
 });
+
+// ── The win ──────────────────────────────────────────────────────────────────
+//
+// The one moment everything else on the page exists to produce, and until
+// 3 Sep 2026 it was a row in a table.
+
+const boughtRun = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+  id: 901, missionId: DASHBOARD.missions[0].id, productName: 'Pitch Black ETB',
+  retailer: 'Target', outcome: 'bought', reason: 'order confirmed', state: 'in',
+  price: 49.99, total: 54.86, quantity: 1, sellerKind: 'retailer', sellerName: 'Target',
+  startedAt: new Date(Date.now() - 60_000).toISOString(),
+  finishedAt: new Date(Date.now() - 30_000).toISOString(), ms: 8000, ...over,
+});
+
+test('A CONFIRMED ORDER TAKES THE WHOLE SCREEN, ONCE', async () => {
+  const h = await boot({ ...DASHBOARD, runs: [boughtRun()] });
+  const win = h.doc.getElementById('win-moment')!;
+  assert.equal(win.hidden, false, 'it is shown');
+  assert.match($(h, '#win-title').textContent!, /Bought/);
+  assert.match($(h, '#win-name').textContent!, /Pitch Black ETB/);
+  assert.match($(h, '#win-line').textContent!, /\$54\.86 from Target/, 'the total paid, in a sentence');
+  assert.ok(win.querySelectorAll('.winburst span').length > 10, 'and it celebrates');
+
+  // Closing remembers, so a refresh does not replay it. Same document: a
+  // second boot() is a second browser with its own localStorage, which is the
+  // "other phone gets its own" case, not this one.
+  ($(h, '#win-close') as HTMLButtonElement).click();
+  assert.equal(win.hidden, true);
+  ($(h, '#refresh') as HTMLButtonElement).click();
+  await h.settle();
+  assert.equal(win.hidden, true, 'seen once is seen');
+});
+
+test('an old win does not greet a new device as though it just happened', async () => {
+  const stale = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
+  const h = await boot({ ...DASHBOARD, runs: [boughtRun({ id: 902, startedAt: stale, finishedAt: stale })] });
+  assert.equal(h.doc.getElementById('win-moment')!.hidden, true);
+});
+
+test('a declined run is not a win', async () => {
+  const h = await boot({ ...DASHBOARD, runs: [boughtRun({ id: 903, outcome: 'declined' })] });
+  assert.equal(h.doc.getElementById('win-moment')!.hidden, true);
+});
+
+test('"See it in Wins" goes there', async () => {
+  const h = await boot({ ...DASHBOARD, runs: [boughtRun({ id: 904 })] });
+  ($(h, '#win-open') as HTMLButtonElement).click();
+  assert.equal(h.doc.getElementById('win-moment')!.hidden, true);
+  assert.equal(h.doc.getElementById('tab-wins')!.hidden, false);
+  // The Wins tab fetches its own data; let that land before the window goes.
+  await h.settle();
+});
