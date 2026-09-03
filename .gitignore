@@ -52,3 +52,6 @@ ship.ps1
 commitmsg.txt
 *.tgz
 gi.ps1
+_x/  
+copy.tgz  
+commitmsg.txt  

@@ -10,6 +10,9 @@ const COLOR_NEW = 0x1f6b4f;
 const COLOR_OPS = 0x8a6410;
 const COLOR_STAGED = 0xc0392b;
 const COLOR_IN = 0x1f8b4c;
+// The queue gets its own colour, brighter than the staged red. A load-in is
+// "this will happen"; a waiting room is "this is happening, and you are late".
+const COLOR_QUEUE = 0xe67e22;
 
 /** Discord caps embeds at 10 per message and 25 fields per embed. */
 const MAX_FIELDS = 20;
@@ -288,6 +291,59 @@ export function buildStagedEmbeds(items: StagedItem[], now: string, note?: strin
       timestamp: now,
     };
   });
+}
+
+/** Where to go when a shop puts a queue up. Home page: the queue is site-wide. */
+const SHOP_HOME: Record<string, string> = {
+  Walmart: 'https://www.walmart.com',
+  Target: 'https://www.target.com',
+  'Pokemon Center': 'https://www.pokemoncenter.com',
+};
+
+/**
+ * A waiting room went up.
+ *
+ * The one alert that asks a person to do something immediately, so it is
+ * written as an instruction rather than a status. There is no product here on
+ * purpose: a queue is site-wide, it is not attached to a listing, and while it
+ * is up the product page still says sold out — so naming a product would put
+ * the reader on the one page that is lying to them.
+ *
+ * What is scarce is a place in the line, and it is scarce from the second the
+ * queue opens. Everything about this message serves getting the reader there.
+ */
+export function buildQueueEmbed(retailer: string, at: string, now: string): Embed {
+  const home = SHOP_HOME[retailer] ?? '';
+  return {
+    title: `WAITING ROOM UP AT ${(retailer || 'A SHOP').toUpperCase()}`,
+    ...(home ? { url: home } : {}),
+    description:
+      'A drop is very likely live right now. **Get in line yourself** — a place ' +
+      'in the queue is the scarce thing, and it stops being available the ' +
+      'longer this sits.',
+    color: COLOR_QUEUE,
+    fields: [
+      inline('Shop', retailer || '—'),
+      inline('Seen', at ? new Date(at).toLocaleTimeString('en-US') : 'just now'),
+      inline('Product pages', 'will say sold out — ignore that'),
+    ],
+    footer: {
+      text: 'Phantom does not join queues or answer bot checks. This one is yours.',
+    },
+    timestamp: now,
+  };
+}
+
+export async function announceQueues(
+  webhookUrl: string,
+  sightings: { retailer: string; at: string }[],
+  now: string,
+): Promise<void> {
+  if (sightings.length === 0) return;
+  await post(
+    webhookUrl,
+    sightings.slice(0, 3).map((q) => buildQueueEmbed(q.retailer, q.at, now)),
+  );
 }
 
 export async function announceStaged(

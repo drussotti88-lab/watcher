@@ -37,10 +37,39 @@ const CHALLENGE_PATTERNS: {
     name: 'Press-and-hold check',
     test: (_t, x) => /press\s*(?:&|and)\s*hold/i.test(x) && /human|robot|verify/i.test(x),
   },
+  // ── Waiting rooms ─────────────────────────────────────────────────────────
+  //
+  // Two vendors, two vocabularies, one meaning: everybody is being made to
+  // wait because something is dropping.
+  //
+  // These sit BELOW the bot checks deliberately. A page carrying both a queue
+  // and a press-and-hold is a queue whose door has a human check on it, and
+  // the check is the part this code will not touch — so it must name itself
+  // the wall and hand the page to a person, not report a waiting room the
+  // machine believes it can sit in.
   {
     name: 'Queue-it waiting room',
     test: (t, x) =>
       /you are now in line|your place in line|waiting room/i.test(x) || /^waiting room/i.test(t),
+  },
+  {
+    // Walmart runs its own waiting room rather than Queue-it, and says none of
+    // the words above. On a Wednesday drop it reads "You're in line", offers
+    // "Hold my spot and keep shopping", and gives an estimated wait — none of
+    // which the Queue-it pattern matches, so the loudest signal Walmart ever
+    // gives us was landing as an unreadable page.
+    //
+    // The apostrophe is a character class because the page serves a curly one
+    // and every developer types a straight one.
+    name: 'Walmart waiting room',
+    test: (t, x) =>
+      /(?:you\s*['\u2018\u2019]?\s*re|you are)\s+(?:now\s+)?in\s+line/i.test(x) ||
+      /hold my spot/i.test(x) ||
+      /your (?:place|spot) in line/i.test(x) ||
+      // An estimated wait alone is a delivery date. Paired with a line, it is a
+      // queue.
+      (/estimated wait|wait time/i.test(x) && /\b(?:line|queue)\b/i.test(x)) ||
+      /in line|waiting room/i.test(t),
   },
   {
     name: 'Robot check',
@@ -110,8 +139,10 @@ export interface Challenge {
  * designed. What the design still refuses is getting *past* one — bot checks
  * and CAPTCHAs at the queue's end are a person's job, never this code's.
  */
+const QUEUE_REASONS = new Set(['Queue-it waiting room', 'Walmart waiting room']);
+
 export function isQueue(reason: string): boolean {
-  return reason === 'Queue-it waiting room';
+  return QUEUE_REASONS.has(reason);
 }
 
 /**

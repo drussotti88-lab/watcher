@@ -519,3 +519,28 @@ test('A DISCORD INVITE MUST BE A DISCORD LINK', async () => {
   assert.match(String(store.validateSettings({ discordInvite: 'https://evil.test/discord.gg' })), /discord\.gg/);
   assert.match(String(store.validateSettings({ discordInvite: 'http://discord.gg/abc' })), /discord\.gg/);
 });
+
+// ── The queue alert ──────────────────────────────────────────────────────────
+
+test('A WAITING ROOM IS AN INSTRUCTION, NOT A STATUS', async () => {
+  const { buildQueueEmbed } = await import('../src/notify.ts');
+  // The only alert that asks a person to act immediately. It names no product
+  // on purpose: a queue is site-wide, and while it is up the product page says
+  // sold out — pointing the reader at that page points them at the lie.
+  const e = buildQueueEmbed('Walmart', '2026-09-02T21:00:00Z', '2026-09-02T21:00:05Z');
+  assert.match(e.title, /WAITING ROOM UP AT WALMART/);
+  assert.equal(e.url, 'https://www.walmart.com');
+  assert.match(e.description ?? '', /get in line yourself/i);
+  // The reader has to be told the page will lie to them.
+  assert.ok((e.fields ?? []).some((f) => /sold out/i.test(f.value)));
+  // And that this half is theirs. Phantom does not answer bot checks.
+  assert.match(e.footer?.text ?? '', /does not join queues/i);
+  assert.ok(!/thumbnail/.test(JSON.stringify(e)));
+});
+
+test('an unknown shop still gets an alert, just without a link', async () => {
+  const { buildQueueEmbed } = await import('../src/notify.ts');
+  const e = buildQueueEmbed('', '', '2026-09-02T21:00:05Z');
+  assert.match(e.title, /WAITING ROOM UP AT A SHOP/);
+  assert.equal(e.url, undefined);
+});

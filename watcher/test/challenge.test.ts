@@ -112,10 +112,64 @@ test('detection reads title and text, never raw markup', () => {
 
 test('a queue is told apart from a wall — they demand opposite reactions', () => {
   assert.equal(isQueue('Queue-it waiting room'), true);
+  assert.equal(isQueue('Walmart waiting room'), true);
   assert.equal(isQueue('CAPTCHA'), false);
   assert.equal(isQueue('Cloudflare challenge'), false);
   assert.equal(isQueue('Access denied'), false);
   assert.equal(isQueue(''), false);
+});
+
+// ── Walmart's own waiting room ───────────────────────────────────────────────
+//
+// Walmart does not use Queue-it and says none of Queue-it's words. Every
+// phrasing below was landing as "the page could not be read" — a failure row,
+// at the exact minute of a drop, for the loudest signal a retailer gives.
+
+test("WALMART'S WAITING ROOM IS A QUEUE, NOT AN UNREADABLE PAGE", () => {
+  for (const text of [
+    "You're in line. Estimated wait: 12 minutes.",
+    'You are in line to shop this event.',
+    'Hold my spot and keep shopping',
+    'Your spot in line is being held.',
+    'Estimated wait 20 minutes — you will be let in line shortly.',
+  ]) {
+    const { challenged, reason } = detectChallenge('Walmart.com', text);
+    assert.equal(challenged, true, text);
+    assert.equal(isQueue(reason), true, text);
+  }
+});
+
+test('the curly apostrophe the page actually serves is matched', () => {
+  // The page serves U+2019; every developer types U+0027. Matching only the
+  // one you can type is how this fails silently on the night.
+  const { reason } = detectChallenge('', 'You\u2019re in line');
+  assert.equal(isQueue(reason), true);
+});
+
+test('A HEALTHY WALMART PRODUCT PAGE IS NOT A QUEUE', () => {
+  // The akamai lesson, kept. A detector that cries wolf on a working page is
+  // worse than none: it would skip every other Walmart check in the pass and
+  // shout "a drop is live" at a shelf that has not moved.
+  const pdp =
+    'Pokemon Trading Card Game Scarlet and Violet Elite Trainer Box. ' +
+    'Sold and shipped by Walmart.com. Arrives by Fri, Sep 11. ' +
+    'Estimated delivery wait time 3 to 5 business days. Add to cart. ' +
+    'Free 90-day returns. In stock at your store.';
+  const { challenged } = detectChallenge('Pokemon TCG - Walmart.com', pdp);
+  assert.equal(challenged, false);
+});
+
+test('a press-and-hold on the queue door is a wall, not a waiting room', () => {
+  // Both markers on one page. The bot check is the half this code will not
+  // touch, so it has to win: naming it a queue would tell the pacer to keep
+  // knocking at a door a person has to open.
+  const { challenged, reason } = detectChallenge(
+    'Robot or human?',
+    "You're in line. Press and hold to verify you are human.",
+  );
+  assert.equal(challenged, true);
+  assert.equal(reason, 'Press-and-hold check');
+  assert.equal(isQueue(reason), false);
 });
 
 // ── Walls that render nothing ────────────────────────────────────────────────

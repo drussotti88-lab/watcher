@@ -15,6 +15,7 @@
 import type { Page, Response } from 'playwright';
 import type { Browser } from './browser.ts';
 import { detectChallenge } from './challenge.ts';
+import { captureOddPage, worthCapturing } from './capture.ts';
 import { raceToRead } from './racer.ts';
 import { readWhenReady } from './settle.ts';
 import { isInterestingApi } from './apisniff.ts';
@@ -233,6 +234,18 @@ export async function readListing(
 
     const challenge = detectChallenge(read.title, read.text, read.html);
     if (challenge.challenged) {
+      // Written down before we return. A waiting room is the artifact every
+      // piece of future queue work is blocked on, and it exists for the length
+      // of one drop.
+      await captureOddPage({
+        retailer,
+        url: page.url(),
+        title: read.title,
+        text: read.text,
+        html: read.html,
+        reason: challenge.reason,
+        screenshot: () => page.screenshot({ fullPage: false }),
+      });
       return {
         ...unknownRead(`challenged: ${challenge.reason}`),
         challenged: true,
@@ -244,6 +257,21 @@ export async function readListing(
 
     const scraped = await scrape(page);
     const base = readFor(retailer, externalId, scraped, bodies);
+    // A page that is not a known challenge and still has no product in it. On
+    // Walmart that is what a waiting room looked like before tonight: the
+    // detector missed it and the parser blamed itself. Capture decides it by
+    // evidence rather than by the note's wording.
+    if (worthCapturing(false, retailer, base.note)) {
+      await captureOddPage({
+        retailer,
+        url: page.url(),
+        title: read.title,
+        text: read.text,
+        html: read.html,
+        reason: base.note,
+        screenshot: () => page.screenshot({ fullPage: false }),
+      });
+    }
     // The best the race managed beats a last look that knows less — a body
     // that was captured and then a navigation that cleared the DOM would
     // otherwise turn "out of stock" back into "unknown".

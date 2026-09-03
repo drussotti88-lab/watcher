@@ -18,6 +18,7 @@ import { join, resolve } from 'node:path';
 
 import { TestDb } from './pg.ts';
 import { createHandler } from '../src/app.ts';
+import * as store from '../src/store.ts';
 import type { Env } from '../src/types.ts';
 
 const TOKEN = 'Phantom-token';
@@ -458,4 +459,36 @@ test('a nonsense policy is refused rather than stored', async () => {
   const res = await call(db, 'POST', '/api/missions', { listingId, preOrderPolicy: 'maybe' });
   assert.equal(res.status, 400);
   assert.match(res.body.error, /skip.*allow/);
+});
+
+// ── The waiting-room wording, from both ends ─────────────────────────────────
+//
+// A queue is the loudest signal either retailer gives, and it is carried by
+// nothing but a phrase. `queueSightings` greps SQL for it, `isQueueLine` greps
+// TypeScript for it, and Phantom writes it from two different code paths in
+// the other folder. Four places, one string, no column — so it is pinned here,
+// on the seam, with the exact sentences Phantom sends.
+
+test('THE WORDING PHANTOM SENDS FOR A WAITING ROOM IS RECOGNISED', () => {
+  // watcher/src/watch.ts, a blocked check: `${outcome}: ${reason}`.
+  assert.equal(
+    store.isQueueLine(
+      'blocked: waiting room is up — a drop may be live, get in line yourself now',
+    ),
+    true,
+  );
+  // watcher/src/index.ts, sweepChallenged.
+  assert.equal(store.isQueueLine('QUEUE: Walmart put a waiting room up mid-sweep'), true);
+  // The detail line carries the challenge name on its own.
+  assert.equal(store.isQueueLine('challenge: Walmart waiting room · confidence unknown'), true);
+});
+
+test('an ordinary line is not mistaken for a queue', () => {
+  assert.equal(store.isQueueLine('out at $59.99'), false);
+  assert.equal(store.isQueueLine('blocked: Press-and-hold check — standing down'), false);
+  assert.equal(store.isQueueLine('failed: the page could not be read'), false);
+  assert.equal(store.isQueueLine(''), false);
+  assert.equal(store.isQueueLine(undefined), false);
+  // "QUEUE:" has to start the line, exactly as the SQL requires.
+  assert.equal(store.isQueueLine('sweep finished, nothing in the QUEUE: today'), false);
 });

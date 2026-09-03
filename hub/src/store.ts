@@ -3152,6 +3152,28 @@ export async function requestSweep(db: Sql, userId: number, sourceId: string): P
  * is by definition a page Phantom could not read — there is no cleaner
  * column to ask. The wording is a contract, pinned by tests in both packages.
  */
+/**
+ * How long one waiting room stays "already announced".
+ *
+ * A queue lasts many passes and each pass writes another activity line. Ten
+ * minutes is long enough that a drop produces one Discord post rather than
+ * thirty, and short enough that a second queue an hour later is its own news.
+ */
+export const QUEUE_ALERT_COOLDOWN_MIN = 10;
+
+/**
+ * Does this activity line describe a waiting room?
+ *
+ * The same two shapes `queueSightings` matches in SQL, kept here so the
+ * cross-package wording contract has exactly one home. The watcher writes
+ * 'QUEUE: ...' from a sweep and 'waiting room is up — ...' from a check; both
+ * spellings are pinned by tests on both sides.
+ */
+export function isQueueLine(message: unknown): boolean {
+  const m = String(message ?? '');
+  return /waiting room/i.test(m) || m.startsWith('QUEUE:');
+}
+
 export async function queueSightings(
   db: Sql,
   userId: number,

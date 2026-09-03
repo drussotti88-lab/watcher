@@ -24,7 +24,14 @@ import type { Env, Discovered, SweepResult } from './types.ts';
 import type { Sql } from './db.ts';
 import { sweepAll, sweepSource } from './discover.ts';
 import * as store from './store.ts';
-import { announce, announceStaged, announceStock, announceTest, reportOps } from './notify.ts';
+import {
+  announce,
+  announceQueues,
+  announceStaged,
+  announceStock,
+  announceTest,
+  reportOps,
+} from './notify.ts';
 import { applyFilters, dedupe } from './filter.ts';
 import { probeUrl } from './fetcher.ts';
 import {
@@ -952,8 +959,47 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
 
       // A cap, so a runaway Phantom cannot post a million rows in one request.
       const lines = b.lines.slice(0, 500);
+
+      /*
+       * ── A waiting room has to reach a phone ────────────────────────────────
+       *
+       * The queue banner has been in-app only, which is the surface least
+       * likely to be open: waiting rooms go up during evening drops, and the
+       * whole value of the signal is the minute it arrives. On Walmart and
+       * Pokémon Center a person finishes the buy anyway, so this alert IS the
+       * product.
+       *
+       * The cooldown is read from the activity table rather than a new column,
+       * because a queue lasts many passes and each one writes another line —
+       * without it Discord gets a post every twenty seconds for an hour. Asked
+       * BEFORE the insert: after it, this batch's own lines are the sighting
+       * and the answer is always "already announced".
+       */
+      const queuedBefore = new Set(
+        (await store.queueSightings(db, userId, store.QUEUE_ALERT_COOLDOWN_MIN).catch(() => [])).map(
+          (q) => q.retailer,
+        ),
+      );
       const result = await store.recordActivity(db, userId, lines);
       const pruned = await store.pruneActivity(db, userId);
+
+      if (env.DISCORD_WEBHOOK_URL) {
+        const fresh = new Map<string, string>();
+        for (const line of lines) {
+          if (!store.isQueueLine(line.message)) continue;
+          const retailer = String(line.retailer ?? '');
+          if (!retailer || queuedBefore.has(retailer) || fresh.has(retailer)) continue;
+          fresh.set(retailer, String(line.at ?? new Date().toISOString()));
+        }
+        if (fresh.size > 0) {
+          await announceQueues(
+            env.DISCORD_WEBHOOK_URL,
+            [...fresh].map(([retailer, at]) => ({ retailer, at })),
+            new Date().toISOString(),
+          ).catch(() => {});
+        }
+      }
+
       return json({ ...result, pruned });
     }
 

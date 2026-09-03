@@ -1899,6 +1899,11 @@ async function requestSweep(db2, userId, sourceId) {
   );
   return rows.length > 0;
 }
+var QUEUE_ALERT_COOLDOWN_MIN = 10;
+function isQueueLine(message) {
+  const m = String(message ?? "");
+  return /waiting room/i.test(m) || m.startsWith("QUEUE:");
+}
 async function queueSightings(db2, userId, minutes = 30) {
   const rows = await db2.query(
     `SELECT retailer, max(at) AS at
@@ -2358,6 +2363,7 @@ var COLOR_NEW = 2059087;
 var COLOR_OPS = 9069584;
 var COLOR_STAGED = 12597547;
 var COLOR_IN = 2067276;
+var COLOR_QUEUE = 15105570;
 var MAX_FIELDS = 20;
 var inline = (name, value) => ({ name, value, inline: true });
 var dollars = (n) => n === null || n === void 0 ? "\u2014" : `$${Number(n).toFixed(2)}`;
@@ -2481,6 +2487,36 @@ function buildStagedEmbeds(items, now, note) {
       timestamp: now
     };
   });
+}
+var SHOP_HOME = {
+  Walmart: "https://www.walmart.com",
+  Target: "https://www.target.com",
+  "Pokemon Center": "https://www.pokemoncenter.com"
+};
+function buildQueueEmbed(retailer, at, now) {
+  const home = SHOP_HOME[retailer] ?? "";
+  return {
+    title: `WAITING ROOM UP AT ${(retailer || "A SHOP").toUpperCase()}`,
+    ...home ? { url: home } : {},
+    description: "A drop is very likely live right now. **Get in line yourself** \u2014 a place in the queue is the scarce thing, and it stops being available the longer this sits.",
+    color: COLOR_QUEUE,
+    fields: [
+      inline("Shop", retailer || "\u2014"),
+      inline("Seen", at ? new Date(at).toLocaleTimeString("en-US") : "just now"),
+      inline("Product pages", "will say sold out \u2014 ignore that")
+    ],
+    footer: {
+      text: "Phantom does not join queues or answer bot checks. This one is yours."
+    },
+    timestamp: now
+  };
+}
+async function announceQueues(webhookUrl, sightings, now) {
+  if (sightings.length === 0) return;
+  await post(
+    webhookUrl,
+    sightings.slice(0, 3).map((q) => buildQueueEmbed(q.retailer, q.at, now))
+  );
 }
 async function announceStaged(webhookUrl, items, now, note) {
   const embeds = buildStagedEmbeds(items, now, note);
@@ -9549,8 +9585,30 @@ function createHandler(db2, env2) {
       const b = await body();
       if (!b || !Array.isArray(b.lines)) return json({ error: "need lines[]" }, 400);
       const lines = b.lines.slice(0, 500);
+      const queuedBefore = new Set(
+        (await queueSightings(db2, userId, QUEUE_ALERT_COOLDOWN_MIN).catch(() => [])).map(
+          (q) => q.retailer
+        )
+      );
       const result = await recordActivity(db2, userId, lines);
       const pruned = await pruneActivity(db2, userId);
+      if (env2.DISCORD_WEBHOOK_URL) {
+        const fresh = /* @__PURE__ */ new Map();
+        for (const line of lines) {
+          if (!isQueueLine(line.message)) continue;
+          const retailer = String(line.retailer ?? "");
+          if (!retailer || queuedBefore.has(retailer) || fresh.has(retailer)) continue;
+          fresh.set(retailer, String(line.at ?? (/* @__PURE__ */ new Date()).toISOString()));
+        }
+        if (fresh.size > 0) {
+          await announceQueues(
+            env2.DISCORD_WEBHOOK_URL,
+            [...fresh].map(([retailer, at]) => ({ retailer, at })),
+            (/* @__PURE__ */ new Date()).toISOString()
+          ).catch(() => {
+          });
+        }
+      }
       return json({ ...result, pruned });
     }
     if (request.method === "GET" && path === "/api/activity/export") {
