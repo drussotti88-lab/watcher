@@ -4416,9 +4416,39 @@ function wizSteps() {
     { title: 'What Phantom does', render: wizWhat },
     { title: 'Pick something to watch', render: wizPick },
     { title: 'Something missing?', render: wizAsk },
-    { title: 'Get the alerts', render: wizAlerts },
   );
+  // An account that MAY BUY, with no Phantom of its own checked in yet: the
+  // one thing this page cannot do for them is the thing they were given the
+  // right to do. Say where it happens. Once their Phantom has reported, the
+  // step goes; it has done its job.
+  if (DATA.canArm === true && !DATA.agentSeenAt) {
+    steps.push({ title: 'Phantom on your computer', render: wizMachine });
+  }
+  steps.push({ title: 'Get the alerts', render: wizAlerts });
   return steps;
+}
+
+function wizMachine(body) {
+  const p1 = el('p');
+  p1.textContent =
+    'Your account may buy. Buying does not happen on this page. It happens on ' +
+    'your own computer, where a copy of Phantom runs signed into your own ' +
+    'Target account, on your own card.';
+  body.appendChild(p1);
+
+  const list = el('ul');
+  for (const line of [
+    'You get a zip and a token from whoever gave you this account.',
+    'Unzip it. Double-click 1 - Set up, then 2 - Start watching.',
+    'The SETUP file in the zip covers signing in to Target, and what to do on a Walmart drop night.',
+  ]) list.appendChild(el('li', null, line));
+  body.appendChild(list);
+
+  const p2 = el('p', 'sub');
+  p2.style.marginTop = '12px';
+  p2.textContent =
+    'No Phantom of yours has checked in yet. This step disappears once one has.';
+  body.appendChild(p2);
 }
 
 function wizPassword(body) {
@@ -4477,7 +4507,9 @@ function wizAlerts(body) {
     'Screen — and it opens like an app.';
   body.appendChild(p2);
   const p3 = el('p', 'sub');
-  p3.textContent = 'Nothing here can spend money. You can reopen this from “How Phantom works” at the top.';
+  p3.textContent = DATA.canArm === true
+    ? 'Nothing on this page spends money; only the Phantom on your computer can, and only on a mission you arm. You can reopen this from “How Phantom works” at the top.'
+    : 'Nothing here can spend money. You can reopen this from “How Phantom works” at the top.';
   body.appendChild(p3);
 }
 

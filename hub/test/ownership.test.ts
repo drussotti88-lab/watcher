@@ -192,6 +192,36 @@ test('A MEMBER CANNOT ARM — watch-only until they have an agent of their own',
   assert.equal(watching.armed, false);
 });
 
+test('A TESTER WITH A MACHINE — arm rights granted at the terminal, taken back the same minute', async () => {
+  // `npm run user arm <name>` is the line between a member and a tester who
+  // runs their own Phantom on their own card. It flips ONE column; nothing
+  // else in the schema knows the difference, which is why this test walks the
+  // whole road: grant → arm → their feed carries armed → withdraw → the same
+  // feed comes out watching, without anybody editing the mission.
+  const { db, listing } = await twoUsers();
+
+  assert.equal(await store.setUserCanArm(db, 'other', true), true, 'by handle');
+  assert.equal(await store.setUserCanArm(db, 'nobody', true), false, 'no such account');
+  assert.equal(await store.canArm(db, B), true);
+  assert.equal((await store.listUsers(db)).find((u) => u.id === B)?.canArm, true, 'the CLI list says so');
+
+  const armed = await store.upsertMission(db, B, { listingId: listing.id, armed: true, ceiling: 50 });
+  assert.equal(armed.armed, true);
+
+  const feedBefore = await store.activeMissions(db, B);
+  assert.equal(feedBefore.find((m) => m.id === armed.id)?.armed, true, 'their Phantom sees it armed');
+
+  // Take it back. The mission row still says armed; the FEED must not.
+  await store.setUserCanArm(db, 'other', false);
+  const feedAfter = await store.activeMissions(db, B);
+  assert.equal(feedAfter.find((m) => m.id === armed.id)?.armed, false, 'disarm means now, not next edit');
+  assert.equal(feedAfter.length, feedBefore.length, 'and the mission is still watched');
+
+  // The owner's own feed never inherits anyone else's arming either way.
+  const ownersView = await store.activeMissions(db, A);
+  for (const m of ownersView) assert.equal(m.armed, false);
+});
+
 test('the change log belongs to the listing, so everyone watching sees it', async () => {
   // It used to be per owner, because a listing was. One shelf, one history.
   const { db, listing } = await twoUsers();

@@ -1040,9 +1040,11 @@ async function requestCheckNow(db2, userId, id) {
   return rows.length > 0;
 }
 async function activeMissions(db2, userId) {
+  const mayArm = await canArm(db2, userId);
+  const disarmUnlessAllowed = (m) => mayArm || !m.armed ? m : { ...m, armed: false };
   if (!await canWriteCatalogue(db2, userId)) {
     const rows2 = await db2.query(`${MISSION_SELECT} AND m.enabled = true ORDER BY m.id`, [userId]);
-    return rows2.map(toMission);
+    return rows2.map(toMission).map(disarmUnlessAllowed);
   }
   const rows = await db2.query(
     `SELECT DISTINCT ON (l.id) m.*, l.product_key, l.retailer, l.external_id, l.url,
@@ -1078,7 +1080,7 @@ async function activeMissions(db2, userId) {
       checkNowAt: r.any_check_now ? String(r.any_check_now) : null
     };
     if (r.read_only === true) return { ...mission, readOnly: true, armed: false };
-    return mission;
+    return disarmUnlessAllowed(mission);
   });
 }
 function validateMission(m) {
@@ -7456,9 +7458,39 @@ function wizSteps() {
     { title: 'What Phantom does', render: wizWhat },
     { title: 'Pick something to watch', render: wizPick },
     { title: 'Something missing?', render: wizAsk },
-    { title: 'Get the alerts', render: wizAlerts },
   );
+  // An account that MAY BUY, with no Phantom of its own checked in yet: the
+  // one thing this page cannot do for them is the thing they were given the
+  // right to do. Say where it happens. Once their Phantom has reported, the
+  // step goes; it has done its job.
+  if (DATA.canArm === true && !DATA.agentSeenAt) {
+    steps.push({ title: 'Phantom on your computer', render: wizMachine });
+  }
+  steps.push({ title: 'Get the alerts', render: wizAlerts });
   return steps;
+}
+
+function wizMachine(body) {
+  const p1 = el('p');
+  p1.textContent =
+    'Your account may buy. Buying does not happen on this page. It happens on ' +
+    'your own computer, where a copy of Phantom runs signed into your own ' +
+    'Target account, on your own card.';
+  body.appendChild(p1);
+
+  const list = el('ul');
+  for (const line of [
+    'You get a zip and a token from whoever gave you this account.',
+    'Unzip it. Double-click 1 - Set up, then 2 - Start watching.',
+    'The SETUP file in the zip covers signing in to Target, and what to do on a Walmart drop night.',
+  ]) list.appendChild(el('li', null, line));
+  body.appendChild(list);
+
+  const p2 = el('p', 'sub');
+  p2.style.marginTop = '12px';
+  p2.textContent =
+    'No Phantom of yours has checked in yet. This step disappears once one has.';
+  body.appendChild(p2);
 }
 
 function wizPassword(body) {
@@ -7517,7 +7549,9 @@ function wizAlerts(body) {
     'Screen \u2014 and it opens like an app.';
   body.appendChild(p2);
   const p3 = el('p', 'sub');
-  p3.textContent = 'Nothing here can spend money. You can reopen this from \u201CHow Phantom works\u201D at the top.';
+  p3.textContent = DATA.canArm === true
+    ? 'Nothing on this page spends money; only the Phantom on your computer can, and only on a mission you arm. You can reopen this from \u201CHow Phantom works\u201D at the top.'
+    : 'Nothing here can spend money. You can reopen this from \u201CHow Phantom works\u201D at the top.';
   body.appendChild(p3);
 }
 

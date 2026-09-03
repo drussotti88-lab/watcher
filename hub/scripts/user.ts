@@ -89,6 +89,8 @@ function usage(): never {
   npm run user passwd <name>
   npm run user token <name>
   npm run user invite <name>     a link that signs them in once and asks for a password
+  npm run user arm <name>        let them run a Phantom that BUYS, on their own card
+  npm run user disarm <name>     back to watching only
   npm run user disable <name>
   npm run user enable <name>
 `);
@@ -120,6 +122,7 @@ async function main(): Promise<void> {
           u.enabled ? 'enabled ' : 'DISABLED',
           u.hasPassword ? 'password' : 'no password',
           u.hasToken ? 'watcher token' : 'no watcher',
+          u.canArm ? 'MAY BUY' : 'watching only',
         ];
         console.log(`  ${String(u.id).padStart(3)}  ${u.handle.padEnd(16)}  ${bits.join('  ·  ')}`);
       }
@@ -229,6 +232,34 @@ async function main(): Promise<void> {
       console.log('  Send them that link. It signs them in once, asks them to choose a');
       console.log('  password, and then stops working. Unused, it expires in 7 days.');
       console.log('  Delete the file once it is sent.\n');
+      return;
+    }
+
+    /*
+     * ── Arming rights ─────────────────────────────────────────────────────
+     *
+     * The line between a member and a tester with a machine. Granting it
+     * lets their missions be armed; nothing buys until a Phantom carrying
+     * THEIR token is running on their computer, signed into their own
+     * retailer account. Your Phantom never spends for anyone but you.
+     */
+    if (action === 'arm' || action === 'disarm') {
+      const ok = await store.setUserCanArm(db, handle, action === 'arm');
+      if (!ok) {
+        console.error(`\n  There is no "${handle}".\n`);
+        process.exit(1);
+      }
+      if (action === 'arm') {
+        console.log(`\n  "${handle}" may now arm missions.`);
+        console.log('  That only takes effect on a Phantom running with THEIR token, on');
+        console.log('  their own computer, signed into their own Target account. Yours');
+        console.log('  will never buy for them. Next:');
+        console.log(`    npm run user token ${handle}     a token for their Phantom`);
+        console.log('    npm run package                 the zip to send them\n');
+      } else {
+        console.log(`\n  "${handle}" is back to watching only. Any armed mission of theirs`);
+        console.log('  now just watches; their Phantom will not buy.\n');
+      }
       return;
     }
 

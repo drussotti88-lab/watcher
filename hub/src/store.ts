@@ -746,6 +746,8 @@ export interface UserRow {
   enabled: boolean;
   hasPassword: boolean;
   hasToken: boolean;
+  /** May instruct a Phantom of their own to spend. See `canArm`. */
+  canArm: boolean;
   createdAt: string;
 }
 
@@ -865,11 +867,13 @@ export async function listUsers(db: Sql): Promise<UserRow[]> {
     enabled: boolean;
     has_password: boolean;
     has_token: boolean;
+    can_arm: boolean;
     created_at: string;
   }>(
     `SELECT id, handle, enabled,
             password_hash <> '' AS has_password,
             token_hash <> ''    AS has_token,
+            can_arm,
             created_at
        FROM users ORDER BY id`,
   );
@@ -879,6 +883,7 @@ export async function listUsers(db: Sql): Promise<UserRow[]> {
     enabled: Boolean(r.enabled),
     hasPassword: Boolean(r.has_password),
     hasToken: Boolean(r.has_token),
+    canArm: r.can_arm === true,
     createdAt: String(r.created_at),
   }));
 }
@@ -942,6 +947,24 @@ export async function setUserToken(db: Sql, handle: string, tokenHash: string): 
   const rows = await db.query<{ id: number }>(
     'UPDATE users SET token_hash = $2 WHERE lower(handle) = lower($1) RETURNING id',
     [String(handle ?? '').trim(), tokenHash],
+  );
+  return rows.length > 0;
+}
+
+/**
+ * Grant or withdraw the right to arm — to run a Phantom that buys.
+ *
+ * This is the one permission that turns into money, so it is a deliberate act
+ * by the owner at a terminal and not a checkbox anywhere on the web. What it
+ * does NOT do is make the owner's machine buy for them: an armed mission is
+ * carried out only by a Phantom presenting THIS account's token, signed into
+ * this person's own retailer account, on their own card. Without one, an
+ * armed mission of theirs just watches.
+ */
+export async function setUserCanArm(db: Sql, handle: string, canArm: boolean): Promise<boolean> {
+  const rows = await db.query<{ id: number }>(
+    'UPDATE users SET can_arm = $2 WHERE lower(handle) = lower($1) RETURNING id',
+    [String(handle ?? '').trim(), canArm],
   );
   return rows.length > 0;
 }
@@ -1560,9 +1583,17 @@ export async function requestCheckNow(db: Sql, userId: number, id: number): Prom
  * everyone, and record nothing.
  */
 export async function activeMissions(db: Sql, userId: number): Promise<MissionRow[]> {
+  // Arming is checked NOW, not when the mission was made. `npm run user
+  // disarm` has to mean something the same minute it is run, and the feed
+  // Phantom acts on is the only place that can make it so: a mission armed
+  // last week by an account that may no longer buy comes out watching.
+  const mayArm = await canArm(db, userId);
+  const disarmUnlessAllowed = (m: MissionRow): MissionRow =>
+    mayArm || !m.armed ? m : { ...m, armed: false };
+
   if (!(await canWriteCatalogue(db, userId))) {
     const rows = await db.query(`${MISSION_SELECT} AND m.enabled = true ORDER BY m.id`, [userId]);
-    return rows.map(toMission);
+    return rows.map(toMission).map(disarmUnlessAllowed);
   }
 
   const rows = await db.query(
@@ -1604,7 +1635,7 @@ export async function activeMissions(db: Sql, userId: number): Promise<MissionRo
     // Somebody else's mission may never be armed by this agent, whatever its
     // own row says. Belt as well as braces: only the owner can arm at all.
     if (r.read_only === true) return { ...mission, readOnly: true, armed: false };
-    return mission;
+    return disarmUnlessAllowed(mission);
   });
 }
 

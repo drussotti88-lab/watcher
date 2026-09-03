@@ -4113,6 +4113,33 @@ test('ARRIVING BY INVITE OPENS THE DOOR ON "CHOOSE A PASSWORD"', async () => {
   assert.match($(h, '#wiz-step').textContent!, /1 \/ 5/);
 });
 
+test('AN ACCOUNT THAT MAY BUY, WITH NO PHANTOM YET, IS TOLD WHERE BUYING HAPPENS', async () => {
+  // The right to arm is granted at the owner's terminal; the machine that
+  // acts on it is the tester's own. The door says so, once, until a Phantom
+  // carrying their token has checked in — then the step goes.
+  const h = await boot({ ...DASHBOARD, canCurate: false, canArm: true, agentSeenAt: null }, 'https://hub.test/?welcome=1');
+  const titles = () => $(h, '#wiz-title').textContent;
+  const next = () => ($(h, '#wiz-next') as HTMLButtonElement).click();
+  assert.match($(h, '#wiz-step').textContent!, /1 \/ 6/, 'one more step than a member');
+  next(); next(); next(); next();
+  assert.equal(titles(), 'Phantom on your computer');
+  const text = $(h, '#wiz-body').textContent!;
+  assert.match(text, /your own computer/);
+  assert.match(text, /1 - Set up/);
+  assert.match(text, /own card/);
+  next();
+  assert.equal(titles(), 'Get the alerts');
+  assert.match($(h, '#wiz-body').textContent!, /only the Phantom on your computer can/);
+
+  // Their Phantom has reported: the step is gone, the count is a member's.
+  const h2 = await boot({ ...DASHBOARD, canCurate: false, canArm: true, agentSeenAt: '2026-09-03T12:00:00Z' }, 'https://hub.test/?welcome=1');
+  assert.match($(h2, '#wiz-step').textContent!, /1 \/ 5/);
+
+  // A member — no right to buy — never sees it, whatever their Phantom did.
+  const h3 = await boot({ ...DASHBOARD, canCurate: false, canArm: false, agentSeenAt: null }, 'https://hub.test/?welcome=1');
+  assert.match($(h3, '#wiz-step').textContent!, /1 \/ 5/);
+});
+
 test('mismatched passwords do not leave the page', async () => {
   const h = await boot(DASHBOARD, 'https://hub.test/?welcome=1');
   const inputs = [...h.doc.querySelectorAll('#wiz-body input[type=password]')] as HTMLInputElement[];

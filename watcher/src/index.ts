@@ -1181,14 +1181,14 @@ async function main(): Promise<void> {
 ${
   persona === 'buy'
     ? `
-  Sign in to the retailers here:
-    · https://www.pokemoncenter.com
-    · https://www.target.com
-    · https://www.walmart.com
+  Sign in to Target here, in this window. Only Target: it is the one shop
+  with a checkout flow. Do not sign in to Walmart here — its human check
+  fails in any browser this program opens, so a Walmart drop is done from
+  your everyday Chrome (see "8 - Hold my place").
 
-  This is the profile that will eventually place orders. Watching uses a
-  separate, signed-out profile, so all the polling traffic is anonymous and
-  cannot put this account at risk.`
+  This is the profile that places orders. Watching uses a separate,
+  signed-out profile, so all the polling traffic is anonymous and cannot
+  put this account at risk.`
     : `
   This is the profile that does the watching. Leave it signed OUT — that is
   the point of it being separate.`

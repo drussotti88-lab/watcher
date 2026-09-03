@@ -23,7 +23,8 @@ const OUT = 'Phantom-for-tester.zip';
 const FORBIDDEN = [
   { pattern: /chrome-profile/i, why: 'a Chrome profile — browsing history and cookies' },
   { pattern: /watcher\.config\.json$/i, why: 'the config file, which holds a Hub token' },
-  { pattern: /^watcher\/logs\//i, why: 'the activity log' },
+  { pattern: /\/logs\//i, why: 'the activity log' },
+  { pattern: /-(watcher-token|invite|password)\.txt$/i, why: 'a credential file the user CLI wrote' },
   { pattern: /probe-artifacts/i, why: 'captured pages, which embed a visitor id and postcode' },
   { pattern: /\.env/i, why: 'an environment file' },
 ];
@@ -31,11 +32,17 @@ const FORBIDDEN = [
 /**
  * git, always from the repository root.
  *
- * The cwd matters more than it looks. `git archive HEAD:Phantom` run from
- * inside watcher/ resolves the path against the current prefix, finds nothing,
- * and cheerfully writes a 132-byte zip containing one empty directory — no
- * error, no warning, and a "packaged!" message. The check below caught it only
- * because it counts what it packed.
+ * The cwd matters more than it looks. `git archive HEAD:<dir>` run from
+ * inside that directory resolves the path against the current prefix, finds
+ * nothing, and cheerfully writes a 132-byte zip containing one empty directory
+ * — no error, no warning, and a "packaged!" message. The check below caught it
+ * only because it counts what it packed.
+ *
+ * And the directory is `watcher/`, whatever the program is called: the app was
+ * renamed Phantom on 1 Sep 2026 and this script said `HEAD:Phantom` from then
+ * until 3 Sep, when somebody tried to build a zip and git said "not a valid
+ * object name". The tree does not know the product's name; the prefix below
+ * is what the tester sees.
  */
 function git(args: string[], cwd?: string): string {
   return execFileSync('git', args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, cwd });
@@ -83,7 +90,7 @@ function main(): void {
   // HEAD, not the working tree. Whatever is half-edited on this desk right now
   // is not what somebody else should be starting from.
   git(
-    ['archive', '--format=zip', '--prefix=watcher/', '-o', resolve(root, OUT), 'HEAD:Phantom'],
+    ['archive', '--format=zip', '--prefix=Phantom/', '-o', resolve(root, OUT), 'HEAD:watcher'],
     root,
   );
 
@@ -101,7 +108,7 @@ function main(): void {
   }
 
   const size = statSync(resolve(root, OUT)).size;
-  const hasSetup = listing.includes('watcher/SETUP.md');
+  const hasSetup = listing.includes('Phantom/SETUP.md');
   const launchers = listing.filter((n) => /\.(bat|command)$/i.test(n)).length;
 
   // An empty archive is a silent failure mode, not a hypothetical one — see
@@ -130,7 +137,8 @@ function main(): void {
   config, no token. ${launchers} double-click launchers included.
 
   Send it with the app's address and a token from:  npm run user token <name>
-  Their first step is:  npm install && npm run setup
+  (run in the hub folder). Their first step is "1 - Set up".
+  If they are to BUY as well as watch:  npm run user arm <name>
 `);
 }
 
