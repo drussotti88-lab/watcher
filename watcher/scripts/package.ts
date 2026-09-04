@@ -177,6 +177,26 @@ function main(): void {
     console.error(`\n  The zip has no "${GUIDE}". A tester would open the folder to nothing readable.\n`);
     process.exit(1);
   }
+
+  // The guide carries the build it came from, by the same export-subst trick
+  // VERSION uses — and it silently did not, first time out, because a
+  // .gitattributes pattern is whitespace-separated: `START HERE.html
+  // export-subst` parses as the pattern "START" with the attributes
+  // "HERE.html" and "export-subst", so nothing was ever marked. It has to be
+  // quoted. Checked here rather than trusted, because the failure looks
+  // exactly like success from the outside: a perfectly good zip, with
+  // "version $Format:%h$" printed at the top of the first page a tester
+  // reads.
+  const shipped = readZip(readFileSync(resolve(root, OUT))).find(
+    (e) => e.name === `Phantom/${GUIDE}`,
+  );
+  if (!shipped || shipped.bytes.toString('utf8').includes('$Format')) {
+    console.error(
+      `\n  "${GUIDE}" in the zip still holds the placeholder instead of a version.` +
+        `\n  Check that .gitattributes has:  "${GUIDE}" export-subst   — with the quotes.\n`,
+    );
+    process.exit(1);
+  }
   const launchers = listing.filter((n) => /\.(bat|command)$/i.test(n)).length;
 
   // An empty archive is a silent failure mode, not a hypothetical one — see
