@@ -24,7 +24,10 @@
     "package": "node --experimental-strip-types scripts/package.ts",
     "typecheck": "tsc --noEmit",
     "inspect": "node --experimental-strip-types src/index.ts inspect",
-    "buy-timing": "node --experimental-strip-types scripts/buy-timing.ts"
+    "buy-timing": "node --experimental-strip-types scripts/buy-timing.ts",
+    "footprint": "node --experimental-strip-types scripts/footprint.ts",
+    "batch-probe": "node --experimental-strip-types scripts/batch-probe.ts",
+    "search-vs-pdp": "node --experimental-strip-types scripts/search-vs-pdp.ts"
   },
   "dependencies": {
     "playwright": "^1.49.0"
