@@ -17,9 +17,19 @@ import { execFileSync } from 'node:child_process';
 import { statSync, readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { readZip } from '../src/update.ts';
 import { parseVersion, DEV } from '../src/version.ts';
+import { renderGuide } from '../src/guide.ts';
 import { resolve, dirname } from 'node:path';
 
 const OUT = 'Phantom-for-tester.zip';
+
+/**
+ * The first thing a tester sees in the unzipped folder.
+ *
+ * Named to sort above every numbered launcher and to say what to do with it.
+ * HTML because .md does not open on a double-click on Windows, which is what
+ * a tester has.
+ */
+const GUIDE = 'START HERE.html';
 
 /** Anything matching these must never reach another person's machine. */
 const FORBIDDEN = [
@@ -93,6 +103,33 @@ function main(): void {
   // HEAD, not the working tree. Whatever is half-edited on this desk right now
   // is not what somebody else should be starting from.
   const here = resolve(root, 'watcher');
+
+  // ── The instructions, in a format Windows will open ────────────────────
+  //
+  // Rendered from SETUP.md rather than written twice, and COMMITTED, because
+  // the zip comes from `git archive HEAD` and would otherwise ship whatever
+  // was committed last time. Same discipline as the Hub's api/index.js: a
+  // generated file in the tree, and a loud failure when it is stale.
+  const guide = renderGuide(readFileSync(resolve(here, 'SETUP.md'), 'utf8'), '$Format:%h$');
+  const guidePath = resolve(here, GUIDE);
+  writeFileSync(guidePath, guide);
+
+  let committed = '';
+  try {
+    committed = git(['show', `HEAD:${GUIDE}`], here);
+  } catch {
+    /* not committed yet — reported below as a difference */
+  }
+  if (committed !== guide) {
+    console.error(
+      `\n  "${GUIDE}" has been rebuilt from SETUP.md and does not match HEAD.` +
+        `\n  The zip is built from HEAD, so it would ship the old one.` +
+        `\n\n  Commit it, then run this again:` +
+        `\n      git add watcher/"${GUIDE}" && git commit\n`,
+    );
+    process.exit(1);
+  }
+
   git(
     ['archive', '--format=zip', '--prefix=Phantom/', '-o', resolve(root, OUT), 'HEAD', '.'],
     here,
@@ -133,6 +170,10 @@ function main(): void {
 
   const size = statSync(resolve(root, OUT)).size;
   const hasSetup = listing.includes('Phantom/SETUP.md');
+  if (!listing.includes(`Phantom/${GUIDE}`)) {
+    console.error(`\n  The zip has no "${GUIDE}". A tester would open the folder to nothing readable.\n`);
+    process.exit(1);
+  }
   const launchers = listing.filter((n) => /\.(bat|command)$/i.test(n)).length;
 
   // An empty archive is a silent failure mode, not a hypothetical one — see

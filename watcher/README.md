@@ -20,8 +20,17 @@ double-click `1 - Set up`. This file is developer notes.
 - Paces itself per retailer, backs off when challenged, and sleeps outside the
   hours you set.
 
-**It does not buy anything.** There is no checkout code in this repository —
-not disabled, not gated, unwritten.
+**It can buy, at Target only, and only when four separate things are true.**
+This line used to say there was no checkout code at all. That stopped being
+true on 31 Aug 2026, and a file promising otherwise — about money, to a
+person deciding whether to trust this on their own machine — is the kind of
+stale sentence worth going out of the way to correct.
+
+What has to be true before a single order is placed: the account holds
+`can_arm`; a daily spend cap is set; the mission is armed with a price
+ceiling; and `live` is true in `watcher.config.json`, which ships false. With
+`live` false the whole flow runs and stops on the line before the button.
+Walmart and Pokémon Center have no checkout at all.
 
 ## Commands
 
