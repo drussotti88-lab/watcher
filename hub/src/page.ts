@@ -4620,15 +4620,27 @@ function wizPassword(body) {
 function wizAlerts(body) {
   const invite = (DATA.settings && DATA.settings.discordInvite) || '';
   const p = el('p');
-  p.textContent = invite
-    ? 'Alerts go to a Discord room: one card per product the moment the shop ' +
-      'itself has it, and a shout when a waiting room goes up.'
-    : 'Alerts go to a Discord room. The invite is not set yet; ask Roberto for it.';
+  // Without an invite this used to say "the invite is not set yet; ask Roberto
+  // for it", which is a chore handed to somebody on their first minute — and
+  // nonsense to the reader who is already in that server, which the first
+  // tester was. The room is described either way; only the way IN is
+  // conditional, because only that part depends on the setting.
+  p.textContent =
+    'Alerts go to a Discord room: one card per product the moment the shop ' +
+    'itself has it, and a shout when a waiting room goes up.';
   body.appendChild(p);
   if (invite) {
     const a = el('a', 'btn primary', 'Join the alerts room');
     a.href = invite; a.target = '_blank'; a.rel = 'noopener';
     const wrap = el('div', 'actions'); wrap.appendChild(a); body.appendChild(wrap);
+  } else {
+    // No invite set. Somebody already in the room reads past this; somebody
+    // who is not now knows there is something to ask for, without being told
+    // that the app is half-configured.
+    const q = el('p', 'sub');
+    q.style.marginTop = '10px';
+    q.textContent = 'If you are not in that room yet, ask for an invite.';
+    body.appendChild(q);
   }
   const p2 = el('p', 'sub');
   p2.style.marginTop = '14px';

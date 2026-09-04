@@ -4221,12 +4221,20 @@ test('THE LAST STEP GETS THEM INTO THE ALERTS ROOM', async () => {
   assert.equal($(h, '#wiz-next').textContent, 'Done');
 });
 
-test('without an invite set, the alerts step says so instead of a dead button', async () => {
+test('WITHOUT AN INVITE, THE STEP STILL DESCRIBES THE ROOM AND HANDS OVER NO CHORE', async () => {
+  // It used to say "the invite is not set yet; ask Roberto for it", which is
+  // a job handed to somebody in their first minute — and nonsense to a reader
+  // already in that room, which the first tester was (a moderator of it).
+  // What is conditional is the way IN, not the room's existence.
   const d = JSON.parse(JSON.stringify(DASHBOARD));
   d.missions = [];
   d.settings = { ...(d.settings || {}), discordInvite: '' };
   const h = await boot(d);
   for (let i = 0; i < 3; i += 1) ($(h, '#wiz-next') as HTMLButtonElement).click();
-  assert.equal(h.doc.querySelector('#wiz-body a.btn'), null);
-  assert.match($(h, '#wiz-body').textContent!, /invite is not set yet/);
+
+  const text = $(h, '#wiz-body').textContent!;
+  assert.equal(h.doc.querySelector('#wiz-body a.btn'), null, 'no dead button');
+  assert.match(text, /one card per product/, 'the room is described either way');
+  assert.match(text, /If you are not in that room yet, ask for an invite/);
+  assert.equal(/not set yet|ask Roberto/.test(text), false, 'no half-configured app on show');
 });
