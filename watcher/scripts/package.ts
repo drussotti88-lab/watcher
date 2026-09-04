@@ -116,7 +116,10 @@ function main(): void {
 
   let committed = '';
   try {
-    committed = git(['show', `HEAD:${GUIDE}`], here);
+    // "HEAD:./name" resolves from the CWD; "HEAD:name" resolves from the
+    // repository root, which is one directory up from here and does not
+    // have it. git says "exists, but not" and means exactly that.
+    committed = git(['show', `HEAD:./${GUIDE}`], here);
   } catch {
     /* not committed yet — reported below as a difference */
   }
