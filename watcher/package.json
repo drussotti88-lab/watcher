@@ -27,7 +27,10 @@
     "buy-timing": "node --experimental-strip-types scripts/buy-timing.ts",
     "footprint": "node --experimental-strip-types scripts/footprint.ts",
     "batch-probe": "node --experimental-strip-types scripts/batch-probe.ts",
-    "search-vs-pdp": "node --experimental-strip-types scripts/search-vs-pdp.ts"
+    "search-vs-pdp": "node --experimental-strip-types scripts/search-vs-pdp.ts",
+    "onefetch": "node --experimental-strip-types scripts/onefetch.ts",
+    "coverage": "node --experimental-strip-types scripts/coverage.ts",
+    "facet": "node --experimental-strip-types scripts/facet.ts"
   },
   "dependencies": {
     "playwright": "^1.49.0"

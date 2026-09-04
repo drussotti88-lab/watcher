@@ -159,3 +159,13 @@ svp.ps1
 Claude outputs/
 *.ps1
 tidy3.ps1
+_of/
+of.tgz
+_cov/
+cov.tgz
+_cov2/
+cov2.tgz
+_fct/
+fct.tgz
+_fct2/
+fct2.tgz
