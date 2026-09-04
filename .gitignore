@@ -156,3 +156,6 @@ bp2.ps1
 _svp/
 svp.tgz
 svp.ps1
+Claude outputs/
+*.ps1
+tidy3.ps1
