@@ -17,5 +17,6 @@
   },
   "live": false,
   "intervalSec": 90,
-  "autoUpdate": true
+  "autoUpdate": true,
+  "neverTouch": []
 }

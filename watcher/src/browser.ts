@@ -9,6 +9,7 @@
  */
 import { chromium, type BrowserContext, type Page } from 'playwright';
 import { mkdirSync } from 'node:fs';
+import { hostsFrom, refuseHosts } from './nevertouch.ts';
 import { resolve } from 'node:path';
 import type { Config } from './config.ts';
 
@@ -183,6 +184,18 @@ export class Browser {
       this.context = null;
       this.onEvent('warn', 'Chrome closed — the next check will start a fresh one');
     });
+
+    // ── Sites this machine will not contact ────────────────────────────
+    //
+    // Enforced HERE rather than in the watch loop, because here is the one
+    // place every request in this program goes through: missions, sweeps,
+    // probes, one-off diagnostic scripts and `npm run browser` alike. A rule
+    // that has to be remembered by each caller is a rule with a hole in it.
+    const refuse = hostsFrom(this.config.neverTouch);
+    if (refuse.length > 0) {
+      await refuseHosts(this.context, refuse);
+      console.log(`  not contacting: ${refuse.join(', ')}  (neverTouch in watcher.config.json)`);
+    }
 
     return this.context;
   }

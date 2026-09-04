@@ -60,6 +60,19 @@ export interface Config {
   /** Seconds between sweeps in `watch` mode. */
   intervalSec: number;
   /**
+   * Sites this machine will not contact at all, whatever the Hub says.
+   *
+   * Accepts a hostname ("pokemoncenter.com") or a retailer name as the app
+   * spells it ("Pokemon Center"). Enforced in the browser context, so it
+   * covers watching, sweeps, probes and every diagnostic script — not only
+   * the paths that remember to check.
+   *
+   * Deliberately empty by default: a program that silently refuses to look at
+   * a shop is worse than one that looks and reports a wall. This is a thing
+   * the owner of a machine turns on.
+   */
+  neverTouch: string[];
+  /**
    * Fetch a newer Phantom from the Hub and restart into it. On by default,
    * because a tester's copy that never changes is a copy with every bug it
    * shipped with. Never applies to a development checkout (see version.ts),
@@ -82,6 +95,7 @@ export const DEFAULTS: Config = {
   live: false,
   intervalSec: 90,
   autoUpdate: true,
+  neverTouch: [],
 };
 
 export const CONFIG_PATH = resolve(process.cwd(), 'watcher.config.json');
@@ -94,6 +108,7 @@ function merge(base: Config, over: Partial<Config>): Config {
     live: over.live ?? base.live,
     intervalSec: over.intervalSec ?? base.intervalSec,
     autoUpdate: over.autoUpdate ?? base.autoUpdate,
+    neverTouch: Array.isArray(over.neverTouch) ? over.neverTouch.map(String) : base.neverTouch,
   };
 }
 
