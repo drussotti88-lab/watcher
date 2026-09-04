@@ -30,7 +30,10 @@
     "search-vs-pdp": "node --experimental-strip-types scripts/search-vs-pdp.ts",
     "onefetch": "node --experimental-strip-types scripts/onefetch.ts",
     "coverage": "node --experimental-strip-types scripts/coverage.ts",
-    "facet": "node --experimental-strip-types scripts/facet.ts"
+    "facet": "node --experimental-strip-types scripts/facet.ts",
+    "endure": "node --experimental-strip-types scripts/endure.ts",
+    "find-facet": "node --experimental-strip-types scripts/find-facet.ts",
+    "keyword": "node --experimental-strip-types scripts/keyword.ts"
   },
   "dependencies": {
     "playwright": "^1.49.0"
