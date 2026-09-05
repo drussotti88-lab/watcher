@@ -1024,8 +1024,31 @@ async function runPasses(once: boolean): Promise<void> {
       // queueing behind fourteen other listings, arriving by a different
       // route — so the rest between cycles is spent in short naps with one
       // eye open.
+      //
+      // ── Only wake for a press we can ACT on ─────────────────────────────
+      //
+      // This used to wake for any pending check-now at all, and on 5 Sep 2026
+      // that turned into a hot loop: two "check now" presses on WALMART
+      // listings, with Walmart switched off. The missions were never checked,
+      // so the Hub never cleared the flag, so the set never emptied, so this
+      // loop broke out of its sleep five times a second for fifteen minutes
+      // doing nothing — "0 checked · nothing due · next in 0s", over and over.
+      //
+      // A press on a shop that is off is not urgent. It is not anything: no
+      // pass will ever serve it. So the wake-up condition is now the press we
+      // would actually honour, and a request we cannot serve lets the machine
+      // sleep.
+      const actionable = new Set(
+        allMissions
+          .filter((m) => retailerOn(hub.settings, m.retailer))
+          .map((m) => m.listingId),
+      );
+      const wakeFor = (): boolean => {
+        for (const id of urgent) if (actionable.has(id)) return true;
+        return false;
+      };
       for (let slept = 0; slept < rest; slept += 500) {
-        if (urgent.size > 0 || stopped) break;
+        if (wakeFor() || stopped) break;
         await sleep(Math.min(500, rest - slept));
       }
     } while (!stopped);

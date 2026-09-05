@@ -30,6 +30,14 @@ function fakeContext() {
       if (event === 'close') listeners.push(fn);
     },
     setDefaultNavigationTimeout() {},
+    // The real context takes routes; Browser.open now installs one for
+    // neverTouch and for the heavy resource types. A stand-in that does not
+    // model it fails with "this.context.route is not a function", which is
+    // the stand-in being wrong rather than the code.
+    routes: [] as unknown[],
+    async route(pattern: unknown, handler: unknown) {
+      this.routes.push({ pattern, handler });
+    },
     pages: () => (closed ? [] : pages),
     async newPage() {
       if (closed) throw new Error('browserContext.newPage: Target page, context or browser has been closed');

@@ -104,3 +104,26 @@ test('WHAT IT WOULD HAVE SAVED ON 3 SEP', () => {
   assert.equal(Math.round(after), 172);
   assert.ok(after < before / 5, 'a fifth of the traffic, and the live ones unchanged');
 });
+
+test('A RESTING LISTING REPORTS THE INTERVAL IT EARNED, NOT THE ONE IT ASKED FOR', () => {
+  // The "next in Ns" line is computed from the same interval the due check
+  // uses — or it was not, for a day. Three isDue call sites moved onto
+  // quietInterval and a fourth, feeding only a log line, was missed. So a
+  // listing resting on thirty minutes announced itself "due in 0s" on every
+  // pass, forever. Nobody acts on that number, which is precisely why it
+  // survived a day of being watched.
+  //
+  // This is the arithmetic that line does, pinned so the two cannot drift
+  // apart again.
+  const m = listing({ lastChangedAt: hoursAgo(48) });
+  const lastCheckedAt = NOW - 70_000; // 70s ago: past its asked-for 60s
+
+  const asked = lastCheckedAt + m.checkEverySeconds * 1000;
+  const earned = lastCheckedAt + quietInterval(m, NOW) * 1000;
+
+  assert.ok(asked < NOW, 'by its own interval it looks overdue');
+  assert.ok(earned > NOW, 'by the interval it earned it is not');
+  // 48h unchanged is the x15 tier, so 60s becomes 900s: about fourteen
+  // minutes still to wait, where the raw interval said it was 10s overdue.
+  assert.equal(Math.round((earned - NOW) / 60_000), 14);
+});

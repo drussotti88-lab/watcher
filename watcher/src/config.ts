@@ -60,6 +60,17 @@ export interface Config {
   /** Seconds between sweeps in `watch` mode. */
   intervalSec: number;
   /**
+   * Skip downloading images, fonts, stylesheets and media while reading.
+   *
+   * Measured 4 Sep 2026: 214 requests and 2.7mb per Target reading becomes
+   * 165 and 1.9mb, with a byte-identical result — the readers take their
+   * answer from JSON captured off the wire and have never once consulted a
+   * pixel. On by default because it asks the retailer for strictly less.
+   *
+   * Set false if a reader ever starts needing rendered layout.
+   */
+  lightenReads: boolean;
+  /**
    * Sites this machine will not contact at all, whatever the Hub says.
    *
    * Accepts a hostname ("pokemoncenter.com") or a retailer name as the app
@@ -95,6 +106,7 @@ export const DEFAULTS: Config = {
   live: false,
   intervalSec: 90,
   autoUpdate: true,
+  lightenReads: true,
   neverTouch: [],
 };
 
@@ -108,6 +120,7 @@ function merge(base: Config, over: Partial<Config>): Config {
     live: over.live ?? base.live,
     intervalSec: over.intervalSec ?? base.intervalSec,
     autoUpdate: over.autoUpdate ?? base.autoUpdate,
+    lightenReads: over.lightenReads ?? base.lightenReads,
     neverTouch: Array.isArray(over.neverTouch) ? over.neverTouch.map(String) : base.neverTouch,
   };
 }

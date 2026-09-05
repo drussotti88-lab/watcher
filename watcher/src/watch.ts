@@ -746,7 +746,14 @@ export async function pass(missions: Mission[], pacer: Pacer, deps: WatchDeps): 
     for (const m of missions) {
       if (m.checkNow) return result; // a test run is pending, not "nothing due"
       if (!m.lastCheckedAt) return result; // due now; something else is wrong
-      const dueAt = new Date(m.lastCheckedAt).getTime() + m.checkEverySeconds * 1000;
+      // The interval it has EARNED, not the one it asked for. This said
+      // `m.checkEverySeconds` until 5 Sep 2026 — three isDue call sites were
+      // moved onto quietInterval and this fourth one was missed, so a listing
+      // resting on a thirty-minute cadence reported itself "due in 0s" every
+      // pass. The number is only printed, which is exactly why it survived:
+      // wrong output that nobody acts on is the kind that lasts.
+      const dueAt =
+        new Date(m.lastCheckedAt).getTime() + quietInterval(m, nowMs, dropOpen) * 1000;
       if (!Number.isFinite(dueAt)) continue;
       const wait = Math.max(0, dueAt - nowMs);
       if (soonest === null || wait < soonest) soonest = wait;

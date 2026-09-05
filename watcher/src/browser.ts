@@ -9,7 +9,8 @@
  */
 import { chromium, type BrowserContext, type Page } from 'playwright';
 import { mkdirSync } from 'node:fs';
-import { hostsFrom, refuseHosts } from './nevertouch.ts';
+import { hostsFrom, isBlocked } from './nevertouch.ts';
+import { BLOCKED_TYPES, shouldBlock } from './lighten.ts';
 import { resolve } from 'node:path';
 import type { Config } from './config.ts';
 
@@ -185,17 +186,46 @@ export class Browser {
       this.onEvent('warn', 'Chrome closed — the next check will start a fresh one');
     });
 
-    // ── Sites this machine will not contact ────────────────────────────
+    // ── What this browser will and will not ask for ────────────────────
     //
     // Enforced HERE rather than in the watch loop, because here is the one
     // place every request in this program goes through: missions, sweeps,
     // probes, one-off diagnostic scripts and `npm run browser` alike. A rule
     // that has to be remembered by each caller is a rule with a hole in it.
+    //
+    // ONE handler for both rules, deliberately. Playwright matches routes in
+    // reverse registration order and a handler that calls continue() ends the
+    // chain — so two separate '**/*' routes would mean the second silently
+    // disabling the first. Two rules, one gate.
     const refuse = hostsFrom(this.config.neverTouch);
+    const lighten = this.config.lightenReads !== false;
+
+    if (refuse.length > 0 || lighten) {
+      await this.context.route('**/*', (route) => {
+        const request = route.request();
+
+        // 1. Sites we have been told not to contact at all. Nothing about
+        //    this is evasion — it is asking for nothing.
+        if (refuse.length > 0 && isBlocked(request.url(), refuse)) {
+          route.abort('blockedbyclient').catch(() => {});
+          return;
+        }
+
+        // 2. The heavy resource types no reader has ever consulted. By TYPE
+        //    and never by vendor — see lighten.ts for why that line matters.
+        if (lighten && shouldBlock(request.resourceType())) {
+          route.abort().catch(() => {});
+          return;
+        }
+
+        route.continue().catch(() => {});
+      });
+    }
+
     if (refuse.length > 0) {
-      await refuseHosts(this.context, refuse);
       console.log(`  not contacting: ${refuse.join(', ')}  (neverTouch in watcher.config.json)`);
     }
+    if (lighten) console.log(`  not downloading: ${BLOCKED_TYPES.join(', ')}`);
 
     return this.context;
   }

@@ -18,5 +18,6 @@
   "live": false,
   "intervalSec": 90,
   "autoUpdate": true,
-  "neverTouch": []
+  "neverTouch": [],
+  "lightenReads": true
 }
