@@ -3935,6 +3935,45 @@ test('the cheaper shop box comes before the dearer, and the reseller is not list
   assert.match(names[1]!, /Dearer/);
 });
 
+test('THE PRODUCT NAME OPENS THE PRODUCT', async () => {
+  // It was a div sitting beside an Open button, so clicking the obvious
+  // thing — the name of the thing you want — selected the text. A real
+  // anchor, so middle-click, ctrl-click, "copy link address" and the
+  // keyboard all behave the way they do everywhere else on the web.
+  const d = JSON.parse(JSON.stringify(DASHBOARD));
+  d.missions = [
+    { ...DASHBOARD.missions[0], id: 1, state: 'in', price: 59.99, sellerKind: 'retailer',
+      productName: 'Chaos Rising ETB', url: 'https://t.test/etb', enabled: true },
+  ];
+  const h = await boot(d);
+
+  const name = h.doc.querySelector('#live-list a.nm') as HTMLAnchorElement;
+  assert.ok(name, 'the name is a link');
+  assert.equal(name.getAttribute('href'), 'https://t.test/etb');
+  assert.equal(name.getAttribute('target'), '_blank');
+  assert.equal(name.getAttribute('rel'), 'noreferrer', 'same care as the Open button');
+  assert.match(name.textContent!, /Chaos Rising/);
+  assert.equal(name.title, 'Chaos Rising ETB', 'the full name still on hover');
+
+  // The Open button stays. Two ways to the same place is not a duplicate
+  // when one of them is the thing everybody tries first.
+  assert.ok(h.doc.querySelector('#live-list a.go'), 'Open is still there');
+});
+
+test('a row with nowhere to go is not a dead link', async () => {
+  // A listing with no URL used to render a plain div, and it still does —
+  // an anchor with no href looks clickable and is not, which is worse than
+  // text that never pretended.
+  const d = JSON.parse(JSON.stringify(DASHBOARD));
+  d.missions = [
+    { ...DASHBOARD.missions[0], id: 1, state: 'in', price: 59.99, sellerKind: 'retailer',
+      productName: 'No link here', url: '', enabled: true },
+  ];
+  const h = await boot(d);
+  assert.equal(h.doc.querySelector('#live-list a.nm'), null);
+  assert.match($(h, '#live-list').textContent, /No link here/);
+});
+
 test('nothing in stock says so, rather than showing an empty panel', async () => {
   const d = JSON.parse(JSON.stringify(DASHBOARD));
   d.missions = d.missions.map((m) => ({ ...m, state: 'out' }));

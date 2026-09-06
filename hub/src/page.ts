@@ -677,6 +677,15 @@ button.small { padding: 4px 10px; font-size: 12px; border-radius: var(--r-sm); b
 .live .g { flex: 1 1 0; min-width: 0; }
 .live .nm { font-size: 13.5px; color: var(--ink);
             overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The product name opens the product. It was a div beside an Open button, so
+   clicking the obvious thing — the name of the thing you want — selected the
+   text instead. Underlined on hover rather than always: a list of six
+   permanently underlined names is a list nobody can read. The whole row is
+   deliberately NOT the target; that would swallow the price and make text
+   impossible to select. */
+a.nm { text-decoration: none; display: block; }
+a.nm:hover, a.nm:focus-visible { color: var(--accent); text-decoration: underline; }
+a.nm:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
 .live .px { font: 700 14px/1 var(--mono); color: var(--ink); }
 .live .go { font-size: 12px; }
 
@@ -5071,8 +5080,16 @@ function renderLive() {
       row.appendChild(img);
     }
     const g = el('div', 'g');
-    const nm = el('div', 'nm', shortName(m.productName));
+    // An anchor when there is a URL, a plain div when there is not — rather
+    // than a div with a click handler, so that middle-click, ctrl-click,
+    // "copy link" and the keyboard all work the way they do everywhere else.
+    const nm = m.url ? el('a', 'nm', shortName(m.productName)) : el('div', 'nm', shortName(m.productName));
     nm.title = m.productName;
+    if (m.url) {
+      nm.href = m.url;
+      nm.target = '_blank';
+      nm.rel = 'noreferrer';
+    }
     g.appendChild(nm);
     const meta = el('div', 'meta');
     meta.append(m.retailer + (m.sellerKind === 'marketplace'
