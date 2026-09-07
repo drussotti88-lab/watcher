@@ -25,7 +25,7 @@ import type { Browser } from './browser.ts';
 import { isQueue, queueScope } from './challenge.ts';
 import { DEFAULT_SETTINGS, type Hub, type Mission, type ObservationOut, type RunOut, type Settings } from './hub.ts';
 import { Pacer, isDue, nextUp } from './rate.ts';
-import { quietInterval } from './quiet.ts';
+import { quietInterval, quietLabel } from './quiet.ts';
 import { readListing, type Reading } from './read.ts';
 import type { Activity } from './activity.ts';
 import { unknownRead } from './readers/types.ts';
@@ -716,7 +716,35 @@ export async function pass(missions: Mission[], pacer: Pacer, deps: WatchDeps): 
       result.runs += 1;
       log(`  ${mission.productName} (${mission.retailer}): ${run.outcome} — ${run.reason}`);
     } else {
-      log(`  ${mission.productName} (${mission.retailer}): ${reading.state}, ${reading.ms}ms`);
+      // ── Say when this one is resting, and why ─────────────────────────────
+      //
+      // quietLabel was written on 5 Sep 2026 and then called from nowhere for
+      // two days: the cadence work shipped, listings duly stepped out to a
+      // fifteen-minute gap, and not one line anywhere said so. The only way
+      // to find out whether the ramp was working was to parse the activity log
+      // afterwards — which is a fine way to audit it and a terrible way to
+      // TRUST it. A system that reads a page a twentieth as often as you asked
+      // has to volunteer that, or it is indistinguishable from one that broke.
+      //
+      // The label describes where this listing sits AFTER this reading, not
+      // before it, so a product that just came into stock does not get one
+      // last "resting" line on its way up to full speed. An unreadable page
+      // says nothing about the shelf, so it does not disturb the label either
+      // — same rule the Hub now applies to last_changed_at.
+      const moved = reading.state !== 'unknown' && reading.state !== mission.state;
+      const rest = quietLabel(
+        {
+          ...mission,
+          state: reading.state === 'unknown' ? mission.state : reading.state,
+          lastChangedAt: moved ? new Date(now()).toISOString() : mission.lastChangedAt,
+        },
+        now(),
+        dropOpen,
+      );
+      log(
+        `  ${mission.productName} (${mission.retailer}): ${reading.state}, ${reading.ms}ms` +
+          (rest ? ` — ${rest}` : ''),
+      );
     }
   }
 
@@ -731,7 +759,7 @@ export async function pass(missions: Mission[], pacer: Pacer, deps: WatchDeps): 
   for (const m of missions) {
     if (done.has(m.id)) continue;
     if (named.has(m.retailer)) continue;
-    if (!isDue(m.lastCheckedAt || null, quietInterval(m, nowMs), nowMs)) continue;
+    if (!isDue(m.lastCheckedAt || null, quietInterval(m, nowMs, dropOpen), nowMs)) continue;
     const wait = pacer.waitMs(m.retailer, nowMs);
     if (wait <= 0) continue;
     const label = pacer.standingDown(m.retailer, nowMs) ? 'standing down' : 'pacing';

@@ -40,6 +40,32 @@ export const STEPS: readonly { afterHours: number; times: number }[] = [
 /** However quiet it gets, never longer than this between reads. */
 export const MAX_INTERVAL_S = 30 * 60;
 
+/**
+ * The ramp is asymmetric, because the two directions are not the same event.
+ *
+ * Going INTO stock is the moment the whole system exists for, and `alwaysFast`
+ * puts it back on the mission's own interval instantly. Going OUT is the
+ * opposite: the shelf is now empty, and an empty shelf is the least likely
+ * thing on earth to refill in the next sixty seconds.
+ *
+ * Until 7 Sep 2026 both directions did the same thing — any change reset the
+ * clock — so a listing that sold out went back to full speed and stayed there
+ * for an hour. One listing flapping in and out three times in a day (Target
+ * #45, 6 Sep) held itself at a 2.6-minute gap all day and spent 423 reads,
+ * five times what each of its resting siblings cost, almost all of them spent
+ * confirming that a thing that just sold out was still sold out.
+ *
+ * So a listing that is OUT skips the first rung. It never reads at the full
+ * asked-for rate on the strength of having just gone out; it starts on the
+ * ramp. In practice this binds only for the first hour, because after an hour
+ * unchanged the ordinary first step is this same multiple anyway.
+ *
+ * The exemptions still win, all of them: armed, a drop window, a street date,
+ * somebody pressing the button. This is about the ordinary case, which is the
+ * case that happens twenty-three hours a day.
+ */
+export const OUT_FLOOR_TIMES = 3;
+
 export interface QuietInput {
   checkEverySeconds: number;
   state?: string;
@@ -92,6 +118,13 @@ export function quietInterval(m: QuietInput, now: number, dropOpen = false): num
   const hours = (now - changed) / 3_600_000;
   let times = 1;
   for (const step of STEPS) if (hours >= step.afterHours) times = step.times;
+
+  // Out of stock never gets the top rung, however recently it went out. Note
+  // that 'queue' deliberately does not qualify: a waiting room means a drop
+  // may be live, which is the opposite of a quiet shelf. Nor does 'unknown',
+  // which means we could not see — and not seeing is a reason to look again,
+  // not a reason to look less.
+  if (m.state === 'out') times = Math.max(times, OUT_FLOOR_TIMES);
 
   return Math.min(MAX_INTERVAL_S, asked * times);
 }

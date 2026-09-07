@@ -11,7 +11,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { quietInterval, quietLabel, alwaysFast, MAX_INTERVAL_S } from '../src/quiet.ts';
+import { quietInterval, quietLabel, alwaysFast, MAX_INTERVAL_S, OUT_FLOOR_TIMES } from '../src/quiet.ts';
 
 const NOW = Date.parse('2026-09-03T22:00:00.000Z');
 const hoursAgo = (h: number): string => new Date(NOW - h * 3_600_000).toISOString();
@@ -26,8 +26,10 @@ const listing = (over: Record<string, unknown> = {}) => ({
 test('A SHELF THAT IS NOT MOVING IS READ LESS OFTEN, IN STEPS', () => {
   const at = (h: number) => quietInterval(listing({ lastChangedAt: hoursAgo(h) }), NOW);
 
-  assert.equal(at(0.1), 60, 'it moved six minutes ago — read it as asked');
-  assert.equal(at(0.9), 60, 'still inside the first hour');
+  // Six minutes ago it went OUT, and out never buys the top rung — see
+  // OUT_FLOOR_TIMES. This said 60 until 7 Sep 2026.
+  assert.equal(at(0.1), 180, 'it went out six minutes ago: already on the ramp');
+  assert.equal(at(0.9), 180, 'still inside the first hour, still not full speed');
   assert.equal(at(2), 180, 'quiet for two hours: every three minutes');
   assert.equal(at(8), 480, 'quiet since this morning: every eight');
   assert.equal(at(30), 900, 'quiet for a day: every fifteen');
@@ -83,7 +85,14 @@ test('alwaysFast is the whole exemption list, and says so', () => {
 });
 
 test('the log says why a listing is being read rarely', () => {
-  assert.equal(quietLabel(listing(), NOW), '', 'ordinary cadence says nothing');
+  assert.equal(
+    quietLabel(listing({ state: 'queue' }), NOW),
+    '',
+    'ordinary cadence says nothing',
+  );
+  // And a freshly-out listing now says something, because it is already
+  // resting and a person watching the log deserves to know why.
+  assert.match(quietLabel(listing(), NOW), /^resting \(every 3m/);
   const label = quietLabel(listing({ lastChangedAt: hoursAgo(30) }), NOW);
   assert.match(label, /resting \(every 15m — unchanged for 30h\)/);
 });
@@ -101,8 +110,41 @@ test('WHAT IT WOULD HAVE SAVED ON 3 SEP', () => {
   const after = missions.reduce((n, m) => n + 3600 / quietInterval(m, NOW), 0);
 
   assert.equal(Math.round(before), 900, 'fifteen listings a minute apart');
-  assert.equal(Math.round(after), 172);
-  assert.ok(after < before / 5, 'a fifth of the traffic, and the live ones unchanged');
+  assert.equal(Math.round(after), 132);
+  assert.ok(after < before / 6, 'a sixth of the traffic, and the live one unchanged');
+});
+
+test('OUT OF STOCK DOES NOT BUY FULL SPEED, IN STOCK DOES', () => {
+  // The asymmetry, stated as the one comparison that matters. Both of these
+  // listings changed one minute ago. One of them sold out; the other came in.
+  const justNow = { lastChangedAt: hoursAgo(1 / 60) };
+
+  assert.equal(quietInterval(listing({ ...justNow, state: 'in' }), NOW), 60);
+  assert.equal(quietInterval(listing({ ...justNow, state: 'out' }), NOW), 180);
+
+  // What this cost, in the real case that prompted it: Target #45 flapped in
+  // and out three times on 6 Sep and so spent the whole day at full speed.
+  // Each hour it sat out, it now costs a third as much.
+  assert.equal(3600 / quietInterval(listing({ ...justNow, state: 'out' }), NOW), 20);
+  assert.equal(3600 / 60, 60);
+
+  // The floor is a floor and not a ceiling: a shelf that has been out for a
+  // week still walks all the way up to the cap.
+  assert.equal(quietInterval(listing({ state: 'out', lastChangedAt: hoursAgo(24 * 10) }), NOW), MAX_INTERVAL_S);
+  assert.equal(OUT_FLOOR_TIMES, 3);
+});
+
+test('A WAITING ROOM IS NOT A QUIET SHELF, AND NEITHER IS NOT KNOWING', () => {
+  // Two states that reach the ramp and must NOT get the out-of-stock floor.
+  //
+  // 'queue' means the retailer has put up a waiting room, which is what they
+  // do when something is dropping — the loudest signal there is, and the one
+  // moment reading less would be indefensible.
+  //
+  // 'unknown' means the read failed. Not seeing is a reason to look again.
+  const justNow = { lastChangedAt: hoursAgo(1 / 60) };
+  assert.equal(quietInterval(listing({ ...justNow, state: 'queue' }), NOW), 60);
+  assert.equal(quietInterval(listing({ ...justNow, state: 'unknown' }), NOW), 60);
 });
 
 test('A RESTING LISTING REPORTS THE INTERVAL IT EARNED, NOT THE ONE IT ASKED FOR', () => {

@@ -1078,3 +1078,82 @@ test('a drop window cannot be opened days ahead — it exists to be brief', asyn
   );
   await db.close();
 });
+
+// ── A read that failed is not a reading ─────────────────────────────────────
+//
+// 6 Sep 2026, 06:28. The house internet dropped for about forty-five seconds
+// and three checks came back ERR_INTERNET_DISCONNECTED. The watcher reported
+// them honestly as state 'unknown'; this file then treated "we could not look"
+// as news about the shelf. Two consequences, and the second is the dangerous
+// one.
+
+test('A FAILED READ DOES NOT RESET THE RESTING RAMP', async () => {
+  const { db, listingId } = await withMission();
+  await store.recordObservation(db, USER, { listingId, state: 'out', price: 31.99 });
+
+  const before = (await store.listMissions(db, USER)).find((m) => m.listingId === listingId)!;
+
+  const outcome = await store.recordObservation(db, USER, {
+    listingId,
+    state: 'unknown',
+    confidence: 'unknown',
+    note: 'could not read the page: net::ERR_INTERNET_DISCONNECTED',
+  });
+
+  assert.equal(outcome.changed, false, 'a dropped packet is not a change of stock');
+
+  const after = (await store.listMissions(db, USER)).find((m) => m.listingId === listingId)!;
+  assert.equal(
+    after.lastChangedAt,
+    before.lastChangedAt,
+    'the clock the cadence rests on must not move',
+  );
+
+  // 290 reads is what this cost on the day it was found: three listings kicked
+  // off the ramp by one blip, still reading three times as often nine hours
+  // later — 17% of that whole day's traffic.
+  const history = await store.recentObservations(db, USER, 10);
+  assert.equal(history.length, 1, 'and it writes no history row either');
+});
+
+test('A FAILED READ DOES NOT ERASE WHAT THE SHELF LAST SAID', async () => {
+  // The worse half. `alwaysFast` keys off state === 'in', so overwriting a
+  // known state with 'unknown' would take the ONE listing that must never rest
+  // and put it on the ramp — because of a dropped packet, mid-drop.
+  const { db, listingId } = await withMission();
+  await store.recordObservation(db, USER, {
+    listingId,
+    state: 'in',
+    price: 44.99,
+    availableQuantity: 12,
+  });
+
+  await store.recordObservation(db, USER, {
+    listingId,
+    state: 'unknown',
+    confidence: 'unknown',
+    note: 'could not read the page: net::ERR_INTERNET_DISCONNECTED',
+  });
+
+  const m = (await store.listMissions(db, USER)).find((m) => m.listingId === listingId)!;
+  assert.equal(m.state, 'in', 'it was in stock a minute ago and nothing has said otherwise');
+  assert.equal(m.price, 44.99);
+
+  // But the staleness is honest: we did go and look, and the page can say so.
+  assert.ok(m.lastCheckedAt, 'last_checked_at still moves — the read did happen');
+});
+
+test('the first sighting of a listing is allowed to be unknown', async () => {
+  // Nothing to preserve. A listing whose very first read fails has to record
+  // that it failed, or the page shows an empty row with no explanation.
+  const { db, listingId } = await withMission();
+  const outcome = await store.recordObservation(db, USER, {
+    listingId,
+    state: 'unknown',
+    confidence: 'unknown',
+    note: 'could not read the page',
+  });
+  assert.equal(outcome.isFirst, true);
+  const m = (await store.listMissions(db, USER)).find((m) => m.listingId === listingId)!;
+  assert.equal(m.state, 'unknown');
+});

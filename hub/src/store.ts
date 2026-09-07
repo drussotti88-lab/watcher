@@ -2662,6 +2662,60 @@ export async function recordObservation(
 
   const before = prior[0] ?? null;
   const isFirst = before === null;
+
+  // ── A read that failed is not a reading ───────────────────────────────────
+  //
+  // At 06:28 on 6 Sep 2026 the house internet dropped for about forty-five
+  // seconds. Three checks came back `ERR_INTERNET_DISCONNECTED`, and the
+  // watcher reported them honestly as state `unknown`. This function then did
+  // two things with that, both wrong:
+  //
+  //   1. It counted `out -> unknown` as a CHANGE, which reset last_changed_at,
+  //      which dropped three listings off the resting ramp and back to full
+  //      speed. Nine hours later they were still being read three times as
+  //      often as their identical siblings: about 290 wasted reads, 17% of
+  //      that day's entire traffic, bought by a blip nobody saw.
+  //
+  //   2. Worse, it OVERWROTE the known state with `unknown`. Had one of those
+  //      listings been in stock, it would have stopped reading as in stock —
+  //      and `alwaysFast` keys off exactly that, so the one listing that must
+  //      never be allowed to rest would have been put on the ramp by a
+  //      dropped packet.
+  //
+  // "We could not look" is a fact about the network, not about the shelf. So
+  // it moves last_checked_at, so the staleness on the page is honest, records
+  // the reason, and touches nothing else. The shelf keeps saying whatever it
+  // last actually said.
+  if (!isFirst && obs.state === 'unknown') {
+    await db.query(
+      `UPDATE watch_state
+          SET last_checked_at = now(),
+              note = $2
+        WHERE listing_id = $1`,
+      [obs.listingId, (obs.note ?? '').slice(0, 500)],
+    );
+    // The button still comes down. Somebody pressed it, Phantom did go and
+    // look, and the failure is in the activity log. Leaving it lit would keep
+    // the listing permanently exempt from resting on a page that cannot be
+    // read at all, which is the same runaway this file's cadence work exists
+    // to prevent.
+    await db.query(
+      `UPDATE missions SET check_now_at = NULL
+        WHERE listing_id = $1 AND check_now_at IS NOT NULL`,
+      [obs.listingId],
+    );
+    return {
+      changed: false,
+      isFirst: false,
+      previousState: before.state,
+      previousPrice: toPrice(before.price),
+      previousQuantity:
+        before.available_quantity === null || before.available_quantity === undefined
+          ? null
+          : Number(before.available_quantity),
+    };
+  }
+
   const previousPrice = before ? toPrice(before.price) : null;
   const price = obs.price ?? null;
   const sellerKind = obs.sellerKind ?? 'unknown';

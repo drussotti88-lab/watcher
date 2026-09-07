@@ -1588,6 +1588,27 @@ async function recordObservation(db2, userId, obs) {
   );
   const before = prior[0] ?? null;
   const isFirst = before === null;
+  if (!isFirst && obs.state === "unknown") {
+    await db2.query(
+      `UPDATE watch_state
+          SET last_checked_at = now(),
+              note = $2
+        WHERE listing_id = $1`,
+      [obs.listingId, (obs.note ?? "").slice(0, 500)]
+    );
+    await db2.query(
+      `UPDATE missions SET check_now_at = NULL
+        WHERE listing_id = $1 AND check_now_at IS NOT NULL`,
+      [obs.listingId]
+    );
+    return {
+      changed: false,
+      isFirst: false,
+      previousState: before.state,
+      previousPrice: toPrice(before.price),
+      previousQuantity: before.available_quantity === null || before.available_quantity === void 0 ? null : Number(before.available_quantity)
+    };
+  }
   const previousPrice = before ? toPrice(before.price) : null;
   const price = obs.price ?? null;
   const sellerKind = obs.sellerKind ?? "unknown";
