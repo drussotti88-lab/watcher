@@ -1729,7 +1729,29 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       // A Phantom-side sweep arrives as many posts, one per query. Only the
       // last one finishes it — see the note on finishSweep. Absent means true,
       // so a caller that posts once (the CLI, a curl by hand) still completes.
+      // ── Rank what is now in the ledger ────────────────────────────────
+      //
+      // On the last post of a sweep, not on every one: era is derived from the
+      // whole first-party catalogue, so working it out thirteen times for
+      // thirteen queries would give the same answer thirteen times.
+      //
+      // This is also where the retired series go quiet — Sword & Shield, Sun
+      // & Moon, XY, Black & White. Never fatal: a sweep that found real
+      // product must not be reported as failed because the ranking pass
+      // stumbled, so a failure here is logged and the finds still land.
       const complete = body.final !== false;
+      if (complete) {
+        try {
+          const ranked = await store.rerankDiscoveries(db, userId);
+          if (ranked.retired > 0) {
+            await store.logEvent(db, userId, 'info',
+              `retired ${ranked.retired} finds from series nobody prints any more`);
+          }
+        } catch (err) {
+          await store.logEvent(db, userId, 'warn',
+            `could not rank the finds: ${(err as Error).message}`);
+        }
+      }
       const left = Number(body.remaining);
       const status = complete
         ? isFirstSweep

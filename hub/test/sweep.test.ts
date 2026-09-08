@@ -195,3 +195,154 @@ test('Phantom ingest path shares the same dedupe ledger', async () => {
   const second = await store.recordDiscoveries(db, USER, 'pc', fresh2, true);
   assert.equal(second.length, 0, 'resubmitting the same item announces nothing');
 });
+
+// ── Ranking the finds, and retiring the ones nobody prints ──────────────────
+//
+// 8 Sep 2026. Discovery held 136 Walmart finds and 76 had never been looked
+// at, because the top of the list was a 2016 Elite Trainer Box and the bottom
+// was next week's release. These pin the two halves of the fix: the era that
+// only ever sorts, and the retired series that is allowed to decide.
+
+const walmartSource = async (db: TestDb): Promise<void> => {
+  await db.query(
+    `INSERT INTO sources (id, label, retailer, kind, url, via, config, enabled, seeded)
+     VALUES ('wm', 'Walmart via Phantom', 'Walmart', 'watcher', '', 'watcher',
+             '{}'::jsonb, true, true)`,
+  );
+};
+
+const found = (externalId: string, name: string, over: Record<string, unknown> = {}) => ({
+  externalId,
+  name,
+  url: `https://walmart.test/ip/${externalId}`,
+  retailer: 'Walmart',
+  state: 'out',
+  ...over,
+});
+
+/** The catalogue Target and Pokémon Center are actually selling this month. */
+const CURRENT = [
+  'Pokémon TCG: 30th Celebration Elite Trainer Box',
+  'Pokémon TCG: 30th Celebration Knock Out Collection',
+  'Pokémon TCG: 30th Celebration Booster Bundle (6 Packs)',
+  'Pokémon TCG: Mega Evolution-Pitch Black Booster Bundle (6 Packs)',
+  'Pokémon TCG: Mega Evolution — Ascended Heroes Tin (Mega Feraligatr ex)',
+  'Pokémon Trading Card Game: Mega Evolution Chaos Rising Elite Trainer Box',
+  'Pokémon Trading Card Game: Mega Zygarde ex Premium Collection',
+];
+
+async function withCatalogue(): Promise<TestDb> {
+  const db = await setup();
+  await walmartSource(db);
+  await db.query(
+    `INSERT INTO sources (id, label, retailer, kind, url, via, config, enabled, seeded)
+     VALUES ('tg', 'Target', 'Target', 'watcher', '', 'watcher', '{}'::jsonb, true, true)`,
+  );
+  await store.recordDiscoveries(
+    db,
+    USER,
+    'tg',
+    CURRENT.map((name, i) => ({
+      externalId: `t${i}`,
+      name,
+      url: `https://target.test/p/${i}`,
+      retailer: 'Target',
+      state: 'out',
+    })),
+    false,
+  );
+  await db.query(`UPDATE discoveries SET status = 'kept' WHERE retailer = 'Target'`);
+  return db;
+}
+
+test('THE ARCHIVE SINKS AND THE SHELF RISES', async () => {
+  const db = await withCatalogue();
+  await store.recordDiscoveries(db, USER, 'wm', [
+    found('1', 'Pokemon Trading Cards: SAS12.5 Crown Zenith Elite Trainer Box'),
+    found('2', 'Pokemon Trading Card Games Mega Evolution 5 Pitch Black Booster Bundle'),
+    found('3', 'Pokemon Trading Card Games Scarlet & Violet 8 Surging Sparks Elite Trainer Box'),
+    found('4', 'Pokemon 30th Celebration Knock Out Collection', { otherOffers: 6 }),
+  ], false);
+
+  const ranked = await store.rerankDiscoveries(db, USER);
+  assert.equal(ranked.catalogue, CURRENT.length, 'the corpus is the first-party shops, not Walmart');
+
+  const byName = new Map(
+    (await store.discoveriesToReview(db, USER)).map((d) => [d.externalId, d]),
+  );
+  assert.equal(byName.get('2')?.era, 'current', 'Pitch Black is on sale at Pokémon Center now');
+  assert.equal(byName.get('4')?.era, 'current');
+  assert.equal(byName.get('3')?.era, 'old', 'Surging Sparks: the SERIES matches, the SET does not');
+  // Crown Zenith is retired outright, so it should no longer be waiting at all.
+  assert.equal(byName.has('1'), false, 'a Sword & Shield set is not waiting on a decision');
+
+  // And the order the page will show them in: current and unheld, then current
+  // with resellers camped on it. Nothing from the archive above either.
+  const order = (await store.discoveriesToReview(db, USER))
+    .filter((d) => d.retailer === 'Walmart')
+    .map((d) => d.externalId);
+  assert.deepEqual(order, ['2', '4', '3']);
+});
+
+test('RETIRING IS A NARROWER CLAIM THAN BEING OLD, AND ONLY IT MAY DECIDE', async () => {
+  const db = await withCatalogue();
+  await store.recordDiscoveries(db, USER, 'wm', [
+    // Old by the catalogue, resellers on it — and exactly the kind of thing
+    // Roberto asked for by name. The wider rule discarded sixteen of these.
+    found('p', 'Pokemon Scarlet & Violet Prismatic Evolutions Elite Trainer Box', { otherOffers: 9 }),
+    // Retired series. Nobody has printed one since 2023.
+    found('r', 'Pokemon SAS6 Chilling Reign Elite Trainer Box', { otherOffers: 2 }),
+  ], false);
+
+  const out = await store.rerankDiscoveries(db, USER);
+  assert.equal(out.retired, 1, 'exactly one of the two is safe to decide for him');
+
+  const left = await store.discoveriesToReview(db, USER);
+  const prismatic = left.find((d) => d.externalId === 'p');
+  assert.ok(prismatic, 'Prismatic Evolutions must survive being called old');
+  assert.equal(prismatic.era, 'old', 'it is still ranked down — the corpus cannot see it');
+  assert.match(prismatic.eraWhy, /nothing on sale first-party/);
+  assert.equal(left.some((d) => d.externalId === 'r'), false);
+});
+
+test('a decision already made is never revisited by the ranking pass', async () => {
+  // Retiring touches rows still waiting, and nothing else. A find kept by hand
+  // is a person's decision, and a rule arriving three weeks later does not get
+  // to overturn it.
+  const db = await withCatalogue();
+  await store.recordDiscoveries(db, USER, 'wm', [
+    found('k', 'Pokemon Trading Cards: SAS12.5 Crown Zenith Tin'),
+  ], false);
+  await db.query(`UPDATE discoveries SET status = 'kept' WHERE external_id = 'k'`);
+
+  const out = await store.rerankDiscoveries(db, USER);
+  assert.equal(out.retired, 0);
+  const rows = await db.query<{ status: string; era: string }>(
+    `SELECT status, era FROM discoveries WHERE external_id = 'k'`,
+  );
+  assert.equal(rows[0]?.status, 'kept', 'still kept');
+  assert.equal(rows[0]?.era, 'old', 'and still ranked, because ranking is not deciding');
+});
+
+test('AN EMPTY CATALOGUE RETIRES NOTHING AND JUDGES NOTHING', async () => {
+  // The failure mode this project has shipped before: a filter that quietly
+  // rejects everything looks exactly like a filter that is working. With no
+  // first-party catalogue to compare against, every find must come back
+  // unknown — and the retired-series rule, which needs no catalogue, must
+  // still work, because it is a fact about Pokémon and not about our data.
+  const db = await setup();
+  await walmartSource(db);
+  await store.recordDiscoveries(db, USER, 'wm', [
+    found('a', 'Pokemon Trading Card Games Mega Evolution 5 Pitch Black Booster Bundle'),
+    found('b', 'Pokemon SAS6 Chilling Reign Elite Trainer Box'),
+  ], false);
+
+  const out = await store.rerankDiscoveries(db, USER);
+  assert.equal(out.catalogue, 0);
+  assert.equal(out.retired, 1, 'a retired series is retired whatever else we know');
+
+  const left = await store.discoveriesToReview(db, USER);
+  assert.equal(left.length, 1);
+  assert.equal(left[0]?.era, 'unknown');
+  assert.match(left[0]?.eraWhy ?? '', /not enough to judge/);
+});

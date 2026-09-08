@@ -1808,6 +1808,10 @@ const RICH_FIND = {
   status: 'new', firstSeenAt: new Date().toISOString(), alreadyHave: false,
   retailer: 'Pokemon Center', state: 'out', isPreOrder: false,
   releaseDate: '2026-07-15', orderLimit: null, signal: 'recent',
+  // Is anyone still printing it? The field that replaced `signal` as the
+  // thing that places a find in the list — see findRank.
+  era: 'current', eraWhy: '30th + celebration — also in the first-party catalogue',
+  otherOffers: null,
 };
 
 const findPills = (h: Harness): string[] =>
@@ -1914,23 +1918,45 @@ test('THE FINDS LIST LEADS WITH WHAT YOU CAN ACT ON', async () => {
   const at = (n: number) => new Date(Date.now() - n * 86400000).toISOString();
   const soon = new Date(Date.now() + 20 * 86400000).toISOString().slice(0, 10);
   const h = await boot(withFinds([
-    { ...RICH_FIND, id: 1, name: 'Dormant back-catalogue', state: 'out', signal: '', releaseDate: '', firstSeenAt: at(1) },
-    { ...RICH_FIND, id: 2, name: 'Sold out recently', state: 'out', signal: 'recent', releaseDate: '', firstSeenAt: at(1) },
-    { ...RICH_FIND, id: 3, name: 'Dated and ahead', state: 'out', signal: '', releaseDate: soon, firstSeenAt: at(1) },
-    { ...RICH_FIND, id: 4, name: 'Buyable now', state: 'in', signal: 'buyable', releaseDate: '', firstSeenAt: at(1) },
-    { ...RICH_FIND, id: 5, name: 'A pre-order', state: 'in', isPreOrder: true, releaseDate: '', firstSeenAt: at(1) },
+    // `signal` deliberately says 'recent' on every one of these. It is what
+    // the sweep stamps on anything it cannot call buyable, so it was true of
+    // a 2016 Elite Trainer Box and a next-week release alike — and while the
+    // page ranked on it, Walmart's whole archive sat above the fold and 76
+    // finds went unreviewed. Nothing below is placed by it any more.
+    { ...RICH_FIND, id: 1, name: 'No longer printed', state: 'out', era: 'old', releaseDate: '', firstSeenAt: at(1) },
+    { ...RICH_FIND, id: 2, name: 'Resellers hold it', state: 'out', era: 'current', otherOffers: 6, releaseDate: '', firstSeenAt: at(1) },
+    { ...RICH_FIND, id: 6, name: 'Nobody is selling it', state: 'out', era: 'current', releaseDate: '', firstSeenAt: at(1) },
+    { ...RICH_FIND, id: 3, name: 'Dated and ahead', state: 'out', era: 'current', releaseDate: soon, firstSeenAt: at(1) },
+    { ...RICH_FIND, id: 4, name: 'Buyable now', state: 'in', era: 'current', releaseDate: '', firstSeenAt: at(1) },
+    { ...RICH_FIND, id: 5, name: 'A pre-order', state: 'in', isPreOrder: true, era: 'current', releaseDate: '', firstSeenAt: at(1) },
   ]));
   const names = [...h.doc.querySelectorAll('#finds-list .name')].map((n) => n.textContent);
-  // The dormant one is not in this list — it is behind the fold, with a count
-  // on it. Order is about the ones you might act on.
-  assert.deepEqual(names.slice(0, 4), [
+  // Nobody-selling above resellers-hold-it is the judgement worth defending:
+  // a listing the retailer owns and nobody has is the shape a restock happens
+  // to, and one with scalpers camped on it opens onto their price.
+  assert.deepEqual(names.slice(0, 5), [
     'A pre-order',
     'Buyable now',
     'Dated and ahead',
-    'Sold out recently',
+    'Nobody is selling it',
+    'Resellers hold it',
   ]);
-  assert.ok(!names.includes('Dormant back-catalogue'));
+  assert.ok(!names.includes('No longer printed'), 'the archive is behind the fold');
   assert.match($(h, '#finds-list').textContent, /1 more from the back catalogue/);
+});
+
+test('THE CARD SAYS WHEN NOTHING PRINTS IT ANY MORE, AND WHY', async () => {
+  // A machine's guess you cannot interrogate is worse than no guess, and this
+  // one is derived from a catalogue that moves. So the reason travels with it.
+  const h = await boot(withFinds([
+    { ...RICH_FIND, id: 1, name: 'Crown Zenith Elite Trainer Box', state: 'out',
+      era: 'old', eraWhy: 'nothing on sale first-party shares its name (crown zenith)',
+      releaseDate: '' },
+  ]));
+  assert.ok(findPills(h).includes('no longer printed'));
+  const pill = [...h.doc.querySelectorAll('#finds-list .pill')]
+    .find((p) => p.textContent === 'no longer printed');
+  assert.match((pill as HTMLElement).title, /crown zenith/);
 });
 
 test('within a band, the newest find comes first', async () => {
@@ -1976,11 +2002,12 @@ const MIXED = [
   { ...RICH_FIND, id: 2, name: 'Target in stock', retailer: 'Target',
     isPreOrder: false, state: 'in', signal: 'buyable', releaseDate: '' },
   { ...RICH_FIND, id: 3, name: 'Walmart recent', retailer: 'Walmart',
-    isPreOrder: false, state: 'out', signal: 'recent', releaseDate: '' },
+    isPreOrder: false, state: 'out', signal: 'recent', releaseDate: '', era: 'current' },
+  // Both of these are real Sword & Shield V Boxes out of Walmart's archive.
   { ...RICH_FIND, id: 4, name: 'Walmart Boltund V Box', retailer: 'Walmart',
-    isPreOrder: false, state: 'out', signal: '', releaseDate: '', confidence: 'sealed' },
+    isPreOrder: false, state: 'out', signal: '', releaseDate: '', confidence: 'sealed', era: 'old' },
   { ...RICH_FIND, id: 5, name: 'Walmart Infernape V Box', retailer: 'Walmart',
-    isPreOrder: false, state: 'out', signal: '', releaseDate: '', confidence: 'sealed' },
+    isPreOrder: false, state: 'out', signal: '', releaseDate: '', confidence: 'sealed', era: 'old' },
 ];
 
 test('THE BACK CATALOGUE IS FOLDED AWAY, NOT THROWN AWAY', async () => {

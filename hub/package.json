@@ -19,7 +19,8 @@
     "db:push": "node --experimental-strip-types --env-file-if-exists=.env.local scripts/migrate.ts schema.sql",
     "db:seed": "node --experimental-strip-types --env-file-if-exists=.env.local scripts/migrate.ts seed.sql",
     "db:reset": "node --experimental-strip-types --env-file-if-exists=.env.local scripts/migrate.ts reset.sql",
-    "shops": "node --experimental-strip-types --env-file-if-exists=.env.local scripts/shops.ts"
+    "shops": "node --experimental-strip-types --env-file-if-exists=.env.local scripts/shops.ts",
+    "rerank": "node --experimental-strip-types --env-file-if-exists=.env.local scripts/rerank.ts"
   },
   "devDependencies": {
     "@types/jsdom": "^30.0.0",

@@ -1,0 +1,1724 @@
+{
+ "discoveries": [
+  {
+   "retailer": "Pokemon Center",
+   "status": "forgotten",
+   "confidence": "",
+   "kind": "",
+   "state": "",
+   "other_offers": null,
+   "name": "Pokémon TCG: Scarlet & Violet — Journey Together Sleeved Booster Pack"
+  },
+  {
+   "retailer": "Pokemon Center",
+   "status": "kept",
+   "confidence": "unsure",
+   "kind": "sticker collection",
+   "state": "out",
+   "other_offers": null,
+   "name": "Pokémon TCG: 30th Celebration Tech Sticker Collection (Lucario)"
+  },
+  {
+   "retailer": "Pokemon Center",
+   "status": "kept",
+   "confidence": "sealed",
+   "kind": "mini tin",
+   "state": "out",
+   "other_offers": null,
+   "name": "Pokémon TCG: 30th Celebration Mini Tins (10-Pack)"
+  },
+  {
+   "retailer": "Pokemon Center",
+   "status": "kept",
+   "confidence": "sealed",
+   "kind": "collection box",
+   "state": "out",
+   "other_offers": null,
+   "name": "Pokémon TCG: 30th Celebration Knock Out Collection"
+  },
+  {
+   "retailer": "Pokemon Center",
+   "status": "kept",
+   "confidence": "unsure",
+   "kind": "sticker collection",
+   "state": "out",
+   "other_offers": null,
+   "name": "Pokémon TCG: 30th Celebration Tech Sticker Collection (Alolan Exeggutor)"
+  },
+  {
+   "retailer": "Pokemon Center",
+   "status": "kept",
+   "confidence": "sealed",
+   "kind": "elite trainer box",
+   "state": "out",
+   "other_offers": null,
+   "name": "Pokémon TCG: 30th Celebration Pokémon Center Elite Trainer Box"
+  },
+  {
+   "retailer": "Pokemon Center",
+   "status": "kept",
+   "confidence": "sealed",
+   "kind": "booster bundle",
+   "state": "out",
+   "other_offers": null,
+   "name": "Pokémon TCG: Mega Evolution-Pitch Black Booster Bundle (6 Packs)"
+  },
+  {
+   "retailer": "Pokemon Center",
+   "status": "kept",
+   "confidence": "sealed",
+   "kind": "booster packs",
+   "state": "out",
+   "other_offers": null,
+   "name": "Pokémon TCG: Oddish, Gloom & Vileplume Cards with 2 Booster Packs & Coin"
+  },
+  {
+   "retailer": "Pokemon Center",
+   "status": "kept",
+   "confidence": "sealed",
+   "kind": "elite trainer box",
+   "state": "out",
+   "other_offers": null,
+   "name": "Pokémon TCG: Mega Evolution-Pitch Black Pokémon Center Elite Trainer Box"
+  },
+  {
+   "retailer": "Pokemon Center",
+   "status": "kept",
+   "confidence": "sealed",
+   "kind": "booster box",
+   "state": "out",
+   "other_offers": null,
+   "name": "Pokémon TCG: Mega Evolution-Pitch Black Booster Display Box (36 Packs)"
+  },
+  {
+   "retailer": "Pokemon Center",
+   "status": "kept",
+   "confidence": "sealed",
+   "kind": "booster bundle",
+   "state": "out",
+   "other_offers": null,
+   "name": "Pokémon TCG: 30th Celebration Booster Bundle (6 Packs)"
+  },
+  {
+   "retailer": "Target",
+   "status": "kept",
+   "confidence": "sealed",
+   "kind": "elite trainer box",
+   "state": "out",
+   "other_offers": null,
+   "name": "Pokémon Trading Card Game: 30th Celebration Elite Trainer Box"
+  },
+  {
+   "retailer": "Target",
+   "status": "kept",
+   "confidence": "unsure",
+   "kind": "poster collection",
+   "state": "out",
+   "other_offers": null,
+   "name": "Pokémon Trading Card Game: 30th Celebration Poster Collection"
+  },
+  {
+   "retailer": "Target",
+   "status": "kept",
+   "confidence": "sealed",
+   "kind": "ex box",
+   "state": "out",
+   "other_offers": null,
+   "name": "Pokémon Trading Card Game: 30th Celebration Sylveon ex Box"
+  },
+  {
+   "retailer": "Target",
+   "status": "kept",
+   "confidence": "",
+   "kind": "",
+   "state": "",
+   "other_offers": null,
+   "name": "Pokémon TCG: Mega Evolution — Ascended Heroes Tin (Mega Feraligatr ex)"
+  },
+  {
+   "retailer": "Target",
+   "status": "kept",
+   "confidence": "sealed",
+   "kind": "elite trainer box",
+   "state": "in",
+   "other_offers": null,
+   "name": "Pokémon Trading Card Game: Mega Evolution Chaos Rising Elite Trainer Box"
+  },
+  {
+   "retailer": "Target",
+   "status": "kept",
+   "confidence": "unsure",
+   "kind": "sticker collection",
+   "state": "out",
+   "other_offers": null,
+   "name": "Pokémon Trading Card Game: 30th Celebration Tech Sticker Collection (Lucario or Alolan Exeggutor)- Styles May Vary"
+  },
+  {
+   "retailer": "Target",
+   "status": "kept",
+   "confidence": "sealed",
+   "kind": "premium collection",
+   "state": "in",
+   "other_offers": null,
+   "name": "Pokémon Trading Card Game: Mega Zygarde ex Premium Collection"
+  },
+  {
+   "retailer": "Target",
+   "status": "kept",
+   "confidence": "sealed",
+   "kind": "ex box",
+   "state": "out",
+   "other_offers": null,
+   "name": "Pokémon Tading Card Game: 30th Celebration Greninja ex Box"
+  },
+  {
+   "retailer": "Target",
+   "status": "kept",
+   "confidence": "unsure",
+   "kind": "tin",
+   "state": "out",
+   "other_offers": null,
+   "name": "Pokemon Trading Card Game: 30th Celebration Tin (Sylveon or Greninja)- Styles May Vary"
+  },
+  {
+   "retailer": "Target",
+   "status": "kept",
+   "confidence": "sealed",
+   "kind": "collection box",
+   "state": "out",
+   "other_offers": null,
+   "name": "Pokémon Trading Card Game: 30th Celebration Knock Out Collection"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "forgotten",
+   "confidence": "sealed",
+   "kind": "elite trainer box",
+   "state": "out",
+   "other_offers": null,
+   "name": "Pokemon Zacian Zamazenta Elite Trainer Box Plus"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "forgotten",
+   "confidence": "unsure",
+   "kind": "tin",
+   "state": "out",
+   "other_offers": 2,
+   "name": "POKEMON PARADOX DESTINIES TIN"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "forgotten",
+   "confidence": "unsure",
+   "kind": "tin",
+   "state": "out",
+   "other_offers": null,
+   "name": "Pokemon Trading Card Games Hidden Potential Tin Gallade V"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "forgotten",
+   "confidence": "sealed",
+   "kind": "blister",
+   "state": "out",
+   "other_offers": null,
+   "name": "POKEMON SAS4 VIVID VOLTAGE BLISTER"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "forgotten",
+   "confidence": "sealed",
+   "kind": "elite trainer box",
+   "state": "out",
+   "other_offers": 7,
+   "name": "Pokemon Trading Card Game Scarlet & Violet 6.5 Shrouded Fable Elite Trainer Box"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "forgotten",
+   "confidence": "sealed",
+   "kind": "elite trainer box",
+   "state": "out",
+   "other_offers": 2,
+   "name": "Pokemon Trading Card Games SV4.5 Paldean Fates Elite Trainer Box"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "forgotten",
+   "confidence": "sealed",
+   "kind": "elite trainer box",
+   "state": "out",
+   "other_offers": 13,
+   "name": "Pokemon Trading Card Games Scarlet & Violet 8 Surging Sparks Elite Trainer Box"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "forgotten",
+   "confidence": "unsure",
+   "kind": "tin",
+   "state": "out",
+   "other_offers": null,
+   "name": "Pokemon Trading Card Games V Strikers Tin Empoleon V"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "forgotten",
+   "confidence": "unsure",
+   "kind": "tin",
+   "state": "out",
+   "other_offers": null,
+   "name": "POKEMON PARADOX CLASH TIN"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "forgotten",
+   "confidence": "sealed",
+   "kind": "booster pack",
+   "state": "out",
+   "other_offers": 2,
+   "name": "Pokemon TCG Sword and Shield Silver Tempest Booster Pack English 2022"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "forgotten",
+   "confidence": "unsure",
+   "kind": "tin",
+   "state": "out",
+   "other_offers": null,
+   "name": "POKEMON PALDEA PARTNERS FALL TIN"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "forgotten",
+   "confidence": "unsure",
+   "kind": "",
+   "state": "out",
+   "other_offers": 1,
+   "name": "Pokemon Trading Card Games Back to School Collector Chest"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "forgotten",
+   "confidence": "sealed",
+   "kind": "elite trainer box",
+   "state": "out",
+   "other_offers": 7,
+   "name": "Pokemon Trading Card Games: Sword & Shield 12 Silver Tempest Elite Trainer Box"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "forgotten",
+   "confidence": "sealed",
+   "kind": "booster pack",
+   "state": "out",
+   "other_offers": 4,
+   "name": "POKEMON SAS10 ASTRAL RADIANCE BOOSTER PACK"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "forgotten",
+   "confidence": "sealed",
+   "kind": "premium collection",
+   "state": "out",
+   "other_offers": 1,
+   "name": "Pokemon Trading Card Games SV4.5 Paldean Fates Quaquaval EX Premium Collection"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "forgotten",
+   "confidence": "sealed",
+   "kind": "elite trainer box",
+   "state": "out",
+   "other_offers": 1,
+   "name": "Pokemon Trading Card Games SV5 Temporal Forces Elite Trainer Box Iron Leaves"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "forgotten",
+   "confidence": "",
+   "kind": "",
+   "state": "",
+   "other_offers": null,
+   "name": "Pokémon TCG: Mega Evolution — Chaos Rising Elite Trainer Box"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "forgotten",
+   "confidence": "sealed",
+   "kind": "blister",
+   "state": "out",
+   "other_offers": 1,
+   "name": "Sword & Shield: Silver Tempest 3 Pack Blister with Togetic (Pokemon) - Pokemon"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "forgotten",
+   "confidence": "sealed",
+   "kind": "elite trainer box",
+   "state": "out",
+   "other_offers": 1,
+   "name": "Pokemon XY Fates Collide Elite Trainer Box [Mega Alakazam-EX]"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "forgotten",
+   "confidence": "sealed",
+   "kind": "advent calendar",
+   "state": "out",
+   "other_offers": 4,
+   "name": "2025 Pokemon Trading Card Games Holiday Calendar"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "forgotten",
+   "confidence": "sealed",
+   "kind": "elite trainer box",
+   "state": "out",
+   "other_offers": 7,
+   "name": "Pokemon Trading Cards: SAS12.5 Crown Zenith Elite Trainer Box"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "forgotten",
+   "confidence": "unsure",
+   "kind": "collection box",
+   "state": "out",
+   "other_offers": 4,
+   "name": "Pokemon Incineroar & Torterraex Special Collection Box"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "forgotten",
+   "confidence": "sealed",
+   "kind": "premium collection",
+   "state": "out",
+   "other_offers": 3,
+   "name": "POKEMON ARMAROUGE EX PREMIUM COLLECTION"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "forgotten",
+   "confidence": "sealed",
+   "kind": "booster pack",
+   "state": "out",
+   "other_offers": null,
+   "name": "Pokemon 277030 Trading Card Game: Sword and Shield Chilling Reign Booster Pack"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "forgotten",
+   "confidence": "sealed",
+   "kind": "elite trainer box",
+   "state": "out",
+   "other_offers": 3,
+   "name": "Pokemon Trading Card Game: Scarlet & Violet Elite Trainer Box - Easy to Play (Red or Purple)"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "kept",
+   "confidence": "sealed",
+   "kind": "booster box",
+   "state": "out",
+   "other_offers": 2,
+   "name": "Pokemon Mega Evolution Booster Box"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "kept",
+   "confidence": "unsure",
+   "kind": "tin",
+   "state": "out",
+   "other_offers": 1,
+   "name": "POKEMON HIDDEN POTENTIAL TIN (1 X RANDOM TIN)"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "kept",
+   "confidence": "unsure",
+   "kind": "tin",
+   "state": "out",
+   "other_offers": null,
+   "name": "POKEMON 25 WM D82D AE PC IRON LEAVES TIN"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "kept",
+   "confidence": "sealed",
+   "kind": "booster bundle",
+   "state": "out",
+   "other_offers": 1,
+   "name": "Pokemon Trading Card Games Scarlet & Violet 4 Paradox Rift Booster Bundle 6 Booster Packs"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "kept",
+   "confidence": "sealed",
+   "kind": "ex box",
+   "state": "out",
+   "other_offers": null,
+   "name": "Pokemon Trading Card Games Bloodmoon Ursaluna Ex Box"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "kept",
+   "confidence": "sealed",
+   "kind": "elite trainer box",
+   "state": "out",
+   "other_offers": 1,
+   "name": "Pokemon Trading Card Game Scarlet & Violet Prismatic Evolutions Elite Trainer Box"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "kept",
+   "confidence": "sealed",
+   "kind": "advent calendar",
+   "state": "out",
+   "other_offers": null,
+   "name": "Pokemon Trading Card Game: Holiday Calendar 2023"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "kept",
+   "confidence": "sealed",
+   "kind": "booster bundle",
+   "state": "out",
+   "other_offers": 14,
+   "name": "Pokemon Trading Card Games Scarlet & Violet 9 Journey Together Booster Bundle"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "kept",
+   "confidence": "sealed",
+   "kind": "blister",
+   "state": "out",
+   "other_offers": 6,
+   "name": "Pokemon Scarlet and Violet 8.5 Prismatic Evolutions 2-Pack Blister"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "kept",
+   "confidence": "unsure",
+   "kind": "tin",
+   "state": "out",
+   "other_offers": null,
+   "name": "POKEMON 25 WM D82D AE PC WALKING WAKE TIN"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "kept",
+   "confidence": "sealed",
+   "kind": "booster bundle",
+   "state": "out",
+   "other_offers": null,
+   "name": "Pokemon Trading Card Games Scarlet & Violet 1 Booster Bundle - 6 booster packs"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "kept",
+   "confidence": "sealed",
+   "kind": "booster bundle",
+   "state": "out",
+   "other_offers": 23,
+   "name": "Pokemon Trading Card Games Mega Evolution 5 Pitch Black Booster Bundle"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "kept",
+   "confidence": "unsure",
+   "kind": "tin",
+   "state": "out",
+   "other_offers": null,
+   "name": "Pokemon Trading Card Games SV4.5 Paldean Fates Tin Iron Treads"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "kept",
+   "confidence": "unsure",
+   "kind": "tin",
+   "state": "out",
+   "other_offers": 4,
+   "name": "Pokemon Trading Card Games Mege Heroes Tin Kangakhn"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "kept",
+   "confidence": "sealed",
+   "kind": "booster bundle",
+   "state": "out",
+   "other_offers": 11,
+   "name": "Pokemon Trading Card Game Scarlet & Violet 10 Destined Rivals Booster Bundle"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "kept",
+   "confidence": "sealed",
+   "kind": "mini tin",
+   "state": "out",
+   "other_offers": 3,
+   "name": "POKEMON MEGA HEROES MINI TINS"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "kept",
+   "confidence": "sealed",
+   "kind": "booster bundle",
+   "state": "out",
+   "other_offers": null,
+   "name": "Pokémon Trading Card Games Scarlet & Violet 3.5 151 Booster Bundle"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "kept",
+   "confidence": "unsure",
+   "kind": "tin",
+   "state": "out",
+   "other_offers": 1,
+   "name": "POKEMON 25 WM D82D AE PD IRON CROWN TIN"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "kept",
+   "confidence": "unsure",
+   "kind": "tin",
+   "state": "out",
+   "other_offers": null,
+   "name": "POKEMON 25 WM D82D AE PD GOUGING FIRE TIN"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "kept",
+   "confidence": "unsure",
+   "kind": "tin",
+   "state": "out",
+   "other_offers": 3,
+   "name": "Pokemon Trading Card Games Mega Heroes Tin Latias"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "kept",
+   "confidence": "sealed",
+   "kind": "booster packs",
+   "state": "out",
+   "other_offers": null,
+   "name": "Pokemon 2024 Back to School Pencil Tin (Includes 2 Booster Packs!)"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "kept",
+   "confidence": "sealed",
+   "kind": "booster packs",
+   "state": "out",
+   "other_offers": null,
+   "name": "Pokemon Trading Card Games Scarlet & Violet—151 Ultra-Premium Collection - 16 Booster Packs from Pokémon Tcg: Scarlet & Violet—151"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "kept",
+   "confidence": "sealed",
+   "kind": "booster bundle",
+   "state": "out",
+   "other_offers": null,
+   "name": "Pokemon Trading Card Games Scarlet & Violet 8 Surging Sparks Booster Bundle"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "kept",
+   "confidence": "unsure",
+   "kind": "tin",
+   "state": "out",
+   "other_offers": null,
+   "name": "POKEMON 25 WM D82D AE PD RAGING BOLT TIN"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "kept",
+   "confidence": "sealed",
+   "kind": "mini tin",
+   "state": "out",
+   "other_offers": 3,
+   "name": "POKEMON ME2.5 ASCENDED HEROES MINI TIN"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "kept",
+   "confidence": "unsure",
+   "kind": "",
+   "state": "out",
+   "other_offers": 4,
+   "name": "Pokemon Trading Card Games Paldea Adventure Chest"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "kept",
+   "confidence": "unsure",
+   "kind": "tin",
+   "state": "out",
+   "other_offers": 1,
+   "name": "POKEMON AZURE LEGENDS TIN"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "kept",
+   "confidence": "sealed",
+   "kind": "mini tin",
+   "state": "out",
+   "other_offers": 3,
+   "name": "Pokemon Prismatic Evolutions Mini Tins"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "kept",
+   "confidence": "unsure",
+   "kind": "tin",
+   "state": "out",
+   "other_offers": 1,
+   "name": "POKEMON SAS12.5 CROWN ZENITH TIN - ONE AT RANDOM"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "kept",
+   "confidence": "sealed",
+   "kind": "mini tin",
+   "state": "out",
+   "other_offers": 2,
+   "name": "Pokemon Trading Card Games Mega Mini Tin Venusaur"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "kept",
+   "confidence": "sealed",
+   "kind": "mini tin",
+   "state": "out",
+   "other_offers": 7,
+   "name": "Pokemon Lumiose City Mini Tin (1 Tin at Random)"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "kept",
+   "confidence": "unsure",
+   "kind": "tin",
+   "state": "out",
+   "other_offers": 2,
+   "name": "POKEMON 25 WM D82D AE PD IRON BOULDER TIN"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "kept",
+   "confidence": "sealed",
+   "kind": "mini tin",
+   "state": "out",
+   "other_offers": 2,
+   "name": "Pokemon Trading Card Games Mega Heroes Mini Tin Lucario"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "kept",
+   "confidence": "sealed",
+   "kind": "booster packs",
+   "state": "out",
+   "other_offers": 6,
+   "name": "Pokemon Trading Card Games Scarlet & Violet 3.5 151 Collection Alakazam Ex - 4 Pokemon TCG: Scarlet & Violet151 Booster Packs"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "kept",
+   "confidence": "sealed",
+   "kind": "booster packs",
+   "state": "out",
+   "other_offers": 6,
+   "name": "Pokemon Trading Card Games Scarlet & Violet 3.5 151 Collection Zapdos Ex - 4 Pokemon Tgc Scarlet & Violet151 Booster Packs"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "unsure",
+   "kind": "tin",
+   "state": "out",
+   "other_offers": 1,
+   "name": "POKEMON SLASHING LEGENDS TIN"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "sealed",
+   "kind": "premium collection",
+   "state": "out",
+   "other_offers": 9,
+   "name": "Pokemon Trading Card Games Charizard ex Super - Premium Collection"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "sealed",
+   "kind": "booster bundle",
+   "state": "out",
+   "other_offers": 1,
+   "name": "Pokemon Trading Card Game Scarlet & Violet 2 Paldea Evolved Booster Bundle 6 Booster Packs"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "sealed",
+   "kind": "elite trainer box",
+   "state": "out",
+   "other_offers": 3,
+   "name": "Pokemon Cards: SAS9 Brilliant Stars Elite Trainer Box"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "sealed",
+   "kind": "booster packs",
+   "state": "out",
+   "other_offers": 3,
+   "name": "Pokemon Trading Card Games SAS12.5 Crown Zenith Bundle 6 Booster Packs"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "sealed",
+   "kind": "elite trainer box",
+   "state": "out",
+   "other_offers": 6,
+   "name": "Pokemon Scarlet & Violet 7 Stellar Crown Elite Trainer Box"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "sealed",
+   "kind": "blister",
+   "state": "out",
+   "other_offers": 1,
+   "name": "Pokemon Trading Card Games Scarlet & Violet 6.5 Shrouded Fable 3 Pack - Booster Blister"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "sealed",
+   "kind": "premium collection",
+   "state": "out",
+   "other_offers": null,
+   "name": "Pokemon Trading Card Games SV4.5 Paldean Fates Skeledirge EX Premium Collection"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "unsure",
+   "kind": "tin",
+   "state": "out",
+   "other_offers": null,
+   "name": "Pokemon Trading Card Games V Strikers Tin Tyranitar V"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "sealed",
+   "kind": "elite trainer box",
+   "state": "out",
+   "other_offers": null,
+   "name": "Pokemon Sun & Moon Crimson Invasion Elite Trainer Box"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "unsure",
+   "kind": "tin",
+   "state": "out",
+   "other_offers": null,
+   "name": "Pokémon Trading Card Games: SAS4.5 Shining Fates Tin- Boltund V"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "sealed",
+   "kind": "ex box",
+   "state": "out",
+   "other_offers": 5,
+   "name": "Pokemon Trading Card Games Mabosstiff EX Box"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "unsure",
+   "kind": "sticker collection",
+   "state": "out",
+   "other_offers": null,
+   "name": "Pokemon Trading Card Games SV4.5 Paldean Fates Tech Sticker Collection"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "sealed",
+   "kind": "booster pack",
+   "state": "out",
+   "other_offers": null,
+   "name": "Detective Pikachu Pokemon Trading Cards- Mewtwo-Gx Case File + 6 Booster Pack + A Foil Promo Gx Card + A Oversize Gx Foil Card"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "sealed",
+   "kind": "booster pack",
+   "state": "out",
+   "other_offers": null,
+   "name": "Pokemon Sas6 Chilling Reign Booster Pack"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "unsure",
+   "kind": "collection",
+   "state": "out",
+   "other_offers": 2,
+   "name": "Pokemon TCG: Shining Fates CollectionPikachu V"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "sealed",
+   "kind": "v box",
+   "state": "out",
+   "other_offers": 1,
+   "name": "Pokemon Cards: Pikachu V Box"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "sealed",
+   "kind": "booster pack",
+   "state": "out",
+   "other_offers": null,
+   "name": "POKEMON SAS2 REBEL CLASH BOOSTER PACK"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "sealed",
+   "kind": "premium collection",
+   "state": "out",
+   "other_offers": 6,
+   "name": "Pokemon Trading Card Game Ionos Bellibolt ex Premium Collection"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "unsure",
+   "kind": "collection",
+   "state": "out",
+   "other_offers": null,
+   "name": "Pokmon Trading Card Games: Pokemon GO Special CollectionTeam Mystic"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "sealed",
+   "kind": "premium collection",
+   "state": "out",
+   "other_offers": 1,
+   "name": "Pokemon Go Wave 1 Radiant Eevee Premium Collection"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "sealed",
+   "kind": "tin",
+   "state": "out",
+   "other_offers": 2,
+   "name": "Pokemon Trading Card Games Poke Ball Tin - Random Selected"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "unsure",
+   "kind": "collection box",
+   "state": "out",
+   "other_offers": 2,
+   "name": "Pokemon Trading Card Game Snorlax ex and Blissey ex Special Collection Box"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "sealed",
+   "kind": "v box",
+   "state": "out",
+   "other_offers": null,
+   "name": "Pokemon Trading Card Games Boltund V Box"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "unsure",
+   "kind": "",
+   "state": "out",
+   "other_offers": null,
+   "name": "Pokemon Trading Cards: Hisuian Zoroark VSTAR Premium Box"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "sealed",
+   "kind": "v box",
+   "state": "out",
+   "other_offers": 3,
+   "name": "Pokemon Infrnape V Box"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "sealed",
+   "kind": "booster box",
+   "state": "out",
+   "other_offers": 2,
+   "name": "Pokemon TCG: Sun & Moon Unified Minds Booster Box"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "sealed",
+   "kind": "v box",
+   "state": "out",
+   "other_offers": 2,
+   "name": "POKEMON VIRIZION V BOX"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "sealed",
+   "kind": "blister",
+   "state": "out",
+   "other_offers": null,
+   "name": "POKEMON SV2 PALDEA EVOLVED 3PK BLISTER - 1 3 Pack Blister at Random"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "sealed",
+   "kind": "elite trainer box",
+   "state": "out",
+   "other_offers": 1,
+   "name": "Pokemon TCG: Scarlet & VioletTemporal Forces Elite Trainer Box 1 ETB at Random"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "sealed",
+   "kind": "ex box",
+   "state": "out",
+   "other_offers": null,
+   "name": "POKEMON PALAFIN EX BOX"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "unsure",
+   "kind": "collection",
+   "state": "out",
+   "other_offers": null,
+   "name": "Pokemon Trading Card Games: Pokemon GO Special Team Collection (1X Random Team Selection)"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "sealed",
+   "kind": "elite trainer box",
+   "state": "out",
+   "other_offers": 10,
+   "name": "POKEMON SV6 TWILIGHT MASQUERADE ETB"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "unsure",
+   "kind": "tin",
+   "state": "out",
+   "other_offers": null,
+   "name": "The Pokemon Pokemon Paldea Legends Tin Card game"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "sealed",
+   "kind": "mini tin",
+   "state": "out",
+   "other_offers": null,
+   "name": "POKEMON VIBRANT PALDEA MINI TIN"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "sealed",
+   "kind": "build & battle",
+   "state": "out",
+   "other_offers": null,
+   "name": "Pokemon TCG Sword and Shield - Rebel Clash Build & Battle Box"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "sealed",
+   "kind": "booster bundle",
+   "state": "out",
+   "other_offers": null,
+   "name": "Pokemon Trading Card Games 2023 Trick or Trade BOOster Bundle 50 Packs per Bundle"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "unsure",
+   "kind": "",
+   "state": "out",
+   "other_offers": null,
+   "name": "Pokemon Trading Card Games SAS10 Astral Radiance 3Pk Hanger Box"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "sealed",
+   "kind": "booster bundle",
+   "state": "out",
+   "other_offers": 1,
+   "name": "Pokemon Trading Card Games 2024 Trick or Trade BOOster Bundle"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "sealed",
+   "kind": "booster packs",
+   "state": "out",
+   "other_offers": null,
+   "name": "Pokemon Trading Card Game  V-Union Special Collection Mewtwo/Greninja/Zacian - 4 Booster Packs"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "sealed",
+   "kind": "booster packs",
+   "state": "out",
+   "other_offers": null,
+   "name": "Pokemon Trading Card Games Roaring Moon Exo or Iron Valiant Ex Box  4 Booster Packs - Randomly Selected"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "sealed",
+   "kind": "elite trainer box",
+   "state": "out",
+   "other_offers": 1,
+   "name": "Pokemon Sword & Shield 3- Darkness Ablaze Elite Trainer Box- 8 Booster Packs, 65 Cards, 45 Energy Cards, 6 Counter Dice,"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "sealed",
+   "kind": "booster bundle",
+   "state": "out",
+   "other_offers": null,
+   "name": "Pokemon Trading Card Games SAS12 Silver Tempest Booster Bundle - 6 Booster Packs"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "sealed",
+   "kind": "elite trainer box",
+   "state": "out",
+   "other_offers": 3,
+   "name": "Pokemon SAS7 Evolving Skies Elite Trainer Box"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "sealed",
+   "kind": "elite trainer box",
+   "state": "out",
+   "other_offers": 6,
+   "name": "Pokemon Scarlet & Violet 3 Obsidian Flames Elite Trainer Box"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "sealed",
+   "kind": "booster pack",
+   "state": "out",
+   "other_offers": 1,
+   "name": "Pokemon Trading Card Game-Sun and Moon Booster Pack"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "sealed",
+   "kind": "booster packs",
+   "state": "out",
+   "other_offers": null,
+   "name": "Pokemon TCG: Toxtricity V Box- 1 Foil Card | 4 booster Packs |Oversize Foil of Toxtricity V"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "sealed",
+   "kind": "booster bundle",
+   "state": "out",
+   "other_offers": null,
+   "name": "Pokemon Trading Card Games Scarlet & Violet 7 Stellar Crown Booster Bundle"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "sealed",
+   "kind": "deck",
+   "state": "in",
+   "other_offers": null,
+   "name": "Pokemon Trading Card Game Quaquaval ex |Meowscarada ex Deluxe Battle Deck - Set of 2"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "unsure",
+   "kind": "tin",
+   "state": "out",
+   "other_offers": null,
+   "name": "POKEMON SAS4.5 TIN"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "sealed",
+   "kind": "deck",
+   "state": "out",
+   "other_offers": null,
+   "name": "Pokmon Trading Card Games Pokemon GO V Battle Deck Bundle"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "sealed",
+   "kind": "booster packs",
+   "state": "out",
+   "other_offers": null,
+   "name": "Pokemon Trading Card Games Mimikyu EX Showcase Box - 3 Pokemon TCG booster packs"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "sealed",
+   "kind": "elite trainer box",
+   "state": "out",
+   "other_offers": null,
+   "name": "Pokemon TCG: Sword & Shield: Astral Radiance Elite Trainer Box"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "unsure",
+   "kind": "tin",
+   "state": "out",
+   "other_offers": null,
+   "name": "POKEMON SV4.5 PALDEAN FATES TIN"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "sealed",
+   "kind": "booster bundle",
+   "state": "out",
+   "other_offers": 2,
+   "name": "Pokemon ITM0013068 Sword and Shield Silver Tempest Booster Bundle"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "sealed",
+   "kind": "elite trainer box",
+   "state": "out",
+   "other_offers": 5,
+   "name": "Pokemon Sword & Shield - Shining Fates Elite Trainer Box Trading Card Game"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "sealed",
+   "kind": "booster bundle",
+   "state": "out",
+   "other_offers": 6,
+   "name": "Pokemon Trading Card Games SV4.5 Paldean Fates Booster Bundle"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "sealed",
+   "kind": "v box",
+   "state": "out",
+   "other_offers": null,
+   "name": "Pokemon TCG: Dragonite V Box or Hoopa V Box"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "sealed",
+   "kind": "booster bundle",
+   "state": "out",
+   "other_offers": null,
+   "name": "Pokemon Trading Card Games SV5 Temporal Forces Booster Bundle"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "unsure",
+   "kind": "collection",
+   "state": "out",
+   "other_offers": null,
+   "name": "Pokemon Trading Cards: 25Th Anniversary Celebrations V Collection"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "sealed",
+   "kind": "v box",
+   "state": "out",
+   "other_offers": 1,
+   "name": "Pokemon Trading Card Games: Hisuian Electrode V Box"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "sealed",
+   "kind": "premium collection",
+   "state": "out",
+   "other_offers": null,
+   "name": "Pokemon Trading Card Games Ogepron Ex Premium Collection"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "sealed",
+   "kind": "premium collection",
+   "state": "out",
+   "other_offers": 1,
+   "name": "Pokemon Trading Card Games Combined Powers Premium Collection"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "sealed",
+   "kind": "elite trainer box",
+   "state": "out",
+   "other_offers": 6,
+   "name": "Pokemon Cards: Pokemon Go Wave 1 Elite Trainer Box"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "sealed",
+   "kind": "elite trainer box",
+   "state": "out",
+   "other_offers": 2,
+   "name": "Pokemon SAS6 Chilling Reign Elite Trainer Box"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "sealed",
+   "kind": "elite trainer box",
+   "state": "out",
+   "other_offers": 3,
+   "name": "Pokemon Trading Card Game Mega Evolution Elite Trainer Box"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "unsure",
+   "kind": "collection box",
+   "state": "out",
+   "other_offers": null,
+   "name": "Pokemon Trading Cards: 2022 Spring Arceus V Figure Collection Box"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "sealed",
+   "kind": "booster pack",
+   "state": "out",
+   "other_offers": null,
+   "name": "POKEMON SAS9 BRILLIANT STARS BOOSTER PACK"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "unsure",
+   "kind": "",
+   "state": "out",
+   "other_offers": 1,
+   "name": "Pokemon Trading Card Games: Trainers Toolkit"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "unsure",
+   "kind": "collection box",
+   "state": "out",
+   "other_offers": 2,
+   "name": "Pokemon Scarlet & Violet Paldea Evolved Annihilape EX Collection Box"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "unsure",
+   "kind": "bundle",
+   "state": "out",
+   "other_offers": null,
+   "name": "Pokemon Trading Cards: 2022 Spring Collectors Bundle"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "unsure",
+   "kind": "collection",
+   "state": "out",
+   "other_offers": 2,
+   "name": "Pokemon Trading Card Games Scarlet & Violet 6.5 Kingambit Illustration Collection"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "sealed",
+   "kind": "booster packs",
+   "state": "out",
+   "other_offers": 3,
+   "name": "Pokemon Trading Card Games Charizard Ex Premium Box 6 Tcg Booster Packs"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "sealed",
+   "kind": "booster packs",
+   "state": "out",
+   "other_offers": 2,
+   "name": "Pokemon Trading Card Games 2023 Fall Collector Chest 6 Booster Packs"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "unsure",
+   "kind": "tin",
+   "state": "out",
+   "other_offers": null,
+   "name": "Pokemon Trading Card Game Stacking Tin 2025 Randomly Selected"
+  },
+  {
+   "retailer": "Walmart",
+   "status": "new",
+   "confidence": "sealed",
+   "kind": "elite trainer box",
+   "state": "out",
+   "other_offers": 2,
+   "name": "Pokemon TCG: Sun and Moon Burning Shadows Elite Trainer Box"
+  }
+ ],
+ "listings": [
+  {
+   "retailer": "Walmart",
+   "seller_kind": "marketplace",
+   "name": "Pokemon Trading Card Games Scarlet & Violet—151 Ultra-Premium Collection - 16 Booster Packs from Pokémon Tcg: Scarlet & Violet—151"
+  },
+  {
+   "retailer": "Target",
+   "seller_kind": "retailer",
+   "name": "Pokémon Trading Card Game: Mega Evolution Chaos Rising Elite Trainer Box"
+  },
+  {
+   "retailer": "Walmart",
+   "seller_kind": "retailer",
+   "name": "Pokemon Trading Card Game Scarlet & Violet Prismatic Evolutions Elite Trainer Box"
+  },
+  {
+   "retailer": "Walmart",
+   "seller_kind": "unknown",
+   "name": "Pokemon Trading Card Game: Holiday Calendar 2023"
+  },
+  {
+   "retailer": "Walmart",
+   "seller_kind": "unknown",
+   "name": "Pokemon Trading Card Games Scarlet & Violet 4 Paradox Rift Booster Bundle 6 Booster Packs"
+  },
+  {
+   "retailer": "Walmart",
+   "seller_kind": "unknown",
+   "name": "Pokemon Trading Card Games Scarlet & Violet 8 Surging Sparks Booster Bundle"
+  },
+  {
+   "retailer": "Walmart",
+   "seller_kind": "unknown",
+   "name": "Pokémon Trading Card Games Scarlet & Violet 3.5 151 Booster Bundle"
+  },
+  {
+   "retailer": "Walmart",
+   "seller_kind": "unknown",
+   "name": "Pokemon Trading Card Games Scarlet & Violet 9 Journey Together Booster Bundle"
+  },
+  {
+   "retailer": "Target",
+   "seller_kind": "retailer",
+   "name": "Pokémon Trading Card Game: Mega Zygarde ex Premium Collection"
+  },
+  {
+   "retailer": "Target",
+   "seller_kind": "retailer",
+   "name": "Pokémon Trading Card Game: 30th Celebration Elite Trainer Box"
+  },
+  {
+   "retailer": "Walmart",
+   "seller_kind": "marketplace",
+   "name": "POKEMON MEGA HEROES MINI TINS"
+  },
+  {
+   "retailer": "Walmart",
+   "seller_kind": "marketplace",
+   "name": "Pokemon Trading Card Games Mega Mini Tin Venusaur"
+  },
+  {
+   "retailer": "Pokemon Center",
+   "seller_kind": "unknown",
+   "name": "Pokémon TCG: Mega Evolution-Pitch Black Booster Bundle (6 Packs)"
+  },
+  {
+   "retailer": "Walmart",
+   "seller_kind": "marketplace",
+   "name": "Pokemon Trading Card Games Mega Evolution 5 Pitch Black Booster Bundle"
+  },
+  {
+   "retailer": "Walmart",
+   "seller_kind": "unknown",
+   "name": "Pokemon Trading Card Games Paldea Adventure Chest"
+  },
+  {
+   "retailer": "Walmart",
+   "seller_kind": "unknown",
+   "name": "Pokemon Trading Card Games Scarlet & Violet 1 Booster Bundle - 6 booster packs"
+  },
+  {
+   "retailer": "Walmart",
+   "seller_kind": "marketplace",
+   "name": "Pokemon Trading Card Games Mega Heroes Mini Tin Lucario"
+  },
+  {
+   "retailer": "Pokemon Center",
+   "seller_kind": "unknown",
+   "name": "Pokémon TCG: Oddish, Gloom & Vileplume Cards with 2 Booster Packs & Coin"
+  },
+  {
+   "retailer": "Walmart",
+   "seller_kind": "marketplace",
+   "name": "POKEMON SAS12.5 CROWN ZENITH TIN - ONE AT RANDOM"
+  },
+  {
+   "retailer": "Walmart",
+   "seller_kind": "marketplace",
+   "name": "Pokemon Trading Card Games Mega Heroes Tin Latias"
+  },
+  {
+   "retailer": "Walmart",
+   "seller_kind": "marketplace",
+   "name": "Pokemon Trading Card Games Mege Heroes Tin Kangakhn"
+  },
+  {
+   "retailer": "Walmart",
+   "seller_kind": "marketplace",
+   "name": "Pokemon Trading Card Games SV4.5 Paldean Fates Tin Iron Treads"
+  },
+  {
+   "retailer": "Walmart",
+   "seller_kind": "marketplace",
+   "name": "Pokemon 2024 Back to School Pencil Tin (Includes 2 Booster Packs!)"
+  },
+  {
+   "retailer": "Walmart",
+   "seller_kind": "retailer",
+   "name": "POKEMON 25 WM D82D AE PC IRON LEAVES TIN"
+  },
+  {
+   "retailer": "Walmart",
+   "seller_kind": "retailer",
+   "name": "POKEMON 25 WM D82D AE PC WALKING WAKE TIN"
+  },
+  {
+   "retailer": "Walmart",
+   "seller_kind": "retailer",
+   "name": "POKEMON 25 WM D82D AE PD GOUGING FIRE TIN"
+  },
+  {
+   "retailer": "Walmart",
+   "seller_kind": "marketplace",
+   "name": "POKEMON 25 WM D82D AE PD IRON BOULDER TIN"
+  },
+  {
+   "retailer": "Walmart",
+   "seller_kind": "marketplace",
+   "name": "POKEMON 25 WM D82D AE PD IRON CROWN TIN"
+  },
+  {
+   "retailer": "Walmart",
+   "seller_kind": "retailer",
+   "name": "POKEMON 25 WM D82D AE PD RAGING BOLT TIN"
+  },
+  {
+   "retailer": "Walmart",
+   "seller_kind": "marketplace",
+   "name": "POKEMON AZURE LEGENDS TIN"
+  },
+  {
+   "retailer": "Walmart",
+   "seller_kind": "marketplace",
+   "name": "POKEMON HIDDEN POTENTIAL TIN (1 X RANDOM TIN)"
+  },
+  {
+   "retailer": "Pokemon Center",
+   "seller_kind": "retailer",
+   "name": "Pokémon TCG: 30th Celebration Knock Out Collection"
+  },
+  {
+   "retailer": "Pokemon Center",
+   "seller_kind": "retailer",
+   "name": "Pokémon TCG: 30th Celebration Tech Sticker Collection (Alolan Exeggutor)"
+  },
+  {
+   "retailer": "Pokemon Center",
+   "seller_kind": "retailer",
+   "name": "Pokémon TCG: Mega Evolution-Pitch Black Pokémon Center Elite Trainer Box"
+  },
+  {
+   "retailer": "Target",
+   "seller_kind": "retailer",
+   "name": "Test pens"
+  },
+  {
+   "retailer": "Target",
+   "seller_kind": "retailer",
+   "name": "Pokémon Trading Card Game: Mega Evolution Pitch Black Booster Bundle"
+  },
+  {
+   "retailer": "Target",
+   "seller_kind": "retailer",
+   "name": "Pokémon Trading Card Game: 30th Celebration Greninja ex Box"
+  },
+  {
+   "retailer": "Target",
+   "seller_kind": "retailer",
+   "name": "Pok 233 Mon Trading Card Game Mega Evolution Chaos Rising Booster Bundle"
+  },
+  {
+   "retailer": "Target",
+   "seller_kind": "retailer",
+   "name": "Pok 233 Mon sv 8 5 Prismatic Evolutions Super Premium Collection"
+  },
+  {
+   "retailer": "Walmart",
+   "seller_kind": "unknown",
+   "name": "19385368696"
+  },
+  {
+   "retailer": "Walmart",
+   "seller_kind": "unknown",
+   "name": "Pokemon Mega Evolution Booster Box"
+  },
+  {
+   "retailer": "Walmart",
+   "seller_kind": "marketplace",
+   "name": "Pokemon Lumiose City Mini Tin (1 Tin at Random)"
+  },
+  {
+   "retailer": "Walmart",
+   "seller_kind": "marketplace",
+   "name": "POKEMON ME2.5 ASCENDED HEROES MINI TIN"
+  },
+  {
+   "retailer": "Target",
+   "seller_kind": "retailer",
+   "name": "Pokémon Trading Card Game: 30th Celebration Sylveon ex Box"
+  },
+  {
+   "retailer": "Pokemon Center",
+   "seller_kind": "retailer",
+   "name": "Pokémon TCG: 30th Celebration Tech Sticker Collection (Lucario)"
+  },
+  {
+   "retailer": "Pokemon Center",
+   "seller_kind": "retailer",
+   "name": "Pokémon TCG: 30th Celebration Booster Bundle (6 Packs)"
+  },
+  {
+   "retailer": "Walmart",
+   "seller_kind": "marketplace",
+   "name": "Pokemon Prismatic Evolutions Mini Tins"
+  },
+  {
+   "retailer": "Target",
+   "seller_kind": "retailer",
+   "name": "Pok Mon Destined Rivals Elite Trainer Box Tcg Official Expansion Pack"
+  },
+  {
+   "retailer": "Pokemon Center",
+   "seller_kind": "retailer",
+   "name": "Pokémon TCG: 30th Celebration Pokémon Center Elite Trainer Box"
+  },
+  {
+   "retailer": "Pokemon Center",
+   "seller_kind": "retailer",
+   "name": "Pokémon TCG: 30th Celebration Mini Tins (10-Pack)"
+  },
+  {
+   "retailer": "Pokemon Center",
+   "seller_kind": "retailer",
+   "name": "Pokémon TCG: Mega Evolution-Pitch Black Booster Display Box (36 Packs)"
+  },
+  {
+   "retailer": "Target",
+   "seller_kind": "retailer",
+   "name": "Pokémon Trading Card Game: 30th Celebration Poster Collection"
+  },
+  {
+   "retailer": "Target",
+   "seller_kind": "retailer",
+   "name": "Pokemon Trading Card Game: 30th Celebration Tin (Sylveon or Greninja)- Styles May Vary"
+  },
+  {
+   "retailer": "Target",
+   "seller_kind": "retailer",
+   "name": "Pokémon Trading Card Game: 30th Celebration Knock Out Collection"
+  },
+  {
+   "retailer": "Target",
+   "seller_kind": "retailer",
+   "name": "Pokémon Trading Card Game: 30th Celebration Tech Sticker Collection (Lucario or Alolan Exeggutor)- Styles May Vary"
+  },
+  {
+   "retailer": "Target",
+   "seller_kind": "retailer",
+   "name": "Pokémon Trading Card Game: First Partner Illustration CollectionSeries 2"
+  },
+  {
+   "retailer": "Walmart",
+   "seller_kind": "unknown",
+   "name": "Pokemon Scarlet and Violet 8.5 Prismatic Evolutions 2-Pack Blister"
+  },
+  {
+   "retailer": "Walmart",
+   "seller_kind": "unknown",
+   "name": "Pokemon Trading Card Games Bloodmoon Ursaluna Ex Box"
+  },
+  {
+   "retailer": "Walmart",
+   "seller_kind": "unknown",
+   "name": "Pokemon Trading Card Game Scarlet & Violet 10 Destined Rivals Booster Bundle"
+  },
+  {
+   "retailer": "Walmart",
+   "seller_kind": "unknown",
+   "name": "Pokemon Trading Card Games Scarlet & Violet 3.5 151 Collection Zapdos Ex - 4 Pokemon Tgc Scarlet & Violet151 Booster Packs"
+  },
+  {
+   "retailer": "Walmart",
+   "seller_kind": "unknown",
+   "name": "Pokemon Trading Card Games Scarlet & Violet 3.5 151 Collection Zapdos Ex - 4 Pokemon Tgc Scarlet & Violet151 Booster Packs"
+  }
+ ]
+}

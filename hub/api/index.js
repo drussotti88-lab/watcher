@@ -291,6 +291,98 @@ function dedupe(items) {
   return out;
 }
 
+// src/era.ts
+function fold2(s) {
+  return String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+}
+var NOISE = new Set(
+  `pokemon pokemons pokmon tcg trading card cards game games the and with for from
+   elite trainer box boxes booster boosters bundle bundles display pack packs sleeved
+   premium ultra super collection collections tin tins mini blister blisters deck decks
+   battle build vstar vmax set sets special surprise gift poster sticker stickers tech
+   knock out toolkit chest calendar holiday advent styles may vary random randomly
+   selected one at new sealed official expansion item itm plus edition series wave
+   includes foil oversize promo online exclusive pencil school back hanger showcase
+   english deluxe easy play pieces figure cards- pks`.split(/\s+/).filter(Boolean)
+);
+var SERIES = [
+  ["scarlet", "violet"],
+  ["sword", "shield"],
+  ["sun", "moon"],
+  ["black", "white"],
+  ["diamond", "pearl"],
+  ["mega", "evolution"]
+];
+var CODE = /^(sas|sv|sm|xy|bw|swsh|me)[0-9]*(\.[0-9]+)?$/;
+function distinctiveWords(title) {
+  let hay = ` ${fold2(title).replace(/[^a-z0-9. ]+/g, " ").replace(/\s+/g, " ")} `;
+  for (const [a, b] of SERIES) hay = hay.split(` ${a} ${b} `).join(" ");
+  const seen = /* @__PURE__ */ new Set();
+  for (const raw of hay.split(" ")) {
+    const w = raw.replace(/^\.+|\.+$/g, "");
+    if (!w || NOISE.has(w) || CODE.test(w)) continue;
+    if (/^\d+(\.\d+)?$/.test(w)) continue;
+    if (w.length < 3) continue;
+    seen.add(w);
+  }
+  return [...seen];
+}
+var MIN_CORPUS = 6;
+function currentCatalogue(titles) {
+  const out = [];
+  for (const t of titles) {
+    const ws = distinctiveWords(t);
+    if (ws.length > 0) out.push(ws);
+  }
+  return out;
+}
+function eraOf(title, catalogue) {
+  if (catalogue.length < MIN_CORPUS) {
+    return {
+      era: "unknown",
+      why: `only ${catalogue.length} first-party products to compare against \u2014 not enough to judge`
+    };
+  }
+  const ws = distinctiveWords(title);
+  if (ws.length === 0) {
+    return { era: "unknown", why: "the title is all form and no name" };
+  }
+  let best = null;
+  for (const entry of catalogue) {
+    const shared = ws.filter((w) => entry.includes(w));
+    const enough = shared.length >= 2 || shared.length === 1 && entry.length === 1;
+    if (!enough) continue;
+    if (!best || shared.length > best.shared.length) best = { shared, against: entry };
+  }
+  if (best) {
+    return {
+      era: "current",
+      why: `${best.shared.join(" + ")} \u2014 also in the first-party catalogue`
+    };
+  }
+  return {
+    era: "old",
+    why: `nothing on sale first-party shares its name (${ws.slice(0, 6).join(" ")})`
+  };
+}
+var RETIRED = /\b(sword\s*(&|and)?\s*shield|swsh\d|sas\d|sun\s*(&|and)?\s*moon|sm\d+\b|xy\b|xy\d|black\s*(&|and)\s*white|bw\d|diamond\s*(&|and)\s*pearl|call of legends|heartgold|soulsilver)/;
+function namesRetiredSeries(title) {
+  return RETIRED.test(fold2(title));
+}
+function offerOf(row) {
+  if (row.retailer !== "Walmart") return "not-walmart";
+  if (row.state === "in") return "selling";
+  if ((row.otherOffers ?? 0) > 0) return "resellers-hold-it";
+  return "nobody-selling";
+}
+function band(row) {
+  if (row.state === "in" || row.isPreOrder) return 0;
+  const offer = offerOf(row);
+  if (row.era === "old") return 4;
+  if (row.era === "unknown") return 3;
+  return offer === "resellers-hold-it" ? 2 : 1;
+}
+
 // src/store.ts
 function toPrice(v) {
   if (v === null || v === void 0 || v === "") return null;
@@ -1866,7 +1958,9 @@ function toDiscovery(r) {
     orderLimit: r.order_limit === null || r.order_limit === void 0 ? null : Number(r.order_limit),
     availableQuantity: r.available_quantity === null || r.available_quantity === void 0 ? null : Number(r.available_quantity),
     signal: String(r.signal ?? ""),
-    otherOffers: r.other_offers === null || r.other_offers === void 0 ? null : Number(r.other_offers)
+    otherOffers: r.other_offers === null || r.other_offers === void 0 ? null : Number(r.other_offers),
+    era: String(r.era ?? "") || "unknown",
+    eraWhy: String(r.era_why ?? "")
   };
 }
 async function discoveriesToReview(db2, userId, limit = 200) {
@@ -1881,7 +1975,54 @@ async function discoveriesToReview(db2, userId, limit = 200) {
       LIMIT $1`,
     [Math.min(Math.max(limit, 1), 500)]
   );
-  return rows.map(toDiscovery);
+  const found = rows.map(toDiscovery);
+  return found.map((d) => ({ d, b: band(d) })).sort((x, y) => x.b - y.b || (x.d.firstSeenAt < y.d.firstSeenAt ? 1 : -1)).map((x) => x.d);
+}
+async function firstPartyCatalogue(db2) {
+  const rows = await db2.query(
+    `SELECT DISTINCT p.name
+       FROM listings l
+       JOIN products p ON p.key = l.product_key
+      WHERE l.retailer <> 'Walmart'
+        AND l.seller_kind <> 'marketplace'
+        AND p.name <> ''
+      UNION
+     SELECT DISTINCT d.name
+       FROM discoveries d
+      WHERE d.retailer <> 'Walmart'
+        AND d.status = 'kept'
+        AND d.name <> ''`
+  );
+  return currentCatalogue(rows.map((r) => r.name));
+}
+async function rerankDiscoveries(db2, userId, { retire = true } = {}) {
+  if (!await canWriteCatalogue(db2, userId)) {
+    throw new Error("this account may not curate the catalogue");
+  }
+  const catalogue = await firstPartyCatalogue(db2);
+  const rows = await db2.query(
+    `SELECT id, name, status FROM discoveries`
+  );
+  const statements = [];
+  let retired = 0;
+  for (const row of rows) {
+    const verdict = eraOf(row.name, catalogue);
+    statements.push({
+      text: `UPDATE discoveries SET era = $2, era_why = $3 WHERE id = $1`,
+      params: [row.id, verdict.era, verdict.why.slice(0, 300)]
+    });
+    if (retire && row.status === "new" && namesRetiredSeries(row.name)) {
+      retired += 1;
+      statements.push({
+        text: `UPDATE discoveries
+                  SET status = 'forgotten', decided_at = now()
+                WHERE id = $1 AND status = 'new'`,
+        params: [row.id]
+      });
+    }
+  }
+  if (statements.length > 0) await db2.batch(statements);
+  return { ranked: rows.length, retired, catalogue: catalogue.length };
 }
 async function getDiscovery(db2, userId, id) {
   const rows = await db2.query(
@@ -7308,18 +7449,30 @@ function overTypical(kind, price) {
   return Math.round((price / typical) * 100) / 100;
 }
 
-/** Which band a find is in. Lower is more worth your attention. */
+/**
+ * Which band a find is in. Lower is more worth your attention.
+ *
+ * Band 3 used to be the signal field reading "recent", and every out-of-stock
+ * Walmart row arrives carrying exactly that word \u2014 the sweep set it on
+ * everything it could not call buyable. So Walmart's entire back catalogue,
+ * sets from 2016 onwards, sat in the third band above the fold, and 76 finds
+ * went unreviewed because the top of the list could not be trusted. The signal
+ * field is not consulted here any more; the era and the reseller count are,
+ * and both are facts rather than a default.
+ */
 function findRank(d) {
   if (d.isPreOrder) return 0;              // takes money now \u2014 decide deliberately
   if (d.state === 'in') return 1;          // buyable this minute
   if (d.releaseDate && daysUntil(d.releaseDate) > 0) return 2;  // dated, ahead
-  if (d.signal === 'recent') return 3;     // sold out recently, may come back
-  if (d.confidence === 'unsure') return 5; // needs a person, but not urgently
-  return 4;
+  if (d.era === 'old') return 6;           // nobody prints it \u2014 real, not news
+  if (d.era === 'unknown' || d.confidence === 'unsure') return 5;
+  // Current product. The retailer owning it while NOBODY sells it is the best
+  // thing on this page: that is the shape a restock happens to.
+  return d.otherOffers > 0 ? 4 : 3;
 }
 
 /** Everything below this band is back-catalogue: real, remembered, not news. */
-const DORMANT_FROM = 4;
+const DORMANT_FROM = 6;
 
 function findMatches(d) {
   const f = FIND_FILTER;
@@ -8879,6 +9032,27 @@ function renderFinds() {
 
     if (d.confidence === 'unsure') {
       tags.appendChild(el('span', 'pill s-unknown', 'not sure \u2014 your call'));
+    }
+    /*
+     * \u2500\u2500 No longer printed \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+     *
+     * The fact that was missing entirely, and the one that made this page
+     * hard to trust. Walmart's first-party facet returns its whole catalogue:
+     * Crown Zenith, Silver Tempest, Chilling Reign, XY Fates Collide. Every
+     * one a genuine sealed Pok\xE9mon product Walmart's catalogue owns; not one
+     * of them coming back to a shelf.
+     *
+     * Said as a pill and not as a filter, on purpose. The verdict comes from
+     * what Target and Pok\xE9mon Center are selling TODAY, and a set that is hot
+     * and sold out first-party everywhere looks exactly like a dead one \u2014 so
+     * this sorts the list and never empties it. The title attribute carries
+     * the reasoning, because a machine's guess you cannot interrogate is
+     * worse than no guess.
+     */
+    if (d.era === 'old') {
+      const pill = el('span', 'pill s-out', 'no longer printed');
+      if (d.eraWhy) pill.title = d.eraWhy;
+      tags.appendChild(pill);
     }
     if (d.alreadyHave) {
       tags.appendChild(el('span', 'pill info', 'already on your list'));
@@ -10999,6 +11173,26 @@ function createHandler(db2, env2) {
         await attachIdentity(db2, userId, sourceId, source.retailer, item);
       }
       const complete = body2.final !== false;
+      if (complete) {
+        try {
+          const ranked = await rerankDiscoveries(db2, userId);
+          if (ranked.retired > 0) {
+            await logEvent(
+              db2,
+              userId,
+              "info",
+              `retired ${ranked.retired} finds from series nobody prints any more`
+            );
+          }
+        } catch (err) {
+          await logEvent(
+            db2,
+            userId,
+            "warn",
+            `could not rank the finds: ${err.message}`
+          );
+        }
+      }
       const left = Number(body2.remaining);
       const status = complete ? isFirstSweep ? `seeded ${fresh.length} via Phantom` : `Phantom: ${fresh.length} new` : `sweeping \u2014 ${Number.isFinite(left) && left > 0 ? left : "?"} to go`;
       await finishSweep(db2, userId, sourceId, status, clean.length, true, 0, complete);

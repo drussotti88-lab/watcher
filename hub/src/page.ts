@@ -4210,18 +4210,30 @@ function overTypical(kind, price) {
   return Math.round((price / typical) * 100) / 100;
 }
 
-/** Which band a find is in. Lower is more worth your attention. */
+/**
+ * Which band a find is in. Lower is more worth your attention.
+ *
+ * Band 3 used to be the signal field reading "recent", and every out-of-stock
+ * Walmart row arrives carrying exactly that word — the sweep set it on
+ * everything it could not call buyable. So Walmart's entire back catalogue,
+ * sets from 2016 onwards, sat in the third band above the fold, and 76 finds
+ * went unreviewed because the top of the list could not be trusted. The signal
+ * field is not consulted here any more; the era and the reseller count are,
+ * and both are facts rather than a default.
+ */
 function findRank(d) {
   if (d.isPreOrder) return 0;              // takes money now — decide deliberately
   if (d.state === 'in') return 1;          // buyable this minute
   if (d.releaseDate && daysUntil(d.releaseDate) > 0) return 2;  // dated, ahead
-  if (d.signal === 'recent') return 3;     // sold out recently, may come back
-  if (d.confidence === 'unsure') return 5; // needs a person, but not urgently
-  return 4;
+  if (d.era === 'old') return 6;           // nobody prints it — real, not news
+  if (d.era === 'unknown' || d.confidence === 'unsure') return 5;
+  // Current product. The retailer owning it while NOBODY sells it is the best
+  // thing on this page: that is the shape a restock happens to.
+  return d.otherOffers > 0 ? 4 : 3;
 }
 
 /** Everything below this band is back-catalogue: real, remembered, not news. */
-const DORMANT_FROM = 4;
+const DORMANT_FROM = 6;
 
 function findMatches(d) {
   const f = FIND_FILTER;
@@ -5781,6 +5793,27 @@ function renderFinds() {
 
     if (d.confidence === 'unsure') {
       tags.appendChild(el('span', 'pill s-unknown', 'not sure — your call'));
+    }
+    /*
+     * ── No longer printed ────────────────────────────────────────────────
+     *
+     * The fact that was missing entirely, and the one that made this page
+     * hard to trust. Walmart's first-party facet returns its whole catalogue:
+     * Crown Zenith, Silver Tempest, Chilling Reign, XY Fates Collide. Every
+     * one a genuine sealed Pokémon product Walmart's catalogue owns; not one
+     * of them coming back to a shelf.
+     *
+     * Said as a pill and not as a filter, on purpose. The verdict comes from
+     * what Target and Pokémon Center are selling TODAY, and a set that is hot
+     * and sold out first-party everywhere looks exactly like a dead one — so
+     * this sorts the list and never empties it. The title attribute carries
+     * the reasoning, because a machine's guess you cannot interrogate is
+     * worse than no guess.
+     */
+    if (d.era === 'old') {
+      const pill = el('span', 'pill s-out', 'no longer printed');
+      if (d.eraWhy) pill.title = d.eraWhy;
+      tags.appendChild(pill);
     }
     if (d.alreadyHave) {
       tags.appendChild(el('span', 'pill info', 'already on your list'));

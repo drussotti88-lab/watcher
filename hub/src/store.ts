@@ -23,6 +23,7 @@
 import type { Sql, Statement } from './db.ts';
 import type { Discovered, SourceRow, SourceConfig } from './types.ts';
 import { productKey } from './parsers/identify.ts';
+import { currentCatalogue, eraOf, band, namesRetiredSeries, type Era } from './era.ts';
 
 /** Postgres hands NUMERIC back as a string. Never let that leak upwards. */
 function toPrice(v: unknown): number | null {
@@ -3136,6 +3137,9 @@ export interface DiscoveryRow {
   signal: string;
   /** Other sellers with an offer on the same listing. Null when unknown. */
   otherOffers: number | null;
+  /** Is anyone still printing this? Ranks the review list; never deletes. */
+  era: Era;
+  eraWhy: string;
 }
 
 function toDiscovery(r: Record<string, unknown>): DiscoveryRow {
@@ -3165,6 +3169,8 @@ function toDiscovery(r: Record<string, unknown>): DiscoveryRow {
     signal: String(r.signal ?? ''),
     otherOffers:
       r.other_offers === null || r.other_offers === undefined ? null : Number(r.other_offers),
+    era: (String(r.era ?? '') || 'unknown') as Era,
+    eraWhy: String(r.era_why ?? ''),
   };
 }
 
@@ -3191,7 +3197,104 @@ export async function discoveriesToReview(
       LIMIT $1`,
     [Math.min(Math.max(limit, 1), 500)],
   );
-  return rows.map(toDiscovery);
+
+  // ── Newest first was the wrong first ──────────────────────────────────────
+  //
+  // Walmart's first-party facet returns its whole catalogue, so "newest found"
+  // put a 2016 Elite Trainer Box above a product going on sale next week, and
+  // 76 finds went unreviewed because the top of the list could not be trusted.
+  // `band` in era.ts states the order in words; sorting happens here rather
+  // than in an ORDER BY nobody can read, and the page groups on the same
+  // number so the list and its headings can never disagree.
+  const found = rows.map(toDiscovery);
+  return found
+    .map((d) => ({ d, b: band(d) }))
+    .sort((x, y) => x.b - y.b || (x.d.firstSeenAt < y.d.firstSeenAt ? 1 : -1))
+    .map((x) => x.d);
+}
+
+/**
+ * What Target and Pokémon Center are listing first-party, as era.ts wants it.
+ *
+ * These two shops carry current product and essentially nothing else, so their
+ * catalogue IS the definition of what is still being printed — and it updates
+ * itself the day a new set lands, which a hand-kept list of sets would not.
+ *
+ * Walmart is excluded on purpose. It is the shop being judged, and letting its
+ * archive vote would make every set from 2016 onwards current by construction.
+ */
+export async function firstPartyCatalogue(db: Sql): Promise<string[][]> {
+  const rows = await db.query<{ name: string }>(
+    `SELECT DISTINCT p.name
+       FROM listings l
+       JOIN products p ON p.key = l.product_key
+      WHERE l.retailer <> 'Walmart'
+        AND l.seller_kind <> 'marketplace'
+        AND p.name <> ''
+      UNION
+     SELECT DISTINCT d.name
+       FROM discoveries d
+      WHERE d.retailer <> 'Walmart'
+        AND d.status = 'kept'
+        AND d.name <> ''`,
+  );
+  return currentCatalogue(rows.map((r) => r.name));
+}
+
+/**
+ * Work out the era of every find again, and retire the ones nobody prints.
+ *
+ * Run after a sweep and on demand. Two separate acts, deliberately kept apart:
+ *
+ *   - Every row gets an era, which only ever changes where it sits in the
+ *     list. Re-derived each time rather than stored once, because the
+ *     catalogue moves: the day a set arrives at Target, Walmart's copies of it
+ *     stop being old, and nothing should need a person to notice that.
+ *
+ *   - Only `namesRetiredSeries` forgets anything, and only rows still waiting
+ *     on a decision. Sword & Shield, Sun & Moon, XY and Black & White stopped
+ *     being printed years ago; that claim needs no catalogue and cannot rot.
+ *     The wider rule — old era plus resellers holding the buy box — was
+ *     measured against the real table first and would have discarded sixteen
+ *     of the thirty-five finds Roberto had kept, Prismatic Evolutions and
+ *     Destined Rivals among them. It is a ranking signal for that reason.
+ *
+ * Forgetting is not deleting: the row stays, which is what stops the next
+ * sweep offering the same thing again as news.
+ */
+export async function rerankDiscoveries(
+  db: Sql,
+  userId: number,
+  { retire = true }: { retire?: boolean } = {},
+): Promise<{ ranked: number; retired: number; catalogue: number }> {
+  if (!(await canWriteCatalogue(db, userId))) {
+    throw new Error('this account may not curate the catalogue');
+  }
+  const catalogue = await firstPartyCatalogue(db);
+  const rows = await db.query<{ id: number; name: string; status: string }>(
+    `SELECT id, name, status FROM discoveries`,
+  );
+
+  const statements: Statement[] = [];
+  let retired = 0;
+  for (const row of rows) {
+    const verdict = eraOf(row.name, catalogue);
+    statements.push({
+      text: `UPDATE discoveries SET era = $2, era_why = $3 WHERE id = $1`,
+      params: [row.id, verdict.era, verdict.why.slice(0, 300)],
+    });
+    if (retire && row.status === 'new' && namesRetiredSeries(row.name)) {
+      retired += 1;
+      statements.push({
+        text: `UPDATE discoveries
+                  SET status = 'forgotten', decided_at = now()
+                WHERE id = $1 AND status = 'new'`,
+        params: [row.id],
+      });
+    }
+  }
+  if (statements.length > 0) await db.batch(statements);
+  return { ranked: rows.length, retired, catalogue: catalogue.length };
 }
 
 export async function getDiscovery(

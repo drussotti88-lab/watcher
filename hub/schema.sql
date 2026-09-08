@@ -966,3 +966,19 @@ CREATE TABLE IF NOT EXISTS reports (
 );
 
 CREATE INDEX IF NOT EXISTS reports_recent_idx ON reports (at DESC);
+
+-- ---------------------------------------------------------------------------
+-- Discovery: is anyone still printing this?
+--
+-- 8 Sep 2026. Discovery held 136 Walmart finds, 76 of them never reviewed. The
+-- classifier had every one of them right — they were correctly identified
+-- sealed Pokémon product sold by Walmart. They were simply dead: sets from
+-- 2016 to 2024 that Walmart's catalogue still owns and will never restock.
+--
+-- `era` is the verdict from src/era.ts, derived from what Target and Pokémon
+-- Center are listing first-party right now, and `era_why` is the sentence that
+-- explains it on the review card. It ranks the list; it never deletes from it,
+-- because the corpus cannot see a set that is hot and sold out everywhere.
+-- ---------------------------------------------------------------------------
+ALTER TABLE discoveries ADD COLUMN IF NOT EXISTS era TEXT NOT NULL DEFAULT '';
+ALTER TABLE discoveries ADD COLUMN IF NOT EXISTS era_why TEXT NOT NULL DEFAULT '';

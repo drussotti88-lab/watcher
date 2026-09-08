@@ -31,6 +31,7 @@ import {
   readWalmartSearch,
   walmartMeta,
   soldByWalmart,
+  walmartOffer,
   nextData as walmartNextData,
   type WalmartRow,
 } from './readers/walmart-search.ts';
@@ -626,7 +627,25 @@ export function walmartCandidates(rows: WalmartRow[], foundBy = ''): Candidate[]
       otherOffers: row.otherOffers,
       // The one retailer of the three that states it outright.
       isPreOrder: row.isPreOrder,
-      signal: row.isPreOrder ? 'scheduled' : row.state === 'in' ? 'buyable' : 'recent',
+      // ── Say which of the three things this actually is ──────────────────
+      //
+      // walmartOffer() has named these correctly since 2 Sep and this
+      // function never called it: every out-of-stock row went to the Hub as
+      // 'recent', which was a lie about most of them. Walmart's first-party
+      // facet returns the whole catalogue back to 2016, so 'recent' was doing
+      // no work except sorting an archive above a release.
+      //
+      // 'resale' is not 'this is a reseller listing' — Walmart owns it, and
+      // soldByWalmart() above has already proved that. It is 'the product
+      // page will not look like this card', which is the fact a person
+      // clicking through needs.
+      signal: row.isPreOrder
+        ? 'scheduled'
+        : walmartOffer(row) === 'walmart-selling'
+          ? 'buyable'
+          : walmartOffer(row) === 'resellers-hold-it'
+            ? 'resale'
+            : 'waiting',
       row: {
         tcin: row.usItemId,
         name: row.name,
