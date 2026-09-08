@@ -982,3 +982,33 @@ CREATE INDEX IF NOT EXISTS reports_recent_idx ON reports (at DESC);
 -- ---------------------------------------------------------------------------
 ALTER TABLE discoveries ADD COLUMN IF NOT EXISTS era TEXT NOT NULL DEFAULT '';
 ALTER TABLE discoveries ADD COLUMN IF NOT EXISTS era_why TEXT NOT NULL DEFAULT '';
+
+-- ---------------------------------------------------------------------------
+-- Who decided, and the fact that a decision can be undone
+--
+-- 8 Sep 2026. Roberto, on being shown that his own past keeps and forgets had
+-- been used to validate a filter: "i dont neccesarily think that what i have
+-- kept and what i have chosen forget on has full authority to decide what is
+-- right and what is wrong. i may have made mistakes as i was unsure in the
+-- beginning."
+--
+-- He was right, and the code had a worse version of the same problem: nothing
+-- could set a row back to 'new'. The review list reads status='new' only, so
+-- every forget — his, made in a week when nobody knew what this catalogue held,
+-- and the machine's — was permanent and invisible. A system that asks a person
+-- to make fast judgements has no business making them irreversible.
+--
+-- `decided_by` says whose call it was, so the machine's can be reviewed as a
+-- batch without disturbing his, and either can be put back.
+-- ---------------------------------------------------------------------------
+ALTER TABLE discoveries ADD COLUMN IF NOT EXISTS decided_by TEXT NOT NULL DEFAULT '';
+
+-- One-off, and exact rather than guessed: the ranking pass of 8 Sep retired
+-- twenty rows in a single minute, and every other decision on this table was
+-- made by hand on 29 Aug and 3 Sep.
+UPDATE discoveries
+   SET decided_by = CASE
+     WHEN date_trunc('minute', decided_at) = TIMESTAMPTZ '2026-09-08 03:03:00+00' THEN 'machine'
+     ELSE 'you'
+   END
+ WHERE status <> 'new' AND decided_by = '';

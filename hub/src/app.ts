@@ -334,7 +334,7 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
 
     /** Everything the page renders, in one request. */
     if (request.method === 'GET' && path === '/api/dashboard') {
-      const [missions, runs, changes, products, listings, settings, discoveries] =
+      const [missions, runs, changes, products, listings, settings, discoveries, forgotten] =
         await Promise.all([
           store.listMissions(db, userId),
           store.recentRuns(db, userId, 40),
@@ -343,6 +343,7 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
           store.listListings(db, userId),
           store.getSettings(db, userId),
           store.discoveriesToReview(db, userId),
+          store.forgottenDiscoveries(db, userId),
         ]);
       const sweep = await store.sweepState(db, userId, SWEEP_SOURCE, settings.sweepEveryHours);
       // Whose dashboard this is. Sent on every load rather than stored in the
@@ -416,6 +417,9 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       }));
       return json({
         missions, runs, changes, products, listings, settings, discoveries, sweep, now, you,
+        // What was decided against, and by whom. Small, and a review list you
+        // cannot see the other side of is half a review list.
+        forgotten,
         authorisations, committed, queues, stockLoads, acquisitions, requests, canCurate, canArm,
         capabilities: shopStatus, agentSeenAt, me, readiness,
         // Whether alerts have anywhere to go. A boolean, never the URL.
@@ -1019,6 +1023,31 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       if (!Number.isInteger(id)) return json({ error: 'bad discovery id' }, 400);
       try {
         return json({ kept: await store.keepDiscovery(db, userId, id) });
+      } catch (err) {
+        return json({ error: (err as Error).message }, 400);
+      }
+    }
+
+    /**
+     * Undo a decline.
+     *
+     * Not the opposite of Keep — that would create a product and a listing.
+     * This only puts the row back in front of a person, so it is judged again
+     * with whatever is known now. Roberto, 8 Sep: "i may have made mistakes as
+     * i was unsure in the beginning." Nothing here should have been permanent.
+     */
+    if (request.method === 'POST' && path.startsWith('/api/discoveries/') && path.endsWith('/restore')) {
+      const id = Number(path.split('/')[3]);
+      if (!Number.isInteger(id)) return json({ error: 'bad discovery id' }, 400);
+      const done = await store.restoreDiscovery(db, userId, id);
+      if (!done) return json({ error: 'no such discovery, or it was not forgotten' }, 404);
+      return json({ restored: id });
+    }
+
+    /** Everything a RULE decided, back in the list. Never a person's calls. */
+    if (request.method === 'POST' && path === '/api/discoveries/restore-machine') {
+      try {
+        return json({ restored: await store.restoreMachineDecisions(db, userId) });
       } catch (err) {
         return json({ error: (err as Error).message }, 400);
       }

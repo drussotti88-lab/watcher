@@ -3,9 +3,26 @@
  *
  * The fixture is not invented: it is Roberto's real discovery table as it
  * stood on 8 Sep 2026 — 157 finds, 136 of them Walmart, with the decision he
- * actually made on each one. So every claim below is measured against the
- * catalogue that produced the complaint, and the two tests that matter most
- * are the ones about what this must NOT do.
+ * actually made on each one.
+ *
+ * ── What his decisions are evidence OF ──────────────────────────────────────
+ *
+ * Not correctness. He said so himself the day this shipped: "i dont
+ * neccesarily think that what i have kept and what i have chosen forget on has
+ * full authority to decide what is right and what is wrong. i may have made
+ * mistakes as i was unsure in the beginning." He is right, and 35 keeps
+ * against 25 forgets made in a week of learning what this catalogue even held
+ * is a weak thing to call ground truth.
+ *
+ * So they are used here for the one thing they genuinely establish: **BLAST
+ * RADIUS**. "This rule would have discarded sixteen finds he had chosen to
+ * keep" is a fact about how much a rule destroys, and it is true whether or
+ * not each of those sixteen was the right call. A rule that big had better be
+ * standing on something better than a heuristic.
+ *
+ * Where a rule needs to be justified as RIGHT, the justification is a fact
+ * about the world instead — Pokémon stopped printing Sword & Shield in 2023 —
+ * and the test says which of the two it is leaning on.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -108,7 +125,14 @@ test('AN EMPTY OR TINY CATALOGUE JUDGES NOTHING, AND SAYS SO', () => {
   }
 });
 
-test('RETIRED SERIES: THE ONE CLAIM CONFIDENT ENOUGH TO DELETE ON', () => {
+test('RETIRED SERIES: A FACT ABOUT POKEMON, NOT A FACT ABOUT OUR CLICKS', () => {
+  // The justification for this rule is not that it agrees with anything
+  // Roberto did. It is that The Pokémon Company stopped printing these lines —
+  // Sword & Shield in 2023, Sun & Moon in 2019, XY in 2016 — and nothing in
+  // them is coming back to a Walmart shelf. That claim needs no catalogue, no
+  // corpus and nobody's opinion, and it cannot rot in the dangerous direction:
+  // a series added here is finished forever.
+  //
   assert.equal(namesRetiredSeries('Pokemon SAS6 Chilling Reign Elite Trainer Box'), true);
   assert.equal(namesRetiredSeries('Pokemon XY Fates Collide Elite Trainer Box'), true);
   assert.equal(namesRetiredSeries('Pokemon TCG: Sun and Moon Burning Shadows Elite Trainer Box'), true);
@@ -124,26 +148,38 @@ test('RETIRED SERIES: THE ONE CLAIM CONFIDENT ENOUGH TO DELETE ON', () => {
   assert.equal(namesRetiredSeries('Pokémon TCG: Mega Evolution — Chaos Rising Elite Trainer Box'), false);
 });
 
-test('WHAT AUTO-FORGETTING WOULD ACTUALLY COST, ON THE REAL TABLE', () => {
-  // The measurement that decided this rule's shape. Run against every Walmart
-  // find and the decision Roberto made on it.
+test('WHAT AUTO-FORGETTING WOULD COST — BLAST RADIUS, NOT CORRECTNESS', () => {
+  // These counts do NOT say the rule is wrong about each row. They say how
+  // much it destroys, which is a different and more useful thing: a rule
+  // reaching into a third of the finds a person deliberately kept needs to be
+  // standing on more than a name-matching heuristic, whether or not every one
+  // of those keeps was a good call.
   const kept = walmart.filter((d) => d.status === 'kept');
   const forgotten = walmart.filter((d) => d.status === 'forgotten');
   const unreviewed = walmart.filter((d) => d.status === 'new');
 
   const hits = (rows: Find[]) => rows.filter((d) => namesRetiredSeries(d.name)).length;
 
-  assert.equal(hits(kept), 1, 'exactly one thing he kept — a Crown Zenith tin, which is Sword & Shield');
-  assert.ok(hits(forgotten) >= 8, 'and it agrees with a third of what he threw away by hand');
-  assert.ok(hits(unreviewed) >= 20, 'clearing a quarter of the backlog he never got to');
+  // Small blast radius, and the one row it does touch is a Crown Zenith tin —
+  // Sword & Shield, genuinely retired, so the rule and the keep disagree and
+  // the rule is right. That is the shape a safe delete has.
+  assert.equal(hits(kept), 1);
+  assert.ok(hits(forgotten) >= 8);
+  assert.ok(hits(unreviewed) >= 20, 'clearing a quarter of the backlog nobody got to');
 
   // ── Why the wider rule was rejected ──
   //
   // "old era AND resellers hold the buy box" looked far more powerful and was
   // tested before it was allowed near a delete. It discards sixteen of the
-  // thirty-five he kept, Prismatic Evolutions and Destined Rivals among them —
-  // the two sets he had asked for by name a week earlier. This is the number
-  // that turned era into a ranking signal.
+  // thirty-five he kept.
+  //
+  // The sixteen keeps are the blast radius. What makes the verdict is that two
+  // of them are Prismatic Evolutions and Destined Rivals — which he did not
+  // merely click on, he asked for BY NAME on 31 Aug: "i want the latest common
+  // drop items: 30th collection, destined rivals, prismatic evolutions." A
+  // stated want is evidence of a kind a click is not, and a rule that deletes
+  // the thing somebody asked for out loud is not a rule, it is a bug. This is
+  // why era ranks and never deletes.
   const wide = kept.filter(
     (d) => eraOf(d.name, catalogue).era === 'old'
       && offerOf({ retailer: 'Walmart', state: d.state, otherOffers: d.other_offers }) === 'resellers-hold-it',

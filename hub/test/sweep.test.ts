@@ -346,3 +346,96 @@ test('AN EMPTY CATALOGUE RETIRES NOTHING AND JUDGES NOTHING', async () => {
   assert.equal(left[0]?.era, 'unknown');
   assert.match(left[0]?.eraWhy ?? '', /not enough to judge/);
 });
+
+// ── Nothing here is permanent ───────────────────────────────────────────────
+//
+// Roberto, 8 Sep 2026: "i dont neccesarily think that what i have kept and
+// what i have chosen forget on has full authority to decide what is right and
+// what is wrong. i may have made mistakes as i was unsure in the beginning."
+//
+// The code had a worse version of the same problem than the tests did. The
+// review list reads status = 'new' and nothing anywhere put a row back, so
+// every decline — his and the machine's — was permanent AND invisible.
+
+test('A DECLINE CAN BE UNDONE, AND THE CORPUS DOES NOT CONSULT ONE', async () => {
+  const db = await withCatalogue();
+  await store.recordDiscoveries(db, USER, 'wm', [
+    found('a', 'Pokemon Trading Card Games Mega Evolution 5 Pitch Black Booster Bundle'),
+  ], false);
+
+  const before = (await store.discoveriesToReview(db, USER)).find((d) => d.externalId === 'a');
+  assert.ok(before, 'waiting to begin with');
+
+  const id = before.id;
+  assert.equal(await store.forgetDiscovery(db, USER, id), true);
+  assert.equal((await store.discoveriesToReview(db, USER)).some((d) => d.id === id), false);
+
+  // It is not gone. It is on the other side of the list, and it says whose
+  // call it was.
+  const declined = await store.forgottenDiscoveries(db, USER);
+  const row = declined.find((d) => d.id === id);
+  assert.ok(row, 'a decline must be visible somewhere');
+  assert.equal(row.decidedBy, 'you');
+
+  assert.equal(await store.restoreDiscovery(db, USER, id), true);
+  const back = (await store.discoveriesToReview(db, USER)).find((d) => d.id === id);
+  assert.ok(back, 'and reversible');
+  assert.equal(back.decidedBy, '', 'restored means undecided, not decided-and-undone');
+  assert.equal(await store.restoreDiscovery(db, USER, id), false, 'twice is a no-op, not an error');
+});
+
+test('THE CURRENT CATALOGUE IS A FACT ABOUT THE SHOPS, NOT A RECORD OF OUR CLICKS', async () => {
+  // This asked for status = 'kept', which quietly made a person's clicks part
+  // of the definition of what Pokémon is printing — the exact thing Roberto
+  // said should not have that authority. Target or Pokémon Center listing a
+  // product is the fact; what anyone later decided about the row is not.
+  const db = await withCatalogue();
+  const full = await store.firstPartyCatalogue(db);
+  assert.equal(full.length, CURRENT.length);
+
+  // Decline every single one of them, and the catalogue must not move: the
+  // shops still list them, which is the only thing being asked.
+  await db.query(
+    `UPDATE discoveries SET status = 'forgotten', decided_at = now(), decided_by = 'you'
+      WHERE retailer = 'Target'`,
+  );
+  const after = await store.firstPartyCatalogue(db);
+  assert.equal(after.length, full.length, 'a decline is an opinion; the listing is the fact');
+
+  // And a product the shops stopped listing long ago stops voting on its own.
+  await db.query(
+    `UPDATE discoveries SET first_seen_at = now() - INTERVAL '400 days' WHERE retailer = 'Target'`,
+  );
+  assert.equal((await store.firstPartyCatalogue(db)).length, 0, 'the window is what expires it');
+});
+
+test("A RULE'S DECISIONS COME BACK AS THE BATCH THEY WERE MADE AS", async () => {
+  // The retired-series rule is one claim about what Pokémon has stopped
+  // printing. If it is wrong it is wrong about a whole batch at once, and
+  // undoing it a row at a time is how a wrong rule stays in place.
+  const db = await withCatalogue();
+  await store.recordDiscoveries(db, USER, 'wm', [
+    found('r1', 'Pokemon SAS6 Chilling Reign Elite Trainer Box'),
+    found('r2', 'Pokemon XY Fates Collide Elite Trainer Box'),
+    found('mine', 'Pokemon Trading Card Games Mega Heroes Tin Latias'),
+  ], false);
+
+  const mine = (await store.discoveriesToReview(db, USER)).find((d) => d.externalId === 'mine');
+  await store.forgetDiscovery(db, USER, mine.id);
+
+  const out = await store.rerankDiscoveries(db, USER);
+  assert.equal(out.retired, 2);
+
+  const declined = await store.forgottenDiscoveries(db, USER);
+  assert.equal(declined.filter((d) => d.decidedBy === 'machine').length, 2);
+  assert.equal(declined.filter((d) => d.decidedBy === 'you').length, 1);
+
+  const restored = await store.restoreMachineDecisions(db, USER);
+  assert.equal(restored, 2);
+
+  // A person changing their mind is a person's job, one row at a time. That is
+  // also the only way the decision stays theirs.
+  const still = await store.forgottenDiscoveries(db, USER);
+  assert.deepEqual(still.map((d) => d.externalId), ['mine']);
+  assert.equal(still[0]?.decidedBy, 'you');
+});

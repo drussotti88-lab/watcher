@@ -3140,6 +3140,8 @@ export interface DiscoveryRow {
   /** Is anyone still printing this? Ranks the review list; never deletes. */
   era: Era;
   eraWhy: string;
+  /** '' while undecided, then 'you' or 'machine'. Nothing here is permanent. */
+  decidedBy: string;
 }
 
 function toDiscovery(r: Record<string, unknown>): DiscoveryRow {
@@ -3171,6 +3173,7 @@ function toDiscovery(r: Record<string, unknown>): DiscoveryRow {
       r.other_offers === null || r.other_offers === undefined ? null : Number(r.other_offers),
     era: (String(r.era ?? '') || 'unknown') as Era,
     eraWhy: String(r.era_why ?? ''),
+    decidedBy: String(r.decided_by ?? ''),
   };
 }
 
@@ -3222,6 +3225,22 @@ export async function discoveriesToReview(
  *
  * Walmart is excluded on purpose. It is the shop being judged, and letting its
  * archive vote would make every set from 2016 onwards current by construction.
+ *
+ * ── Why status is not consulted ─────────────────────────────────────────────
+ *
+ * This asked for status = 'kept', which quietly made a person's clicks part of
+ * the definition of what Pokémon is printing. Roberto named the problem on
+ * 8 Sep: "i may have made mistakes as i was unsure in the beginning." He is
+ * right, and the fix is not better clicks — it is not asking. **Target or
+ * Pokémon Center listing a product is a fact about those shops. What anybody
+ * later decided about that row is an opinion, and an opinion has no business
+ * defining the ground truth a filter is measured against.**
+ *
+ * The 120-day window replaces the judgement that filter was standing in for.
+ * A shop that stops listing something stops voting for it, on its own, without
+ * anyone having to notice — and if that ever empties the catalogue, MIN_CORPUS
+ * in era.ts makes every verdict 'unknown' rather than declaring the world
+ * obsolete.
  */
 export async function firstPartyCatalogue(db: Sql): Promise<string[][]> {
   const rows = await db.query<{ name: string }>(
@@ -3235,8 +3254,8 @@ export async function firstPartyCatalogue(db: Sql): Promise<string[][]> {
      SELECT DISTINCT d.name
        FROM discoveries d
       WHERE d.retailer <> 'Walmart'
-        AND d.status = 'kept'
-        AND d.name <> ''`,
+        AND d.name <> ''
+        AND d.first_seen_at > now() - INTERVAL '120 days'`,
   );
   return currentCatalogue(rows.map((r) => r.name));
 }
@@ -3286,8 +3305,11 @@ export async function rerankDiscoveries(
     if (retire && row.status === 'new' && namesRetiredSeries(row.name)) {
       retired += 1;
       statements.push({
+        // decided_by, so this is reviewable as a batch and undoable as one.
+        // A machine's judgement wearing a person's is how a mistake becomes
+        // permanent: it stops looking like something anybody should re-open.
         text: `UPDATE discoveries
-                  SET status = 'forgotten', decided_at = now()
+                  SET status = 'forgotten', decided_at = now(), decided_by = 'machine'
                 WHERE id = $1 AND status = 'new'`,
         params: [row.id],
       });
@@ -3321,12 +3343,93 @@ export async function forgetDiscovery(db: Sql, userId: number, id: number): Prom
   // now sticks for everybody, so only a catalogue writer may make it.
   if (!(await canWriteCatalogue(db, userId))) return false;
   const rows = await db.query<{ id: number }>(
-    `UPDATE discoveries SET status = 'forgotten', decided_at = now()
+    `UPDATE discoveries SET status = 'forgotten', decided_at = now(), decided_by = 'you'
       WHERE id = $1 AND status = 'new'
       RETURNING id`,
     [id],
   );
   return rows.length > 0;
+}
+
+/**
+ * Everything that was decided against, so it can be looked at again.
+ *
+ * The gap this closes: `discoveriesToReview` reads status = 'new' and nothing
+ * anywhere set a row back to it, so a forget was permanent AND invisible. On
+ * 8 Sep that was 46 rows nobody could see — 26 decided by hand in a week when
+ * nobody yet knew what this catalogue held, and 20 by a rule that had shipped
+ * that morning.
+ *
+ * Whose call it was travels with each one, because the two deserve different
+ * treatment: a rule's output should be re-openable in a batch when the rule
+ * changes, and a person's judgement should not be quietly overturned by one.
+ */
+export async function forgottenDiscoveries(
+  db: Sql,
+  userId: number,
+  limit = 200,
+): Promise<DiscoveryRow[]> {
+  const rows = await db.query(
+    `SELECT d.*,
+            EXISTS (
+              SELECT 1 FROM listings l WHERE l.external_id = d.external_id
+            ) AS already_have
+       FROM discoveries d
+      WHERE d.status = 'forgotten'
+      ORDER BY d.decided_at DESC NULLS LAST, d.id DESC
+      LIMIT $1`,
+    [Math.min(Math.max(limit, 1), 500)],
+  );
+  return rows.map(toDiscovery);
+}
+
+/**
+ * Put one back in front of a person.
+ *
+ * Not "keep it" — that creates a product, a listing and a mission, and is a
+ * different decision. This only undoes the decline, so the row returns to the
+ * review list and gets judged again with whatever is known now.
+ *
+ * `decided_by` is cleared with it. A row that has been restored carries no
+ * claim about who declined it, because nobody has.
+ */
+export async function restoreDiscovery(db: Sql, userId: number, id: number): Promise<boolean> {
+  if (!(await canWriteCatalogue(db, userId))) return false;
+  const rows = await db.query<{ id: number }>(
+    `UPDATE discoveries
+        SET status = 'new', decided_at = NULL, decided_by = ''
+      WHERE id = $1 AND status = 'forgotten'
+      RETURNING id`,
+    [id],
+  );
+  return rows.length > 0;
+}
+
+/**
+ * Put back everything a RULE decided, and nothing a person did.
+ *
+ * For the day a rule turns out to be wrong — which is the day this is for, not
+ * a hypothetical. The retired-series rule is a claim about what Pokémon has
+ * stopped printing, and if that claim is ever wrong it is wrong about a whole
+ * batch at once, so undoing it one row at a time would be busywork.
+ *
+ * Never touches a decision made by hand. A person changing their mind is a
+ * person's job, one row at a time, which is also the only way it stays theirs.
+ */
+export async function restoreMachineDecisions(
+  db: Sql,
+  userId: number,
+): Promise<number> {
+  if (!(await canWriteCatalogue(db, userId))) {
+    throw new Error('this account may not curate the catalogue');
+  }
+  const rows = await db.query<{ id: number }>(
+    `UPDATE discoveries
+        SET status = 'new', decided_at = NULL, decided_by = ''
+      WHERE status = 'forgotten' AND decided_by = 'machine'
+      RETURNING id`,
+  );
+  return rows.length;
 }
 
 /**

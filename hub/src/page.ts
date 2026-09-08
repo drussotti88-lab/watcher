@@ -4186,6 +4186,8 @@ function findReason(d) {
  */
 const FIND_FILTER = {
   shop: savedShop('finds'), state: '', q: '', showDormant: false, fresh: false,
+  // Looking at what was decided against rather than what is waiting.
+  declined: false,
 };
 
 /** First seen inside the last two days — the news, as opposed to the list. */
@@ -4336,6 +4338,29 @@ function renderFindFilters(all) {
     FIND_FILTER.fresh = !FIND_FILTER.fresh;
     renderFinds();
   }, nFresh === 0 && !FIND_FILTER.fresh));
+
+  /*
+   * ── Declined ──────────────────────────────────────────────────────────
+   *
+   * The other side of the list, which did not exist. Every forget was
+   * permanent and invisible: the review list reads status new and nothing
+   * anywhere put a row back. Forty-six of them on 8 Sep, most decided in a
+   * week when nobody yet knew what this catalogue held.
+   *
+   * A chip rather than a tab, because it is the same list read the other way
+   * round, and everything else on this bar keeps working inside it.
+   */
+  const declined = (DATA.forgotten || []).length;
+  states.appendChild(chip('Declined', declined, FIND_FILTER.declined, () => {
+    FIND_FILTER.declined = !FIND_FILTER.declined;
+    // The shop chip counts the pile you are looking at; carrying a filter
+    // across would show "0 of 46" and read as a bug.
+    FIND_FILTER.shop = '';
+    FIND_FILTER.state = '';
+    FIND_FILTER.showDormant = true;
+    saveShop('finds', '');
+    renderFinds();
+  }, declined === 0 && !FIND_FILTER.declined));
 }
 
 /**
@@ -5614,7 +5639,7 @@ function renderFinds() {
   // Sorting costs nothing and throws away nothing: the buyable and the
   // scheduled come first, the dormant back-catalogue sinks, and a long list
   // stops being a wall.
-  const all = DATA.discoveries || [];
+  const all = FIND_FILTER.declined ? (DATA.forgotten || []) : (DATA.discoveries || []);
   renderFindFilters(all);
 
   const matched = all.filter(findMatches).sort((a, b) => {
@@ -5647,11 +5672,49 @@ function renderFinds() {
 
   if (all.length === 0) {
     const empty = el('div', 'card');
-    empty.appendChild(el('div', 'name', 'Nothing waiting'));
+    empty.appendChild(el('div', 'name',
+      FIND_FILTER.declined ? 'Nothing has been declined' : 'Nothing waiting'));
     empty.appendChild(el('div', 'meta',
-      'Run a sweep on the machine that watches: npm run discover'));
+      FIND_FILTER.declined
+        ? 'Everything the sweep has found is either waiting on you or kept.'
+        : 'Run a sweep on the machine that watches: npm run discover'));
     list.appendChild(empty);
     return;
+  }
+
+  /*
+   * A rule's decisions, undoable as the batch they were made as.
+   *
+   * The retired-series rule is one claim about what Pokémon has stopped
+   * printing. If it is wrong it is wrong about a whole batch at once, so
+   * undoing it a row at a time would be busywork — and leaving it to busywork
+   * is how a wrong rule stays in place. Decisions made by hand are never
+   * touched by this: changing your mind is your job, one row at a time, which
+   * is also the only way it stays yours.
+   */
+  if (FIND_FILTER.declined && DATA.canCurate === true) {
+    const byRule = (DATA.forgotten || []).filter((d) => d.decidedBy === 'machine').length;
+    if (byRule > 0) {
+      const bulk = el('div', 'card');
+      bulk.appendChild(el('div', 'name', byRule + ' of these were decided by a rule'));
+      bulk.appendChild(el('div', 'meta',
+        'The title named a series nobody prints any more — Sword & Shield, Sun & ' +
+        'Moon, XY, Black & White. If that call was wrong, it was wrong about all ' +
+        'of them at once.'));
+      const undo = el('button', 'small', 'Put all ' + byRule + ' back');
+      undo.addEventListener('click', async (e) => {
+        await withButton(e.target, 'Restoring…', null, async () => {
+          const out = await api('POST', '/api/discoveries/restore-machine');
+          load();
+          return (out && out.restored ? out.restored : byRule) + ' back in the list';
+        });
+      });
+      const acts = el('div', 'actions');
+      acts.style.marginTop = '10px';
+      acts.appendChild(undo);
+      bulk.appendChild(acts);
+      list.appendChild(bulk);
+    }
   }
 
   if (matched.length === 0) {
@@ -5815,6 +5878,14 @@ function renderFinds() {
       if (d.eraWhy) pill.title = d.eraWhy;
       tags.appendChild(pill);
     }
+    // Whose call this was. A rule's judgement wearing a person's is how a
+    // mistake becomes permanent — it stops looking like anything worth
+    // re-opening.
+    if (d.decidedBy === 'machine') {
+      tags.appendChild(el('span', 'pill s-unknown', 'a rule decided this, not you'));
+    } else if (d.decidedBy === 'you') {
+      tags.appendChild(el('span', 'pill info', 'you declined this'));
+    }
     if (d.alreadyHave) {
       tags.appendChild(el('span', 'pill info', 'already on your list'));
     }
@@ -5856,7 +5927,29 @@ function renderFinds() {
       await withButton(e.target, 'Forgetting…', null, async () => {
         await api('POST', '/api/discoveries/' + d.id + '/forget');
         load();
-        return 'forgotten — it will not be offered again';
+        return 'forgotten — and you can put it back from Declined';
+      });
+    });
+
+    /*
+     * ── Undo ──────────────────────────────────────────────────────────────
+     *
+     * Roberto, 8 Sep: "i may have made mistakes as i was unsure in the
+     * beginning." He could not have fixed one if he had wanted to — the review
+     * list reads status new, and nothing anywhere set a row back to it, so
+     * every decline was permanent AND invisible. Forty-six rows nobody could
+     * see, made in a week when nobody yet knew what this catalogue held.
+     *
+     * Put back is not Keep. Keep creates a product, a listing and a mission;
+     * this only returns the row to the list so it gets judged again with
+     * whatever is known now.
+     */
+    const restore = el('button', 'small', 'Put it back');
+    restore.addEventListener('click', async (e) => {
+      await withButton(e.target, 'Restoring…', null, async () => {
+        await api('POST', '/api/discoveries/' + d.id + '/restore');
+        load();
+        return 'back in the list, undecided again';
       });
     });
 
@@ -5865,7 +5958,7 @@ function renderFinds() {
     // that exists and fails is worse than one that was never offered.
     if (DATA.canCurate === true) {
       actions.appendChild(keep);
-      actions.appendChild(forget);
+      actions.appendChild(FIND_FILTER.declined ? restore : forget);
       left.appendChild(actions);
     }
 

@@ -1811,7 +1811,7 @@ const RICH_FIND = {
   // Is anyone still printing it? The field that replaced `signal` as the
   // thing that places a find in the list — see findRank.
   era: 'current', eraWhy: '30th + celebration — also in the first-party catalogue',
-  otherOffers: null,
+  otherOffers: null, decidedBy: '',
 };
 
 const findPills = (h: Harness): string[] =>
@@ -4312,4 +4312,75 @@ test('WITHOUT AN INVITE, THE STEP STILL DESCRIBES THE ROOM AND HANDS OVER NO CHO
   assert.match(text, /one card per product/, 'the room is described either way');
   assert.match(text, /If you are not in that room yet, ask for an invite/);
   assert.equal(/not set yet|ask Roberto/.test(text), false, 'no half-configured app on show');
+});
+
+// ── The other side of the review list ───────────────────────────────────────
+
+const DECLINED = [
+  { ...RICH_FIND, id: 90, name: 'Chilling Reign Elite Trainer Box', status: 'forgotten',
+    era: 'old', eraWhy: 'nothing on sale first-party shares its name (chilling reign)',
+    decidedBy: 'machine', retailer: 'Walmart', state: 'out', releaseDate: '' },
+  { ...RICH_FIND, id: 91, name: 'XY Fates Collide Elite Trainer Box', status: 'forgotten',
+    era: 'old', decidedBy: 'machine', retailer: 'Walmart', state: 'out', releaseDate: '' },
+  { ...RICH_FIND, id: 92, name: 'A box I said no to in week one', status: 'forgotten',
+    era: 'current', decidedBy: 'you', retailer: 'Walmart', state: 'out', releaseDate: '' },
+];
+
+const withDeclined = (finds: unknown[], declined: unknown[]) => {
+  const data = withFinds(finds) as Record<string, unknown>;
+  return { ...data, forgotten: declined, canCurate: true };
+};
+
+test('NOTHING IS DECLINED PERMANENTLY, AND THE CARD SAYS WHOSE CALL IT WAS', async () => {
+  // Roberto, 8 Sep: "i may have made mistakes as i was unsure in the
+  // beginning." He could not have fixed one if he had wanted to — the review
+  // list reads status new and nothing anywhere put a row back, so every
+  // decline was permanent AND invisible.
+  const h = await boot(withDeclined([RICH_FIND], DECLINED));
+  assert.ok(!findNames(h).includes('Chilling Reign Elite Trainer Box'), 'not in the waiting list');
+
+  pressChip(h, 'find-states', 'Declined');
+  const names = findNames(h);
+  assert.ok(names.includes('Chilling Reign Elite Trainer Box'));
+  assert.ok(names.includes('A box I said no to in week one'));
+  assert.ok(!names.includes(RICH_FIND.name), 'and it is the other pile, not both at once');
+
+  // A rule's judgement wearing a person's is how a mistake becomes permanent:
+  // it stops looking like anything worth re-opening.
+  const pills = findPills(h);
+  assert.ok(pills.includes('a rule decided this, not you'));
+  assert.ok(pills.includes('you declined this'));
+
+  // Put it back, not Keep. Keep would create a product and a listing, which is
+  // a different decision from "look at this again".
+  const buttons = [...h.doc.querySelectorAll('#finds-list button')].map((b) => b.textContent);
+  assert.ok(buttons.includes('Put it back'));
+  assert.ok(!buttons.includes('Forget'), 'nothing to forget on this side');
+});
+
+test("A RULE'S BATCH CAN BE UNDONE AS A BATCH, AND A PERSON'S CANNOT", async () => {
+  const h = await boot(withDeclined([RICH_FIND], DECLINED));
+  pressChip(h, 'find-states', 'Declined');
+  const text = $(h, '#finds-list').textContent;
+  // Two of the three, not all three: changing your own mind is your job, one
+  // row at a time, which is also the only way it stays yours.
+  assert.match(text, /2 of these were decided by a rule/);
+  const buttons = [...h.doc.querySelectorAll('#finds-list button')].map((b) => b.textContent);
+  assert.ok(buttons.includes('Put all 2 back'));
+});
+
+test('with nothing declined, the chip is there and does nothing', async () => {
+  // Not hidden: a control that appears only once you have made a mistake is
+  // one nobody knows exists until they need it and cannot find it. Disabled
+  // with a zero on it says both "this is where that lives" and "there is
+  // nothing there".
+  const h = await boot(withDeclined([RICH_FIND], []));
+  const chip = [...h.doc.querySelectorAll('#find-states .chip')]
+    .find((c) => (c.textContent ?? '').startsWith('Declined'));
+  assert.ok(chip, 'the way back is always on the page');
+  assert.match(chip.textContent ?? '', /^Declined0$/);
+  assert.equal((chip as HTMLButtonElement).disabled, true);
+  // And pressing it cannot strand you on an empty list.
+  (chip as HTMLButtonElement).click();
+  assert.deepEqual(findNames(h), [RICH_FIND.name]);
 });
