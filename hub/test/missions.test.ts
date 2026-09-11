@@ -1262,3 +1262,42 @@ test('BULK NEVER ARMS, AT THE ENDPOINT AS WELL AS ON THE PAGE', async () => {
     assert.match(res.body.error, /unknown action/);
   }
 });
+
+test('AN ARCHIVED PRODUCT TAKES ITS MISSIONS OFF THE WATCH LIST TOO', async () => {
+  // Archiving already paused them, and paused was not enough: thirty-four rows
+  // vanished from Products and stayed on Missions wearing a paused badge, so
+  // tidying up moved the mess rather than clearing it.
+  const db = await TestDb.create();
+  await db.query(`INSERT INTO products (key, name) VALUES ('keep','Keep'),('gone','Gone')`);
+  await db.query(
+    `INSERT INTO listings (id, user_id, product_key, retailer, external_id, url)
+     VALUES (1, 1, 'keep', 'Target', '1', 'https://t.test/1'),
+            (2, 1, 'gone', 'Walmart', '2', 'https://w.test/2')`,
+  );
+  await db.query(
+    `INSERT INTO missions (id, user_id, listing_id, label, enabled)
+     VALUES (1, 1, 1, 'Keep', true), (2, 1, 2, 'Gone', true)`,
+  );
+
+  assert.equal((await store.listMissions(db, USER)).length, 2);
+  await call(db, 'POST', '/api/products/bulk', { keys: ['gone'], action: 'archive' });
+
+  const left = await store.listMissions(db, USER);
+  assert.deepEqual(left.map((m) => m.label), ['Keep'], 'off the watch list, not merely paused');
+
+  // Still there, and still findable by id: hidden is not deleted.
+  const direct = await store.missionForListing(db, USER, 2);
+  assert.ok(direct, 'the mission itself survives');
+  assert.equal(direct.enabled, false);
+
+  // And Phantom must not read it either.
+  const active = await store.activeMissions(db, USER);
+  assert.deepEqual(active.map((m) => m.label), ['Keep']);
+
+  // Putting the product back brings the mission back with it, still paused:
+  // restoring is "show me this again", not "start spending requests again".
+  await call(db, 'POST', '/api/products/bulk', { keys: ['gone'], action: 'restore' });
+  const back = await store.listMissions(db, USER);
+  assert.equal(back.length, 2);
+  assert.equal(back.find((m) => m.label === 'Gone')?.enabled, false);
+});

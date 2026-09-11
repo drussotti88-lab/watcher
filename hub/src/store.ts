@@ -1705,7 +1705,22 @@ const MISSION_SELECT = `
  * appears — marked unchecked rather than quietly missing.
  */
 export async function listMissions(db: Sql, userId: number): Promise<MissionRow[]> {
+  /*
+   * Archived products take their missions with them.
+   *
+   * Archiving already paused them, and paused was not enough: Roberto, 11 Sep,
+   * having archived 34 Walmart products - "if i archive items, they should no
+   * longer show on the watch list or the product list." He was right. Thirty-
+   * four rows disappeared from Products and stayed on Missions wearing a
+   * paused badge, so tidying up moved the mess rather than clearing it.
+   *
+   * The missions still exist, and `missionForListing` still finds one by id.
+   * Putting the product back in the catalogue brings its missions back with
+   * it, still paused - because restoring is "show me this again", not "start
+   * spending requests on this again".
+   */
   const rows = await db.query(`${MISSION_SELECT}
+      AND p.archived_at IS NULL
     ORDER BY
       CASE COALESCE(w.state, 'unchecked')
         WHEN 'in' THEN 0 WHEN 'queue' THEN 1 WHEN 'unknown' THEN 2
@@ -1815,6 +1830,10 @@ export async function activeMissions(db: Sql, userId: number): Promise<MissionRo
        JOIN products p ON p.key = l.product_key
        LEFT JOIN watch_state w ON w.listing_id = l.id
       WHERE m.enabled = true
+        -- Belt as well as braces. Archiving pauses these, so enabled = true
+        -- already excludes them; this is what stops an archived product being
+        -- read again if a mission on one is ever re-enabled by another path.
+        AND p.archived_at IS NULL
       -- Mine first, so a listing we both watch comes back on MY mandate.
       ORDER BY l.id, (m.user_id = $1) DESC, m.id`,
     [userId],

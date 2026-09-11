@@ -2400,13 +2400,32 @@ function stockLine(r) {
 
 /* ── missions ───────────────────────────────────────────────────────────── */
 
+/**
+ * Armed, then watching, then not watching.
+ *
+ * The list arrived in creation order, which is the order things happened to be
+ * added months ago and answers no question anybody has. These three say what
+ * a mission IS, in descending order of what it can do to you: armed can spend
+ * money, watching can only tell you something, paused does neither.
+ *
+ * Within a band nothing is reordered. Array sort is stable, so whatever order
+ * the rows came in survives underneath - a list that also reshuffles inside
+ * each group is one you have to re-read from the top every visit.
+ */
+function missionBand(m) {
+  if (m.armed) return 0;
+  return m.enabled ? 1 : 2;
+}
+
 function renderMissions() {
   const missions = document.getElementById('missions');
   if (!missions) return;
   const keptMsg = document.getElementById('pick-msg');
   missions.textContent = '';
   if (keptMsg && keptMsg.textContent) missions.appendChild(keptMsg);
-  const shownMissions = renderMissionsBar(DATA.missions);
+  const shownMissions = renderMissionsBar(DATA.missions)
+    .slice()
+    .sort((a, b) => missionBand(a) - missionBand(b));
 
   /*
    * Pause and resume, and nothing that spends.
@@ -3654,12 +3673,31 @@ function missionMatchesFilter(m) {
   return true;
 }
 
+/** The shop segment for a product nothing is selling. Not a retailer's name. */
+const NO_SHOP = '\u0000none';
+
 function productMatchesFilter(p) {
   const f = LIST_FILTERS.products;
   const mine = (DATA.listings || []).filter((l) => l.productKey === p.key);
-  // A product is "at" a shop when any of its listings is. One with no
-  // listings answers to no shop segment except All — which is honest: it is
-  // not buyable anywhere yet.
+  /*
+   * A product is "at" a shop when any of its listings is.
+   *
+   * One with no listings used to answer to no segment at all except All, which
+   * was honest and looked broken: 10 + 17 + 34 against an All of 162, with no
+   * chip anywhere accounting for the other hundred and one. Roberto, 11 Sep:
+   * "the math isnt mathing on these."
+   *
+   * They were never missing. They were products with nothing selling them -
+   * mostly Walmart archive rows kept without a listing, and products whose
+   * listings were deleted from under them. A segment they can be counted and
+   * selected in is both the honest arithmetic and the quickest way to clear
+   * them out.
+   *
+   * The shop counts can still SUM to more than All, and that is also correct:
+   * a product sold at two shops is in both segments. Only "no listings" is
+   * mutually exclusive with the rest.
+   */
+  if (f.shop === NO_SHOP) return mine.length === 0 && (!f.q || wordsMatch(f.q, p.name || ''));
   if (f.shop && !mine.some((l) => l.retailer === f.shop)) return false;
   if (!f.q) return true;
   return wordsMatch(f.q,
@@ -3897,8 +3935,14 @@ function renderProductsBar(all) {
   if (box && box.hidden && f.q) { f.q = ''; box.value = ''; }
   const shops = document.getElementById('flt-products-shops');
   shops.textContent = '';
+  // "No listings" last, after the real shops, because it is not one of them.
+  const keyed = new Set((DATA.listings || []).map((l) => l.productKey));
+  const options = shopOptions(DATA.listings || []);
+  if (all.some((p) => !keyed.has(p.key))) {
+    options.push({ value: NO_SHOP, label: 'No listings' });
+  }
   shops.appendChild(chipGroup(f, 'shop', all, productMatchesFilter,
-    shopOptions(DATA.listings || []), 'All shops',
+    options, 'All shops',
     (v) => saveShop('products', v)));
   const shown = all.filter(productMatchesFilter);
   filterCountLine('flt-products-count', shown.length, all.length, !!(f.q || f.shop), 'products');

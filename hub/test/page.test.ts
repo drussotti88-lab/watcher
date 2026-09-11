@@ -4602,3 +4602,96 @@ test('a member is never offered a bulk action', async () => {
   const labels = [...h.doc.querySelectorAll('#products button')].map((b) => b.textContent);
   assert.ok(!labels.includes('Select'));
 });
+
+// ── The order the missions list opens in ────────────────────────────────────
+
+test('MISSIONS LEAD WITH WHAT CAN SPEND, THEN WHAT CAN TELL YOU, THEN NEITHER', async () => {
+  // The list arrived in creation order — the order things happened to be added
+  // months ago, which answers no question anybody has. Armed can spend money,
+  // watching can only tell you something, paused does neither.
+  const m = (id: number, name: string, over: Record<string, unknown>) =>
+    ({ ...DASHBOARD.missions[0], id, productName: name, ...over });
+
+  const base = JSON.parse(JSON.stringify(DASHBOARD));
+  base.missions = [
+    m(1, 'Paused one', { enabled: false, armed: false }),
+    m(2, 'Watching one', { enabled: true, armed: false }),
+    m(3, 'Armed one', { enabled: true, armed: true, ceiling: 60 }),
+    m(4, 'Paused two', { enabled: false, armed: false }),
+    m(5, 'Watching two', { enabled: true, armed: false }),
+  ];
+  const h = await boot(base);
+
+  const names = [...h.doc.querySelectorAll('#missions .card .name')].map((n) => n.textContent);
+  assert.deepEqual(names, [
+    'Armed one',
+    'Watching one',
+    'Watching two',
+    'Paused one',
+    'Paused two',
+  ]);
+});
+
+test('within a band nothing is reshuffled', async () => {
+  // A list that also reorders inside each group is one you have to re-read
+  // from the top every visit. The sort is stable and only moves rows between
+  // the three bands.
+  const m = (id: number, name: string) =>
+    ({ ...DASHBOARD.missions[0], id, productName: name, enabled: true, armed: false });
+  const base = JSON.parse(JSON.stringify(DASHBOARD));
+  base.missions = [m(3, 'Zebra'), m(1, 'Apple'), m(2, 'Mango')];
+  const h = await boot(base);
+  const names = [...h.doc.querySelectorAll('#missions .card .name')].map((n) => n.textContent);
+  assert.deepEqual(names, ['Zebra', 'Apple', 'Mango'], 'the order it arrived in, untouched');
+});
+
+test('THE SHOP CHIPS ACCOUNT FOR EVERY PRODUCT, INCLUDING THE ORPHANS', async () => {
+  // Roberto, 11 Sep: "the math isnt mathing on these. all shops 162 and the
+  // rest dont add up to that number."
+  //
+  // They were never missing. A product with no listings answered to no segment
+  // except All — honest, and indistinguishable from a broken count. On his
+  // catalogue that was 101 of 128: products a sweep created because it saw the
+  // name, with nothing anywhere selling them.
+  const base = JSON.parse(JSON.stringify(DASHBOARD));
+  base.products = [
+    { key: 'a', name: 'At Target', releaseDate: null, msrp: null, imageUrl: '', notes: '', archived: false },
+    { key: 'b', name: 'At Walmart', releaseDate: null, msrp: null, imageUrl: '', notes: '', archived: false },
+    { key: 'c', name: 'Nothing sells it', releaseDate: null, msrp: null, imageUrl: '', notes: '', archived: false },
+    { key: 'd', name: 'Nothing sells this either', releaseDate: null, msrp: null, imageUrl: '', notes: '', archived: false },
+  ];
+  base.listings = [
+    { id: 1, productKey: 'a', productName: 'At Target', retailer: 'Target', externalId: '1', url: '', sellerKind: 'retailer', sellerName: '', isPrimary: true },
+    { id: 2, productKey: 'b', productName: 'At Walmart', retailer: 'Walmart', externalId: '2', url: '', sellerKind: 'retailer', sellerName: '', isPrimary: true },
+  ];
+  base.missions = [];
+  const h = await boot(base);
+
+  const chips = [...h.doc.querySelectorAll('#flt-products-shops .chip')]
+    .map((c) => c.textContent);
+  assert.deepEqual(chips, ['All shops4', 'Target1', 'Walmart1', 'No listings2']);
+
+  // And it is a real segment, not a label: pressing it selects exactly those.
+  const none = [...h.doc.querySelectorAll('#flt-products-shops .chip')]
+    .find((c) => (c.textContent ?? '').startsWith('No listings'));
+  (none as HTMLButtonElement).click();
+  const names = [...h.doc.querySelectorAll('#products .card .name')].map((n) => n.textContent);
+  assert.deepEqual(names, ['Nothing sells it', 'Nothing sells this either']);
+});
+
+test('no orphans, no chip', async () => {
+  // A segment that is always there at zero is a segment people learn to ignore.
+  const base = JSON.parse(JSON.stringify(DASHBOARD));
+  base.products = [
+    { key: 'a', name: 'At Target', releaseDate: null, msrp: null, imageUrl: '', notes: '', archived: false },
+    { key: 'b', name: 'Also at Target', releaseDate: null, msrp: null, imageUrl: '', notes: '', archived: false },
+  ];
+  base.listings = [
+    { id: 1, productKey: 'a', productName: 'At Target', retailer: 'Target', externalId: '1', url: '', sellerKind: 'retailer', sellerName: '', isPrimary: true },
+    { id: 2, productKey: 'b', productName: 'Also at Target', retailer: 'Target', externalId: '2', url: '', sellerKind: 'retailer', sellerName: '', isPrimary: true },
+  ];
+  base.missions = [];
+  const h = await boot(base);
+  const chips = [...h.doc.querySelectorAll('#flt-products-shops .chip')].map((c) => c.textContent);
+  assert.deepEqual(chips, ['All shops2', 'Target2']);
+});
