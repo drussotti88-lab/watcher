@@ -4695,3 +4695,78 @@ test('no orphans, no chip', async () => {
   const chips = [...h.doc.querySelectorAll('#flt-products-shops .chip')].map((c) => c.textContent);
   assert.deepEqual(chips, ['All shops2', 'Target2']);
 });
+
+// ── Recent sightings ────────────────────────────────────────────────────────
+//
+// The hero says what is buyable this second, which on an ordinary day is
+// nothing, and that is the honest answer. Nothing said what had happened while
+// nobody was looking — so on 11 Sep Target opened pre-orders on a 30th
+// Celebration Battle Deck for eleven minutes, closed them again, and the only
+// place that event existed afterwards was a log file on one machine.
+
+const ago = (mins: number) => new Date(Date.now() - mins * 60000).toISOString();
+
+const sighting = (over: Record<string, unknown> = {}) => ({
+  listingId: 1, productName: 'Pokémon TCG: Chaos Rising Elite Trainer Box',
+  retailer: 'Target', url: 'https://www.target.com/p/-/A-1', imageUrl: '',
+  price: 49.99, availableQuantity: 4, sellerKind: 'retailer', sellerName: '',
+  isPreOrder: false, at: ago(120), endedAt: ago(116), ...over,
+});
+
+const withSightings = (rows: unknown[]): unknown => {
+  const base = JSON.parse(JSON.stringify(DASHBOARD));
+  base.sightings = rows;
+  return base;
+};
+
+test('A SIGHTING SAYS HOW LONG THE WINDOW WAS OPEN', async () => {
+  // The number the section exists for. "In stock at 3:41am" is trivia; "in
+  // stock at 3:41am for four minutes" tells you whether being awake would have
+  // helped, and whether the cadence that caught it is fast enough for the next.
+  const h = await boot(withSightings([sighting()]));
+  const text = $(h, '#sightings-list').textContent;
+  assert.match(text, /Chaos Rising/);
+  assert.match(text, /Target/);
+  assert.match(text, /for 4m/);
+  assert.match(text, /\$49\.99/);
+});
+
+test('UNDER A MINUTE IS SAID IN SECONDS', async () => {
+  // Rounding forty seconds up to "1m" hides the difference between winnable
+  // and not, which is the one thing this number is for.
+  const h = await boot(withSightings([
+    sighting({ at: ago(10), endedAt: new Date(Date.now() - 10 * 60000 + 40000).toISOString() }),
+  ]));
+  assert.match($(h, '#sightings-list').textContent, /for 40s/);
+});
+
+test('A PRE-ORDER SIGHTING IS NOT A RESTOCK, AND SAYS SO', async () => {
+  // Both read 'in' — both can go in a basket — and they call for completely
+  // different reactions.
+  const h = await boot(withSightings([sighting({ isPreOrder: true })]));
+  assert.match($(h, '#sightings-list').textContent, /pre-order opened/);
+});
+
+test('ONE STILL UP GETS A LINK, ONE THAT CLOSED DOES NOT', async () => {
+  // A live-looking Open on a sighting that ended three days ago is a click
+  // that goes nowhere, and it teaches you to distrust the ones that do.
+  const open = await boot(withSightings([sighting({ endedAt: null })]));
+  assert.match($(open, '#sightings-list').textContent, /still there/);
+  assert.equal(open.doc.querySelectorAll('#sightings-list a.go').length, 1);
+
+  const shut = await boot(withSightings([sighting()]));
+  assert.equal(shut.doc.querySelectorAll('#sightings-list a.go').length, 0);
+});
+
+test('a reseller sighting is marked as not the shop', async () => {
+  const h = await boot(withSightings([
+    sighting({ sellerKind: 'marketplace', sellerName: 'Rares Market L.L.C.', price: 190 }),
+  ]));
+  assert.match($(h, '#sightings-list').textContent, /NOT the shop - Rares Market/);
+});
+
+test('NOTHING SEEN YET IS SAID AS A SENTENCE, NOT AN EMPTY BOX', async () => {
+  const h = await boot(withSightings([]));
+  assert.match($(h, '#sightings-list').textContent,
+    /Nothing you watch has been orderable yet/);
+});

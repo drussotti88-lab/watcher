@@ -1301,3 +1301,50 @@ test('AN ARCHIVED PRODUCT TAKES ITS MISSIONS OFF THE WATCH LIST TOO', async () =
   assert.equal(back.length, 2);
   assert.equal(back.find((m) => m.label === 'Gone')?.enabled, false);
 });
+
+test('A SIGHTING KNOWS WHEN THE WINDOW CLOSED', async () => {
+  // The whole point of the section: how long it lasted. Found by looking
+  // forward from the sighting to the next reading that was not 'in'.
+  const { db, listingId } = await withMission();
+
+  await store.recordObservation(db, USER, { listingId, state: 'out', price: 49.99 });
+  await store.recordObservation(db, USER, { listingId, state: 'in', price: 49.99, availableQuantity: 4 });
+
+  const open = await store.recentSightings(db, USER);
+  assert.equal(open.length, 1, 'going into stock is the sighting; going out is not');
+  assert.equal(open[0]?.endedAt, null, 'still up');
+  assert.equal(open[0]?.price, 49.99);
+
+  await store.recordObservation(db, USER, { listingId, state: 'out', price: 49.99 });
+  const shut = await store.recentSightings(db, USER);
+  assert.equal(shut.length, 1, 'and it is still one sighting, not two');
+  assert.ok(shut[0]?.endedAt, 'which now has an end');
+  assert.ok(new Date(shut[0]!.endedAt!).getTime() >= new Date(shut[0]!.at).getTime());
+});
+
+test('A PRE-ORDER SIGHTING IS RECORDED AS ONE', async () => {
+  // Stock and a pre-order both read 'in' — both go in a basket — and
+  // afterwards the observation row is the only record of which it was.
+  const { db, listingId } = await withMission();
+  await store.recordObservation(db, USER, { listingId, state: 'out' });
+  await store.recordObservation(db, USER, {
+    listingId, state: 'in', price: 24.99, isPreOrder: true,
+  });
+  const [seen] = await store.recentSightings(db, USER);
+  assert.equal(seen?.isPreOrder, true);
+});
+
+test('an archived product keeps its sightings off the dashboard', async () => {
+  // Tidied away means tidied away. A product archived off both lists should
+  // not come back through the dashboard.
+  const { db, listingId } = await withMission();
+  await store.recordObservation(db, USER, { listingId, state: 'out' });
+  await store.recordObservation(db, USER, { listingId, state: 'in', price: 49.99 });
+  assert.equal((await store.recentSightings(db, USER)).length, 1);
+
+  const [row] = await db.query<{ product_key: string }>(
+    `SELECT product_key FROM listings WHERE id = $1`, [listingId],
+  );
+  await store.archiveProducts(db, USER, [row!.product_key], true);
+  assert.equal((await store.recentSightings(db, USER)).length, 0);
+});

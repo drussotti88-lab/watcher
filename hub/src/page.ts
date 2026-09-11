@@ -1537,6 +1537,28 @@ ${FONTS}<style>${STYLE}</style></head>
         <div id="live-list"></div>
       </div>
 
+      <!-- ── What happened while nobody was looking ────────────────────
+           Directly under the hero, because the two answer the same question
+           a beat apart: the hero says what is buyable this second, which on
+           an ordinary day is nothing, and this says what was buyable
+           recently and for how long.
+
+           The case that named the gap: on 11 Sep Target opened pre-orders on
+           a 30th Celebration Battle Deck for eleven minutes and closed them
+           again, and the only place that event existed afterwards was a log
+           file. A system built to catch short windows had no screen showing
+           the short windows it had caught. -->
+      <div class="card span2" id="sightings-card">
+        <div class="wizhead">
+          <div>
+            <div class="name">Recent sightings</div>
+            <div class="sub">Every time something became orderable, and how long it lasted.</div>
+          </div>
+          <button type="button" class="small" id="sightings-all">See the activity log</button>
+        </div>
+        <div id="sightings-list"></div>
+      </div>
+
       <div class="card span2"><div class="kpis" id="home-kpis"></div></div>
 
       <div class="card" id="funnel-card">
@@ -4085,6 +4107,11 @@ function render() {
   // right now" to an aggregate query is how the fastest answer on the page
   // ends up behind the slowest one.
   renderLive();
+  // Beside renderLive and for the same reason: both arrive in the dashboard
+  // payload already in hand, and renderHome waits on the insights fetch.
+  // Tying what-was-catchable to an aggregate query is how the two fastest
+  // answers on the page end up behind the slowest one.
+  renderSightings();
   showWinMoment();
 
   /*
@@ -5471,6 +5498,97 @@ function showWinMoment() {
   host.hidden = false;
 }
 
+/**
+ * How long a window stayed open, said as a person would say it.
+ *
+ * This is the number that makes the whole section worth having. "In stock at
+ * 3:41am" is trivia. "In stock at 3:41am, for four minutes" tells you whether
+ * being awake would have helped, and whether the cadence that caught it is
+ * fast enough for the next one.
+ */
+function lasted(from, to) {
+  if (!from) return '';
+  if (!to) return 'still there';
+  const s = Math.max(0, (new Date(to).getTime() - new Date(from).getTime()) / 1000);
+  // Under a minute is rounded to seconds on purpose. A drop that lasted forty
+  // seconds should not be reported as "1m" - the difference between those two
+  // is the difference between winnable and not.
+  if (s < 90) return 'for ' + Math.round(s) + 's';
+  if (s < 5400) return 'for ' + Math.round(s / 60) + 'm';
+  if (s < 172800) return 'for ' + Math.round(s / 3600) + 'h';
+  return 'for ' + Math.round(s / 86400) + 'd';
+}
+
+/** The clock time, because "3:41am" is what you compare against your own night. */
+function clockOf(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
+
+function renderSightings() {
+  const list = document.getElementById('sightings-list');
+  if (!list) return;
+  list.textContent = '';
+
+  const rows = (DATA.sightings || []);
+  if (rows.length === 0) {
+    const none = el('div', 'meta');
+    none.style.marginTop = '10px';
+    none.textContent =
+      'Nothing you watch has been orderable yet. The first time it is, it lands here ' +
+      'with the time and how long it lasted.';
+    list.appendChild(none);
+    return;
+  }
+
+  for (const s of rows.slice(0, 8)) {
+    const row = el('div', 'live');
+    if (s.imageUrl) {
+      const img = el('img');
+      img.src = s.imageUrl;
+      img.alt = '';
+      img.loading = 'lazy';
+      row.appendChild(img);
+    }
+    const g = el('div', 'g');
+    const nm = el('div', 'nm', shortName(s.productName));
+    nm.title = s.productName;
+    g.appendChild(nm);
+
+    const meta = el('div', 'meta');
+    const bits = [s.retailer];
+    // Stock and a pre-order both read "in" - both can go in a basket - and
+    // they call for completely different reactions. Said first, because it
+    // changes what the rest of the line means.
+    if (s.isPreOrder) bits.push('pre-order opened');
+    if (s.sellerKind === 'marketplace') {
+      bits.push('NOT the shop - ' + (s.sellerName || 'marketplace seller'));
+    }
+    bits.push(ago(s.at) + ' at ' + clockOf(s.at));
+    const how = lasted(s.at, s.endedAt);
+    if (how) bits.push(how);
+    meta.textContent = bits.join(' · ');
+    g.appendChild(meta);
+    row.appendChild(g);
+
+    if (s.price !== null && s.price !== undefined) {
+      row.appendChild(el('div', 'px', money(s.price)));
+    }
+    // Still up gets the button. A window that closed three days ago does not:
+    // a live-looking Open on a dead sighting is a click that goes nowhere and
+    // teaches you to distrust the ones that do.
+    if (!s.endedAt && s.url) {
+      const a = el('a', 'btn small go', 'Open');
+      a.href = s.url;
+      a.target = '_blank';
+      a.rel = 'noreferrer';
+      row.appendChild(a);
+    }
+    list.appendChild(row);
+  }
+}
+
 function renderLive() {
   const list = document.getElementById('live-list');
   const n = document.getElementById('live-n');
@@ -6578,6 +6696,7 @@ document.getElementById('nav-collapse').addEventListener('click', () => {
 
 document.getElementById('see-wins').addEventListener('click', () => showTab('wins'));
 document.getElementById('live-all').addEventListener('click', () => showTab('missions'));
+document.getElementById('sightings-all').addEventListener('click', () => showTab('activity'));
 
 const addDialog = document.getElementById('add-dialog');
 

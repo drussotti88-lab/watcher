@@ -2969,8 +2969,8 @@ export async function recordObservation(
     await db.query(
       `INSERT INTO observations
          (user_id, listing_id, state, confidence, price, seller_kind, seller_name,
-          available_quantity, note)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+          available_quantity, note, is_preorder)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
       [
         userId,
         obs.listingId,
@@ -2981,6 +2981,9 @@ export async function recordObservation(
         obs.sellerName ?? '',
         obs.availableQuantity ?? null,
         (obs.note ?? '').slice(0, 500),
+        // Stock and a pre-order both read 'in', and afterwards this row is the
+        // only record of which it was.
+        obs.isPreOrder === true,
       ],
     );
   }
@@ -3033,6 +3036,100 @@ export async function recentObservations(db: Sql, userId: number, limit = 50): P
     sellerName: String(r.seller_name ?? ''),
     note: String(r.note ?? ''),
     at: r.at ? new Date(String(r.at)).toISOString() : '',
+  }));
+}
+
+/**
+ * The last times anything was actually catchable.
+ *
+ * ── Why this is not the activity feed ───────────────────────────────────────
+ *
+ * The dashboard's hero says what is buyable RIGHT NOW, which on an ordinary
+ * day is nothing, and that is the honest answer. Nothing on the page said what
+ * had happened while nobody was looking.
+ *
+ * The case that named the gap: on 11 Sep 2026 Target opened pre-orders on the
+ * 30th Celebration Battle Deck for about eleven minutes and closed them again.
+ * Five readings, in the middle of the morning, and the only place that event
+ * existed afterwards was a log file on Roberto's machine. A system whose whole
+ * purpose is catching short windows had no screen that showed the short
+ * windows it had caught.
+ *
+ * ── What counts as a sighting ───────────────────────────────────────────────
+ *
+ * A reading where the thing became orderable — stock or a pre-order, both of
+ * which read `in` because both can go in a basket. Not every state change:
+ * going OUT of stock is the absence of an event, and an activity feed full of
+ * those is what the Activity tab is for.
+ *
+ * ── The number that makes it worth having ───────────────────────────────────
+ *
+ * How long it lasted. "In stock at 3:41am" is trivia; "in stock at 3:41am for
+ * four minutes" tells you whether being awake would have helped, and whether
+ * the cadence that caught it was fast enough to catch the next one. It is
+ * found by looking forward from the sighting to the next reading that was not
+ * `in` — null while it is still up, which the caller renders as "still there"
+ * rather than as a missing number.
+ */
+export interface Sighting {
+  listingId: number;
+  productName: string;
+  retailer: string;
+  url: string;
+  imageUrl: string;
+  price: number | null;
+  availableQuantity: number | null;
+  sellerKind: string;
+  sellerName: string;
+  isPreOrder: boolean;
+  at: string;
+  /** When it stopped being orderable. Null means it still is. */
+  endedAt: string | null;
+}
+
+export async function recentSightings(
+  db: Sql,
+  userId: number,
+  limit = 12,
+): Promise<Sighting[]> {
+  const rows = await db.query(
+    `SELECT o.listing_id, p.name AS product_name, p.image_url, l.retailer, l.url,
+            o.price, o.available_quantity, o.seller_kind, o.seller_name,
+            COALESCE(o.is_preorder, false) AS is_preorder, o.at,
+            (SELECT min(n.at) FROM observations n
+              WHERE n.listing_id = o.listing_id
+                AND n.at > o.at
+                AND n.state <> 'in') AS ended_at
+       FROM observations o
+       JOIN listings l ON l.id = o.listing_id
+       JOIN products p ON p.key = l.product_key
+       -- Scoped by what you watch, like the activity feed: the reading is a
+       -- shared fact, but a list carrying every member's products is unusable.
+       JOIN missions m ON m.listing_id = o.listing_id AND m.user_id = $1
+      WHERE o.state = 'in'
+        -- Tidied away means tidied away. A product archived off both lists
+        -- should not come back through the dashboard.
+        AND p.archived_at IS NULL
+      ORDER BY o.at DESC, o.id DESC
+      LIMIT $2`,
+    [userId, Math.min(Math.max(limit, 1), 50)],
+  );
+  return rows.map((r) => ({
+    listingId: Number(r.listing_id),
+    productName: String(r.product_name ?? ''),
+    retailer: String(r.retailer ?? ''),
+    url: String(r.url ?? ''),
+    imageUrl: String(r.image_url ?? ''),
+    price: toPrice(r.price),
+    availableQuantity:
+      r.available_quantity === null || r.available_quantity === undefined
+        ? null
+        : Number(r.available_quantity),
+    sellerKind: String(r.seller_kind ?? 'unknown'),
+    sellerName: String(r.seller_name ?? ''),
+    isPreOrder: r.is_preorder === true,
+    at: r.at ? new Date(String(r.at)).toISOString() : '',
+    endedAt: r.ended_at ? new Date(String(r.ended_at)).toISOString() : null,
   }));
 }
 

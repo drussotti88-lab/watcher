@@ -335,7 +335,7 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
     /** Everything the page renders, in one request. */
     if (request.method === 'GET' && path === '/api/dashboard') {
       const [missions, runs, changes, products, listings, settings, discoveries, forgotten,
-             archivedProducts] =
+             archivedProducts, sightings] =
         await Promise.all([
           store.listMissions(db, userId),
           store.recentRuns(db, userId, 40),
@@ -346,6 +346,7 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
           store.discoveriesToReview(db, userId),
           store.forgottenDiscoveries(db, userId),
           store.listArchivedProducts(db, userId),
+          store.recentSightings(db, userId, 12),
         ]);
       const sweep = await store.sweepState(db, userId, SWEEP_SOURCE, settings.sweepEveryHours);
       // Whose dashboard this is. Sent on every load rather than stored in the
@@ -425,6 +426,10 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
         // Tidied away, so tidying can be undone. Small: this is a list nobody
         // adds to on purpose.
         archivedProducts,
+        // The last times anything was actually catchable, and for how long.
+        // The hero says what is buyable now; this says what happened while
+        // nobody was looking, which on most days is the only news there is.
+        sightings,
         authorisations, committed, queues, stockLoads, acquisitions, requests, canCurate, canArm,
         capabilities: shopStatus, agentSeenAt, me, readiness,
         // Whether alerts have anywhere to go. A boolean, never the URL.

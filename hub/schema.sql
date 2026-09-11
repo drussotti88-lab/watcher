@@ -1028,3 +1028,14 @@ UPDATE discoveries
 -- ---------------------------------------------------------------------------
 ALTER TABLE products ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
 CREATE INDEX IF NOT EXISTS products_archived_idx ON products (archived_at);
+
+-- ---------------------------------------------------------------------------
+-- Was that sighting stock, or a pre-order?
+--
+-- Both read state 'in' — correctly, you can put either in a basket — and the
+-- observations table could not tell them apart afterwards. That matters for
+-- the sightings list: "in stock for 15 minutes at 3am" and "pre-orders opened
+-- for 15 minutes at 3am" call for completely different reactions, and the row
+-- is the only record either one leaves.
+-- ---------------------------------------------------------------------------
+ALTER TABLE observations ADD COLUMN IF NOT EXISTS is_preorder BOOLEAN NOT NULL DEFAULT false;
