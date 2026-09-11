@@ -4384,3 +4384,52 @@ test('with nothing declined, the chip is there and does nothing', async () => {
   (chip as HTMLButtonElement).click();
   assert.deepEqual(findNames(h), [RICH_FIND.name]);
 });
+
+// ── A pre-order with nothing to promise ─────────────────────────────────────
+//
+// 11 Sep 2026. A Target pre-order at $24.99 sat on the missions list reading
+// "not reading", "0 available", and no pre-order badge, because the reader had
+// called PRE_ORDER_SELLABLE with zero available-to-promise a contradiction.
+// Roberto: "We need preorders to show up as preorder even though, yes, they
+// show no stock."
+
+const withMissions = (missions: unknown[]): unknown => {
+  const base = JSON.parse(JSON.stringify(DASHBOARD));
+  base.missions = missions;
+  return base;
+};
+
+const PRE_ORDER_MISSION = {
+  ...JSON.parse(JSON.stringify(DASHBOARD)).missions[0],
+  id: 401,
+  productName: '30th Celebration Battle Deck 8212 Espeon ex',
+  retailer: 'Target',
+  state: 'in',
+  confidence: 'exact',
+  price: 24.99,
+  availableQuantity: 0,
+  isPreOrder: true,
+  armed: false,
+  releaseDate: '',
+};
+
+test('A PRE-ORDER SAYS PRE-ORDER, NOT IN STOCK AND NOT ZERO AVAILABLE', async () => {
+  const h = await boot(withMissions([PRE_ORDER_MISSION]));
+  const card = $(h, '#tab-missions');
+
+  const pills = [...h.doc.querySelectorAll('#tab-missions .pill')].map((p) => p.textContent);
+  assert.ok(pills.includes('PRE-ORDER'), 'the fact the card exists to state');
+  assert.ok(!pills.includes('IN STOCK'), 'a box that ships in November is not in stock');
+  assert.ok(!pills.includes('not reading'), 'it was read, and the reading was exact');
+
+  // Zero to promise is the definition of a pre-order, not news about one.
+  // Printed beside the badge it reads as a broken listing.
+  assert.ok(!card.textContent.includes('0 available'));
+});
+
+test('a real count is still printed, pre-order or not', async () => {
+  // The suppression is for zero specifically. A pre-order Target has actually
+  // allocated stock against is worth seeing.
+  const h = await boot(withMissions([{ ...PRE_ORDER_MISSION, availableQuantity: 40 }]));
+  assert.match($(h, '#tab-missions').textContent, /40 available/);
+});

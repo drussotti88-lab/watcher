@@ -5662,6 +5662,11 @@ function stockWhy(r) {
 function stockLine(r) {
   const q = r.availableQuantity;
   if (q === null || q === undefined) return '';
+  // A pre-order has nothing to count. Available-to-promise is zero for every
+  // pre-order ever listed \u2014 the thing does not exist yet \u2014 so "0 available"
+  // under a PRE-ORDER pill reads as a broken listing rather than as the normal
+  // state of something you can order right now.
+  if (r.isPreOrder && q === 0) return '';
   const n = isCapped(r) ? q + '+' : String(q);
   if (isStaged(r)) return n + ' staged \xB7 not sellable yet';
   return n + ' available';
@@ -11192,8 +11197,10 @@ function createHandler(db2, env2) {
           results.push({ listingId: obs.listingId, changed: false, error: err.message });
         }
       }
-      const cameIntoStock = changes.filter((c) => c.obs.state === "in" && c.was !== "in");
-      const willAlert = env2.DISCORD_WEBHOOK_URL && (cameIntoStock.length > 0 || loaded.length > 0 || stillIn.length > 0);
+      const enteredIn = changes.filter((c) => c.obs.state === "in" && c.was !== "in");
+      const cameIntoStock = enteredIn.filter((c) => c.obs.isPreOrder !== true);
+      const preOrdersOpened = enteredIn.filter((c) => c.obs.isPreOrder === true);
+      const willAlert = env2.DISCORD_WEBHOOK_URL && (cameIntoStock.length > 0 || preOrdersOpened.length > 0 || loaded.length > 0 || stillIn.length > 0);
       const byListing = willAlert ? new Map((await listMissions(db2, userId).catch(() => [])).map((m) => [m.listingId, m])) : /* @__PURE__ */ new Map();
       const speaks = (listingId) => {
         const m = byListing.get(listingId);
@@ -11224,8 +11231,33 @@ function createHandler(db2, env2) {
           now
         );
       }
+      const preOrderAlerts = preOrdersOpened.filter(
+        (c) => speaks(c.obs.listingId) && fromTheShop(c.obs.sellerKind)
+      );
+      if (preOrderAlerts.length > 0 && env2.DISCORD_WEBHOOK_URL) {
+        await announceStock(
+          env2.DISCORD_WEBHOOK_URL,
+          preOrderAlerts.map((c) => {
+            const m = byListing.get(c.obs.listingId);
+            return {
+              name: m ? m.productName : `listing ${c.obs.listingId}`,
+              retailer: m ? m.retailer : "",
+              price: c.obs.price ?? null,
+              msrp: m ? m.msrp : null,
+              url: m ? m.url : "",
+              imageUrl: m ? m.imageUrl : "",
+              seller: c.obs.sellerKind ?? "",
+              sellerName: c.obs.sellerName ?? (m ? m.sellerName : "") ?? "",
+              quantity: null,
+              orderLimit: c.obs.orderLimit ?? (m ? m.orderLimit : null)
+            };
+          }),
+          now,
+          "PRE-ORDER \u2014 orderable now, ships on release. This is not a restock."
+        );
+      }
       const againAlerts = stillIn.filter(
-        (o) => speaks(o.listingId) && fromTheShop(o.sellerKind)
+        (o) => speaks(o.listingId) && fromTheShop(o.sellerKind) && o.isPreOrder !== true
       );
       if (againAlerts.length > 0 && env2.DISCORD_WEBHOOK_URL) {
         await announceStock(

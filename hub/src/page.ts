@@ -2382,6 +2382,11 @@ function stockWhy(r) {
 function stockLine(r) {
   const q = r.availableQuantity;
   if (q === null || q === undefined) return '';
+  // A pre-order has nothing to count. Available-to-promise is zero for every
+  // pre-order ever listed — the thing does not exist yet — so "0 available"
+  // under a PRE-ORDER pill reads as a broken listing rather than as the normal
+  // state of something you can order right now.
+  if (r.isPreOrder && q === 0) return '';
   const n = isCapped(r) ? q + '+' : String(q);
   if (isStaged(r)) return n + ' staged · not sellable yet';
   return n + ' available';

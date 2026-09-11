@@ -247,7 +247,33 @@ export function readTargetBodies(
   const state = shippingStatus ? stockFromStatus(shippingStatus) : 'unknown';
 
   // Quantity contradicting the status is a reason to stop, not to pick a side.
-  const contradiction = state === 'in' && quantity === 0;
+  // ── Target's own word for "this is a pre-order" ───────────────────────────
+  //
+  // The status field says it outright and nothing was reading it for anything
+  // but the stock state. `PRE_ORDER_SELLABLE` means you can order it now and
+  // it ships on release; `PRE_ORDER_UNSELLABLE` means Target has announced it
+  // and is not taking orders yet.
+  const status = shippingStatus.trim().toUpperCase();
+  const preOrderSellable = status === 'PRE_ORDER_SELLABLE';
+  const preOrderUnsellable = status === 'PRE_ORDER_UNSELLABLE';
+
+  // ── Zero to promise is a contradiction, EXCEPT on a pre-order ─────────────
+  //
+  // The rule is right for stock: Target saying IN_STOCK while promising zero
+  // units is two fields disagreeing, and guessing either way is how a mission
+  // spends money on nothing.
+  //
+  // On a pre-order it is not a disagreement, it is the definition. The thing
+  // does not exist yet — available-to-promise is zero for every pre-order
+  // Target has ever listed, and it will be zero right up until release day.
+  // Treating that as a contradiction made the reading come back `unknown`,
+  // which is how "30th Celebration Battle Deck — Espeon ex", orderable at
+  // $24.99 with a street date, sat on the missions list reading
+  // `PRE_ORDER_SELLABLE; atp 0; IN_STOCK with zero available — refusing to
+  // call it in stock` and wearing no pre-order badge at all. Roberto, 11 Sep
+  // 2026: "We need preorders to show up as preorder even though, yes, they
+  // show no stock."
+  const contradiction = state === 'in' && quantity === 0 && !preOrderSellable;
 
   let confidence: Confidence = 'unknown';
   if (state !== 'unknown' && price !== null && !contradiction) confidence = 'exact';
@@ -267,7 +293,22 @@ export function readTargetBodies(
     streetDate === null
       ? null
       : Math.ceil((Date.parse(streetDate + 'T00:00:00Z') - now) / 86400_000);
-  const unreleased = daysOut !== null && daysOut > 0 && state !== 'in';
+
+  // ── What makes this a pre-order ──────────────────────────────────────────
+  //
+  // Target's status, first, because it is Target stating the fact rather than
+  // us inferring it. The date-based test stays as the fallback for an item
+  // whose status is ordinary but whose street date is still ahead — and it is
+  // only a fallback now, because it needed a street date to have survived into
+  // the reading, and Target does not always publish one. A pre-order with no
+  // date read as nothing at all: not in stock, not a pre-order, just an
+  // unexplained `unknown`.
+  //
+  // UNSELLABLE is deliberately NOT a pre-order here. This flag means "you may
+  // order this ahead of release", and the decision layer declines on it; an
+  // announced item with no buy button is described by its date instead, which
+  // is the honest version. It is still named in the note below.
+  const isPreOrder = preOrderSellable || (state === 'in' && daysOut !== null && daysOut > 0);
 
   const notes: string[] = [];
   if (shippingStatus) notes.push(`shipping ${shippingStatus}`);
@@ -294,7 +335,17 @@ export function readTargetBodies(
     notes.push(`PRE-ORDER STOCK ${preOrderQuantity}`);
   }
   if (pickup) notes.push('pickup available');
-  if (contradiction) notes.push('IN_STOCK with zero available — refusing to call it in stock');
+  // Say what it is before saying what is missing. "atp 0" under a pre-order is
+  // the expected shape, not a fault, and a line that leads with the zero reads
+  // as a broken listing.
+  if (preOrderSellable) {
+    notes.push('PRE-ORDER — orderable now, ships on release');
+  } else if (preOrderUnsellable) {
+    notes.push('pre-order announced, not yet taking orders');
+  }
+  if (contradiction) {
+    notes.push(`${status || 'IN_STOCK'} with zero available — refusing to call it in stock`);
+  }
   if (!shippingStatus) notes.push('no shipping availability in the captured responses');
 
   return {
@@ -310,7 +361,7 @@ export function readTargetBodies(
     pickupAvailable: pickup,
     seller,
     preOrder: {
-      isPreOrder: state === 'in' && daysOut !== null && daysOut > 0,
+      isPreOrder,
       // Same rule as the note: a past street date is history, not a schedule.
       // Reporting it would overwrite the Hub's stored date with last spring's
       // on every single check, forever.

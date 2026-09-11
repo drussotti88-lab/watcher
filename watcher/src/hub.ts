@@ -71,6 +71,15 @@ export interface Mission {
   lastChangedAt?: string;
   /** Target's published on-sale date, when it has one. Drives waking up. */
   releaseDate?: string | null;
+  /**
+   * Is the current reading a pre-order rather than stock?
+   *
+   * Sent by the Hub all along and never read here. It matters to the cadence:
+   * a pre-order reads `in` because you really can buy it, and `alwaysFast`
+   * exempts everything that reads `in` — so without this a Target pre-order
+   * would be read every sixty seconds for the six weeks until its release.
+   */
+  isPreOrder?: boolean;
 }
 
 /**

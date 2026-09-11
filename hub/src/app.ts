@@ -1524,7 +1524,23 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
 
       // Discord is optional and always has been — notify.ts posts nothing when
       // no webhook is configured. The page is the primary surface now.
-      const cameIntoStock = changes.filter((c) => c.obs.state === 'in' && c.was !== 'in');
+      /*
+       * ── A pre-order is not a restock, and must not ring like one ──────────
+       *
+       * From 11 Sep 2026 a Target pre-order reads `state: 'in'`, which is
+       * correct — you really can put it in a basket. Left alone, that would
+       * have made every pre-order going live fire the IN STOCK card, and then
+       * join the "still in stock" reminders and repeat it every few minutes
+       * for the six weeks until release. A channel that cries restock at
+       * something shipping in November is a channel people mute, and then the
+       * real one goes unread too.
+       *
+       * It is still news the first time — pre-orders do sell out — so it gets
+       * its own card, said as what it is.
+       */
+      const enteredIn = changes.filter((c) => c.obs.state === 'in' && c.was !== 'in');
+      const cameIntoStock = enteredIn.filter((c) => c.obs.isPreOrder !== true);
+      const preOrdersOpened = enteredIn.filter((c) => c.obs.isPreOrder === true);
 
       // ── Named from the watchlist, not from the reading ──────────────────────
       //
@@ -1537,7 +1553,8 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       // One lookup serves both alerts, and only when at least one will be sent.
       const willAlert =
         env.DISCORD_WEBHOOK_URL &&
-        (cameIntoStock.length > 0 || loaded.length > 0 || stillIn.length > 0);
+        (cameIntoStock.length > 0 || preOrdersOpened.length > 0 || loaded.length > 0 ||
+          stillIn.length > 0);
       const byListing = willAlert
         ? new Map((await store.listMissions(db, userId).catch(() => [])).map((m) => [m.listingId, m]))
         : new Map();
@@ -1614,11 +1631,43 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
         );
       }
 
+      // A pre-order opening, said as what it is. One card, once — it does not
+      // join the reminders below, because "you can still pre-order it" is not
+      // worth saying twice, let alone every few minutes until November.
+      const preOrderAlerts = preOrdersOpened.filter(
+        (c) => speaks(c.obs.listingId) && fromTheShop(c.obs.sellerKind),
+      );
+      if (preOrderAlerts.length > 0 && env.DISCORD_WEBHOOK_URL) {
+        await announceStock(
+          env.DISCORD_WEBHOOK_URL,
+          preOrderAlerts.map((c) => {
+            const m = byListing.get(c.obs.listingId);
+            return {
+              name: m ? m.productName : `listing ${c.obs.listingId}`,
+              retailer: m ? m.retailer : '',
+              price: c.obs.price ?? null,
+              msrp: m ? m.msrp : null,
+              url: m ? m.url : '',
+              imageUrl: m ? m.imageUrl : '',
+              seller: c.obs.sellerKind ?? '',
+              sellerName: c.obs.sellerName ?? (m ? m.sellerName : '') ?? '',
+              quantity: null,
+              orderLimit: c.obs.orderLimit ?? (m ? m.orderLimit : null),
+            };
+          }),
+          now,
+          'PRE-ORDER — orderable now, ships on release. This is not a restock.',
+        );
+      }
+
       // Same card, with a footer that says which kind of message it is. Without
       // it a reminder reads as a fresh drop and sends people running at
       // something they already missed or already bought.
+      //
+      // Pre-orders are excluded: an open pre-order stays open for weeks, and
+      // reminding somebody of that on a timer is the definition of noise.
       const againAlerts = stillIn.filter(
-        (o) => speaks(o.listingId) && fromTheShop(o.sellerKind),
+        (o) => speaks(o.listingId) && fromTheShop(o.sellerKind) && o.isPreOrder !== true,
       );
       if (againAlerts.length > 0 && env.DISCORD_WEBHOOK_URL) {
         await announceStock(

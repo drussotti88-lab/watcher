@@ -73,6 +73,7 @@ export interface QuietInput {
   checkNow?: boolean;
   armed?: boolean;
   releaseDate?: string | null;
+  isPreOrder?: boolean;
 }
 
 /**
@@ -83,11 +84,26 @@ export interface QuietInput {
  * Armed is the same argument with money attached. A release inside a week is
  * where a street-date stock load appears, which is the earliest signal there
  * is. And `checkNow` means somebody is watching the screen.
+ *
+ * ── The exception: a pre-order is a queue, not a race ───────────────────────
+ *
+ * A pre-order reads `in` for a good reason — you really can put it in a basket
+ * — and until 11 Sep 2026 that was enough to exempt it from resting forever.
+ * Target lists pre-orders six weeks ahead, so every one of them would have
+ * been read every sixty seconds, around the clock, for six weeks, to confirm
+ * that a thing you can order can still be ordered.
+ *
+ * Stock is urgent because it vanishes in minutes. A pre-order that is open
+ * stays open, and when it does close there is nothing to be done about it in
+ * the following minute. What IS urgent is the release itself, and the
+ * release-date window below already covers that — as does `armed`, for a
+ * pre-order somebody has committed money to.
  */
 export function alwaysFast(m: QuietInput, now: number): boolean {
   if (m.checkNow === true) return true;
   if (m.armed === true) return true;
-  if (m.state === 'in' || m.state === 'in_stock' || m.state === 'staged') return true;
+  if (m.state === 'staged') return true;
+  if ((m.state === 'in' || m.state === 'in_stock') && m.isPreOrder !== true) return true;
   if (m.releaseDate) {
     const at = new Date(m.releaseDate).getTime();
     if (Number.isFinite(at)) {

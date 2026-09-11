@@ -614,3 +614,109 @@ test('Walmart: NULL IS NOT ZERO', () => {
   assert.equal(r.state, 'in');
   assert.doesNotMatch(r.note, /qty 0/);
 });
+
+// ── A pre-order has nothing to promise, and that is not a fault ─────────────
+//
+// 11 Sep 2026. "30th Celebration Battle Deck 8212 Espeon ex" sat on the
+// missions list at $24.99, orderable from Target, reading:
+//
+//   shipping PRE_ORDER_SELLABLE; atp 0; IN_STOCK with zero available —
+//   refusing to call it in stock
+//
+// Three things wrong in one line. Target had said PRE_ORDER_SELLABLE and the
+// note claimed IN_STOCK. Zero available-to-promise is the DEFINITION of a
+// pre-order, not a contradiction — the thing does not exist yet. And the card
+// wore no pre-order badge, because isPreOrder needed a street date that had
+// not survived into the reading.
+//
+// Roberto: "We need preorders to show up as preorder even though, yes, they
+// show no stock."
+
+const preOrderBody = (over: Record<string, unknown> = {}) => ({
+  product: {
+    tcin: TCIN,
+    price: { current_retail: 24.99 },
+    fulfillment: {
+      shipping_options: {
+        availability_status: 'PRE_ORDER_SELLABLE',
+        available_to_promise_quantity: 0,
+      },
+    },
+    ...over,
+  },
+});
+
+test('TARGET: A PRE-ORDER WITH ZERO TO PROMISE IS A PRE-ORDER, NOT A CONTRADICTION', () => {
+  const r = readTargetBodies([preOrderBody()], TCIN);
+
+  assert.equal(r.preOrder.isPreOrder, true, 'Target said so in the status field');
+  assert.equal(r.state, 'in', 'you can put it in a basket, which is what "in" means here');
+  assert.equal(r.confidence, 'exact', 'a state and a price, with nothing disagreeing');
+  assert.equal(r.price, 24.99);
+  assert.match(r.note, /PRE-ORDER — orderable now, ships on release/);
+  assert.ok(!/refusing to call it in stock/.test(r.note), 'nothing here is being refused');
+});
+
+test('a pre-order needs no street date to be a pre-order', () => {
+  // The half that made it invisible. isPreOrder was `state === 'in' && the
+  // street date is still ahead`, so an item Target had explicitly marked
+  // PRE_ORDER_SELLABLE, but published no date for, came back as neither stock
+  // nor pre-order.
+  const r = readTargetBodies([preOrderBody()], TCIN);
+  assert.equal(r.preOrder.releaseDate, null, 'no date in this capture');
+  assert.equal(r.preOrder.isPreOrder, true, 'and it is still a pre-order');
+
+  // With a date, the date is carried too — that is what the card counts down.
+  const soon = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
+  const dated = readTargetBodies(
+    [preOrderBody({ item: { mmbv_content: { street_date: soon } } })],
+    TCIN,
+  );
+  assert.equal(dated.preOrder.isPreOrder, true);
+  assert.equal(dated.preOrder.releaseDate, soon);
+});
+
+test('ANNOUNCED BUT NOT YET ORDERABLE IS NOT A PRE-ORDER, AND SAYS WHY', () => {
+  // `isPreOrder` means "you may order this ahead of release", and the decision
+  // layer declines on it. Claiming it about something with no buy button would
+  // be a lie that gets acted on. The note still names it, because "Target has
+  // announced this" is worth seeing.
+  const r = readTargetBodies(
+    [{
+      product: {
+        tcin: TCIN,
+        price: { current_retail: 24.99 },
+        fulfillment: {
+          shipping_options: {
+            availability_status: 'PRE_ORDER_UNSELLABLE',
+            available_to_promise_quantity: 0,
+          },
+        },
+      },
+    }],
+    TCIN,
+  );
+  assert.equal(r.state, 'out');
+  assert.equal(r.preOrder.isPreOrder, false);
+  assert.match(r.note, /not yet taking orders/);
+});
+
+test('the contradiction rule still holds for actual stock', () => {
+  // The rule this narrows is a money rule and it must not have been widened by
+  // accident: IN_STOCK promising zero units is still two fields disagreeing.
+  const r = readTargetBodies(
+    [{
+      product: {
+        tcin: TCIN,
+        price: { current_retail: 24.99 },
+        fulfillment: {
+          shipping_options: { availability_status: 'IN_STOCK', available_to_promise_quantity: 0 },
+        },
+      },
+    }],
+    TCIN,
+  );
+  assert.equal(r.state, 'unknown');
+  assert.equal(r.preOrder.isPreOrder, false);
+  assert.match(r.note, /IN_STOCK with zero available/);
+});

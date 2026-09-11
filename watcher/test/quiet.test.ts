@@ -169,3 +169,41 @@ test('A RESTING LISTING REPORTS THE INTERVAL IT EARNED, NOT THE ONE IT ASKED FOR
   // minutes still to wait, where the raw interval said it was 10s overdue.
   assert.equal(Math.round((earned - NOW) / 60_000), 14);
 });
+
+test('A PRE-ORDER IS A QUEUE, NOT A RACE', () => {
+  // 11 Sep 2026. Fixing the Target reader so a pre-order reads `in` — which is
+  // correct, you can put it in a basket — would have exempted every Target
+  // pre-order from resting. Target lists them six weeks ahead, so that is six
+  // weeks of reading a page every sixty seconds, around the clock, to confirm
+  // that a thing you can order can still be ordered.
+  //
+  // Stock is urgent because it vanishes in minutes. An open pre-order stays
+  // open, and when it closes there is nothing to be done about it in the
+  // following minute.
+  const stale = { lastChangedAt: hoursAgo(24 * 30) };
+
+  assert.equal(quietInterval(listing({ ...stale, state: 'in' }), NOW), 60);
+  assert.equal(
+    quietInterval(listing({ ...stale, state: 'in', isPreOrder: true }), NOW),
+    MAX_INTERVAL_S,
+    'the same reading, minus the urgency it does not have',
+  );
+
+  // Everything that makes it urgent again still does.
+  const inDays = (d: number) => new Date(NOW + d * 86_400_000).toISOString();
+  const pre = { ...stale, state: 'in', isPreOrder: true };
+  assert.equal(quietInterval(listing({ ...pre, armed: true }), NOW), 60, 'money is committed');
+  assert.equal(quietInterval(listing({ ...pre, checkNow: true }), NOW), 60, 'somebody pressed it');
+  assert.equal(quietInterval(listing(pre), NOW, true), 60, 'a drop window is open');
+  assert.equal(
+    quietInterval(listing({ ...pre, releaseDate: inDays(4) }), NOW), 60,
+    'release week is the whole point of having watched it',
+  );
+
+  // And staged stock is untouched: a count appearing before a drop opens is
+  // the earliest warning there is, and it is not a pre-order.
+  assert.equal(quietInterval(listing({ ...stale, state: 'staged' }), NOW), 60);
+  assert.equal(
+    quietInterval(listing({ ...stale, state: 'staged', isPreOrder: true }), NOW), 60,
+  );
+});
