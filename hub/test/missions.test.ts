@@ -1157,3 +1157,108 @@ test('the first sighting of a listing is allowed to be unknown', async () => {
   const m = (await store.listMissions(db, USER)).find((m) => m.listingId === listingId)!;
   assert.equal(m.state, 'unknown');
 });
+
+// ── Bulk, at the endpoint ───────────────────────────────────────────────────
+
+test('A BULK ENDPOINT REPORTS WHAT MOVED, NOT WHAT WAS ASKED FOR', async () => {
+  const db = await TestDb.create();
+  await db.query(
+    `INSERT INTO products (key, name) VALUES ('a','A'),('b','B'),('c','C')`,
+  );
+  await db.query(`UPDATE products SET archived_at = now() WHERE key = 'c'`);
+
+  const res = await call(db, 'POST', '/api/products/bulk',
+    { keys: ['a', 'b', 'c'], action: 'archive' });
+  assert.equal(res.status, 200);
+  // Three asked for, two moved: 'c' was already archived. Saying "3" would be
+  // the kind of true-sounding number that teaches you not to trust the next.
+  assert.equal(res.body.moved, 2);
+
+  const left = await call(db, 'GET', '/api/dashboard');
+  assert.deepEqual(left.body.products.map((p: { key: string }) => p.key), []);
+  assert.equal(left.body.archivedProducts.length, 3);
+});
+
+test('ARCHIVING IS NOT DELETING, AND IT PAUSES WHAT IT HIDES', async () => {
+  // Deleting cascades to listings, missions, runs and observations. Archiving
+  // keeps all of it — and stops the reads, because spending requests on
+  // something you have tidied away is the thing being tidied away.
+  const db = await TestDb.create();
+  await db.query(`INSERT INTO products (key, name) VALUES ('p','P')`);
+  await db.query(
+    `INSERT INTO listings (id, user_id, product_key, retailer, external_id, url)
+     VALUES (1, 1, 'p', 'Target', '123', 'https://t.test/1')`,
+  );
+  await db.query(
+    `INSERT INTO missions (id, user_id, listing_id, label, enabled)
+     VALUES (1, 1, 1, 'P', true)`,
+  );
+
+  await call(db, 'POST', '/api/products/bulk', { keys: ['p'], action: 'archive' });
+
+  const listings = await db.query(`SELECT id FROM listings WHERE product_key = 'p'`);
+  assert.equal(listings.length, 1, 'the listing survives');
+  const [mission] = await db.query<{ enabled: boolean }>(`SELECT enabled FROM missions WHERE id = 1`);
+  assert.equal(mission?.enabled, false, 'and it stops being read');
+
+  // Restoring shows it again and deliberately does NOT start the reads: "show
+  // me this again" and "spend requests on this again" are different decisions
+  // and only one of them costs anything.
+  await call(db, 'POST', '/api/products/bulk', { keys: ['p'], action: 'restore' });
+  const [after] = await db.query<{ enabled: boolean }>(`SELECT enabled FROM missions WHERE id = 1`);
+  assert.equal(after?.enabled, false);
+});
+
+test('ONE DATE ACROSS A SELECTION, AND A BLANK ONE CLEARS IT', async () => {
+  // Target published 2026-09-15 for seven of the nine 30th Celebration
+  // products and nothing for the two Battle Decks, so the two that most needed
+  // the release-week cadence were the two resting hardest.
+  const db = await TestDb.create();
+  await db.query(`INSERT INTO products (key, name) VALUES ('a','A'),('b','B')`);
+
+  const res = await call(db, 'POST', '/api/products/bulk',
+    { keys: ['a', 'b'], action: 'release-date', releaseDate: '2026-09-15' });
+  assert.equal(res.body.moved, 2);
+  const rows = await db.query<{ release_date: string }>(
+    `SELECT release_date FROM products ORDER BY key`,
+  );
+  assert.equal(rows.length, 2);
+  // Postgres hands a DATE back as a Date object through this driver, so the
+  // assertion is on the day rather than on a string prefix.
+  assert.ok(rows.every((r) => new Date(String(r.release_date)).toISOString().slice(0, 10) === '2026-09-15'),
+    JSON.stringify(rows.map((r) => String(r.release_date))));
+
+  // A wrong date is worse than none, so the way out is as easy as the way in.
+  await call(db, 'POST', '/api/products/bulk',
+    { keys: ['a'], action: 'release-date', releaseDate: '' });
+  const [a] = await db.query<{ release_date: unknown }>(
+    `SELECT release_date FROM products WHERE key = 'a'`,
+  );
+  assert.equal(a?.release_date, null);
+
+  const bad = await call(db, 'POST', '/api/products/bulk',
+    { keys: ['b'], action: 'release-date', releaseDate: 'next tuesday' });
+  assert.equal(bad.status, 400);
+  assert.match(bad.body.error, /YYYY-MM-DD/);
+});
+
+test('A BULK ENDPOINT REFUSES AN EMPTY OR ENORMOUS SELECTION', async () => {
+  const db = await TestDb.create();
+  const none = await call(db, 'POST', '/api/products/bulk', { keys: [], action: 'archive' });
+  assert.equal(none.status, 400);
+  const many = await call(db, 'POST', '/api/missions/bulk',
+    { ids: Array.from({ length: 501 }, (_, i) => i + 1), action: 'pause' });
+  assert.equal(many.status, 400);
+});
+
+test('BULK NEVER ARMS, AT THE ENDPOINT AS WELL AS ON THE PAGE', async () => {
+  // The page not offering it is a courtesy. The endpoint refusing it is the
+  // rule: a ceiling and a tick are a decision about money, and the whole value
+  // of a bulk action is that you stop reading each row.
+  const db = await TestDb.create();
+  for (const action of ['arm', 'disarm', 'buy', 'delete']) {
+    const res = await call(db, 'POST', '/api/missions/bulk', { ids: [1], action });
+    assert.equal(res.status, 400, action + ' must not be a bulk action');
+    assert.match(res.body.error, /unknown action/);
+  }
+});

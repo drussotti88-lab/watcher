@@ -334,7 +334,8 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
 
     /** Everything the page renders, in one request. */
     if (request.method === 'GET' && path === '/api/dashboard') {
-      const [missions, runs, changes, products, listings, settings, discoveries, forgotten] =
+      const [missions, runs, changes, products, listings, settings, discoveries, forgotten,
+             archivedProducts] =
         await Promise.all([
           store.listMissions(db, userId),
           store.recentRuns(db, userId, 40),
@@ -344,6 +345,7 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
           store.getSettings(db, userId),
           store.discoveriesToReview(db, userId),
           store.forgottenDiscoveries(db, userId),
+          store.listArchivedProducts(db, userId),
         ]);
       const sweep = await store.sweepState(db, userId, SWEEP_SOURCE, settings.sweepEveryHours);
       // Whose dashboard this is. Sent on every load rather than stored in the
@@ -420,6 +422,9 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
         // What was decided against, and by whom. Small, and a review list you
         // cannot see the other side of is half a review list.
         forgotten,
+        // Tidied away, so tidying can be undone. Small: this is a list nobody
+        // adds to on purpose.
+        archivedProducts,
         authorisations, committed, queues, stockLoads, acquisitions, requests, canCurate, canArm,
         capabilities: shopStatus, agentSeenAt, me, readiness,
         // Whether alerts have anywhere to go. A boolean, never the URL.
@@ -447,6 +452,9 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
 
     const body = async <T>(): Promise<T | null> =>
       (await request.json().catch(() => null)) as T | null;
+    // Same helper under a name the bulk handlers below can use: `body` is
+    // shadowed inside each of them by the value it reads.
+    const body_ = body;
 
     if (request.method === 'POST' && path === '/api/products') {
       const b = await body<store.ProductInput>();
@@ -457,6 +465,91 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
         // validateProduct speaks in sentences. Pass it through unchanged.
         return json({ error: (err as Error).message }, 400);
       }
+    }
+
+    /*
+     * ── Bulk ──────────────────────────────────────────────────────────────
+     *
+     * One request per batch, not one per row. Roberto asked for multi-select
+     * across three tabs on 11 Sep, looking at 161 products; fifty checkboxes
+     * turning into fifty round trips is a progress bar and a half-applied
+     * change when one of them fails.
+     *
+     * Each of these returns how many rows it actually MOVED, not how many were
+     * asked for. Selecting forty products of which thirty are already archived
+     * and being told "40 archived" is the kind of true-sounding number that
+     * teaches you not to trust the next one.
+     */
+    if (request.method === 'POST' && path === '/api/products/bulk') {
+      const body = await body_<{ keys?: unknown; action?: unknown; releaseDate?: unknown }>();
+      const keys = Array.isArray(body?.keys) ? body!.keys.map((k) => String(k)) : [];
+      const action = String(body?.action ?? '');
+      if (keys.length === 0) return json({ error: 'nothing selected' }, 400);
+      if (keys.length > 500) return json({ error: 'too many at once' }, 400);
+      try {
+        if (action === 'archive' || action === 'restore') {
+          const moved = await store.archiveProducts(db, userId, keys, action === 'archive');
+          return json({ moved, action });
+        }
+        if (action === 'release-date') {
+          const raw = body?.releaseDate;
+          const date = raw === null || raw === undefined ? null : String(raw);
+          const moved = await store.setProductsReleaseDate(db, userId, keys, date);
+          return json({ moved, action });
+        }
+        return json({ error: `unknown action "${action}"` }, 400);
+      } catch (err) {
+        return json({ error: (err as Error).message }, 400);
+      }
+    }
+
+    if (request.method === 'POST' && path === '/api/missions/bulk') {
+      const body = await body_<{ ids?: unknown; action?: unknown }>();
+      const ids = Array.isArray(body?.ids) ? body!.ids.map((n) => Number(n)) : [];
+      const action = String(body?.action ?? '');
+      if (ids.length === 0) return json({ error: 'nothing selected' }, 400);
+      if (ids.length > 500) return json({ error: 'too many at once' }, 400);
+      // Arming is deliberately absent. A ceiling and a tick are a decision
+      // about money, and a decision about money does not get a checkbox in a
+      // list of fifty-eight rows.
+      if (action !== 'pause' && action !== 'resume') {
+        return json({ error: `unknown action "${action}"` }, 400);
+      }
+      const moved = await store.setMissionsEnabled(db, userId, ids, action === 'resume');
+      return json({ moved, action });
+    }
+
+    if (request.method === 'POST' && path === '/api/discoveries/bulk') {
+      const body = await body_<{ ids?: unknown; action?: unknown }>();
+      const ids = Array.isArray(body?.ids) ? body!.ids.map((n) => Number(n)) : [];
+      const action = String(body?.action ?? '');
+      if (ids.length === 0) return json({ error: 'nothing selected' }, 400);
+      if (ids.length > 500) return json({ error: 'too many at once' }, 400);
+      if (action !== 'keep' && action !== 'forget' && action !== 'restore') {
+        return json({ error: `unknown action "${action}"` }, 400);
+      }
+      // One at a time underneath, because Keep creates a product, a listing and
+      // a mission and has a great deal of logic behind it that is not worth
+      // duplicating in a batch form. The saving a person cares about is the
+      // fifty clicks, not the fifty queries.
+      let moved = 0;
+      const failed: { id: number; error: string }[] = [];
+      for (const id of ids) {
+        if (!Number.isInteger(id)) continue;
+        try {
+          const ok =
+            action === 'keep'
+              ? Boolean(await store.keepDiscovery(db, userId, id))
+              : action === 'forget'
+                ? await store.forgetDiscovery(db, userId, id)
+                : await store.restoreDiscovery(db, userId, id);
+          if (ok) moved += 1;
+        } catch (err) {
+          failed.push({ id, error: (err as Error).message });
+        }
+      }
+      // Partial success is the normal outcome of a batch and has to be said.
+      return json({ moved, action, failed });
     }
 
     if (request.method === 'DELETE' && path.startsWith('/api/products/')) {
@@ -1653,10 +1746,12 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
               sellerName: c.obs.sellerName ?? (m ? m.sellerName : '') ?? '',
               quantity: null,
               orderLimit: c.obs.orderLimit ?? (m ? m.orderLimit : null),
+              isPreOrder: true,
+              releaseDate: c.obs.releaseDate ?? (m ? m.releaseDate : null) ?? null,
             };
           }),
           now,
-          'PRE-ORDER — orderable now, ships on release. This is not a restock.',
+          'Orderable now, ships on release. This is not a restock.',
         );
       }
 

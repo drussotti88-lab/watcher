@@ -626,6 +626,7 @@ async function watchlist(db2, userId) {
 }
 function toProduct(r) {
   return {
+    archived: r.archived_at !== null && r.archived_at !== void 0,
     key: String(r.key),
     name: String(r.name ?? ""),
     releaseDate: toDate(r.release_date),
@@ -639,8 +640,64 @@ function keyForName(name) {
   return `prd_${slug || "unnamed"}`;
 }
 async function listProducts(db2, _userId) {
-  const rows = await db2.query("SELECT * FROM products ORDER BY name");
+  const rows = await db2.query("SELECT * FROM products WHERE archived_at IS NULL ORDER BY name");
   return rows.map(toProduct);
+}
+async function listArchivedProducts(db2, _userId) {
+  const rows = await db2.query(
+    "SELECT * FROM products WHERE archived_at IS NOT NULL ORDER BY archived_at DESC, name"
+  );
+  return rows.map(toProduct);
+}
+async function archiveProducts(db2, userId, keys, archived) {
+  if (!await canWriteCatalogue(db2, userId)) {
+    throw new Error("this account may not curate the catalogue");
+  }
+  const list = [...new Set(keys.map((k) => String(k ?? "").trim()).filter(Boolean))];
+  if (list.length === 0) return 0;
+  const rows = await db2.query(
+    `UPDATE products SET archived_at = ${archived ? "now()" : "NULL"}
+      WHERE key = ANY($1::text[])
+        AND (archived_at IS NULL) = $2
+      RETURNING key`,
+    [list, archived]
+  );
+  if (archived && rows.length > 0) {
+    await db2.query(
+      `UPDATE missions SET enabled = false
+        WHERE user_id = $1
+          AND listing_id IN (SELECT id FROM listings WHERE product_key = ANY($2::text[]))`,
+      [userId, rows.map((r) => r.key)]
+    );
+  }
+  return rows.length;
+}
+async function setProductsReleaseDate(db2, userId, keys, date) {
+  if (!await canWriteCatalogue(db2, userId)) {
+    throw new Error("this account may not curate the catalogue");
+  }
+  const want = (date ?? "").trim();
+  if (want && !/^\d{4}-\d{2}-\d{2}$/.test(want)) {
+    throw new Error("a release date must be YYYY-MM-DD, or blank to clear it");
+  }
+  const list = [...new Set(keys.map((k) => String(k ?? "").trim()).filter(Boolean))];
+  if (list.length === 0) return 0;
+  const rows = await db2.query(
+    `UPDATE products SET release_date = $2 WHERE key = ANY($1::text[]) RETURNING key`,
+    [list, want || null]
+  );
+  return rows.length;
+}
+async function setMissionsEnabled(db2, userId, ids, enabled) {
+  const list = [...new Set(ids.map((n) => Number(n)).filter((n) => Number.isInteger(n) && n > 0))];
+  if (list.length === 0) return 0;
+  const rows = await db2.query(
+    `UPDATE missions SET enabled = $3
+      WHERE user_id = $1 AND id = ANY($2::bigint[]) AND enabled <> $3
+      RETURNING id`,
+    [userId, list, enabled]
+  );
+  return rows.length;
 }
 function validateProduct(p) {
   if (!p.name?.trim()) return "a product needs a name";
@@ -2794,6 +2851,7 @@ var COLOR_NEW = 2059087;
 var COLOR_OPS = 9069584;
 var COLOR_STAGED = 12597547;
 var COLOR_IN = 2067276;
+var COLOR_PRE = 5793266;
 var COLOR_QUEUE = 15105570;
 var COLOR_WIN = 16106818;
 var MAX_FIELDS = 20;
@@ -2861,9 +2919,16 @@ function buyablePhrase(addToCart) {
 }
 function buildStockEmbeds(items, now, note) {
   return items.slice(0, 10).map((i) => {
+    const pre = i.isPreOrder === true;
     const fields = [
       inline("Price", dollars(i.price)),
-      inline("Stock", stockPhrase(i.quantity, i.orderLimit, true)),
+      // "0 available" on a pre-order is the normal state of something you can
+      // order right now — nothing has been manufactured yet — and printed
+      // beside a price it reads as a listing that is already gone.
+      inline(
+        pre ? "Ships" : "Stock",
+        pre ? i.releaseDate ? `on ${i.releaseDate}` : "on release" : stockPhrase(i.quantity, i.orderLimit, true)
+      ),
       inline("Retailer", i.retailer || "\u2014")
     ];
     const buyable = buyablePhrase(i.addToCart);
@@ -2882,9 +2947,11 @@ function buildStockEmbeds(items, now, note) {
       )
     );
     return {
-      title: clip(i.name || "a watched listing", 240),
+      // The prefix is the point. Two seconds after the notification lands,
+      // the title is all anybody has read.
+      title: clip((pre ? "PRE-ORDER \xB7 " : "") + (i.name || "a watched listing"), 240),
       ...i.url ? { url: i.url } : {},
-      color: COLOR_IN,
+      color: pre ? COLOR_PRE : COLOR_IN,
       ...i.imageUrl ? { thumbnail: { url: i.imageUrl } } : {},
       fields,
       ...note ? { footer: { text: note } } : {},
@@ -4174,6 +4241,12 @@ button.nm:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px;
  * every character including the last, so the glyphs drift left of centre by
  * exactly one gap; indenting by the same amount puts them back.
  */
+.pick { display: flex; align-items: center; padding: 0 10px 0 2px; }
+.pick input { width: 20px; height: 20px; accent-color: var(--accent); cursor: pointer; }
+.pickbar { border-style: dashed; }
+.dateset { display: inline-flex; gap: 6px; align-items: center; }
+.dateset input { padding: 5px 8px; border-radius: 8px; border: 1px solid var(--line);
+                 background: var(--bg); color: var(--fg); font: inherit; }
 .pill {
   display: inline-flex; align-items: center; justify-content: center;
   padding: 3px 11px; border-radius: 999px; min-height: 22px;
@@ -5674,9 +5747,63 @@ function stockLine(r) {
 
 /* \u2500\u2500 missions \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */
 
-function missionCard(m) {
+function renderMissions() {
+  const missions = document.getElementById('missions');
+  if (!missions) return;
+  const keptMsg = document.getElementById('pick-msg');
+  missions.textContent = '';
+  if (keptMsg && keptMsg.textContent) missions.appendChild(keptMsg);
+  const shownMissions = renderMissionsBar(DATA.missions);
+
+  /*
+   * Pause and resume, and nothing that spends.
+   *
+   * Arming is deliberately absent. A ceiling and a tick are a decision about
+   * money, and a decision about money does not get a checkbox in a list of
+   * fifty-eight rows - the whole value of a bulk action is that you stop
+   * reading each one, which is the opposite of what arming needs.
+   */
+  const actions = [
+    {
+      label: 'Pause watching',
+      danger: true,
+      run: async (ids) => {
+        const out = await api('POST', '/api/missions/bulk',
+          { ids: ids.map(Number), action: 'pause' });
+        return movedLine(out, ids.length, 'paused');
+      },
+    },
+    {
+      label: 'Resume watching',
+      run: async (ids) => {
+        const out = await api('POST', '/api/missions/bulk',
+          { ids: ids.map(Number), action: 'resume' });
+        return movedLine(out, ids.length, 'watching again');
+      },
+    },
+  ];
+
+  // Only what is on screen can be selected. "Select all" meaning "all 58,
+  // including the 27 your filter is hiding" is how somebody pauses a drop they
+  // were watching for.
+  const bar = pickBar('missions', shownMissions.map((m) => m.id), actions, renderMissions);
+  if (bar) missions.appendChild(bar);
+
+  if (!DATA.missions.length) {
+    missions.appendChild(emptyBlock('Nothing is being watched yet.',
+      'Add a product on the Products tab, paste a listing URL, and a mission is created for you.'));
+  } else if (!shownMissions.length) {
+    missions.appendChild(emptyBlock('Nothing matches those filters.',
+      DATA.missions.length + ' missions are hidden - clear the filters above to see them.'));
+  }
+  for (const m of shownMissions) missions.appendChild(missionCard(m, renderMissions));
+}
+
+function missionCard(m, redraw) {
   const card = el('div', 'card' + (m.enabled ? '' : ' off'));
   const row = el('div', 'row');
+  const box = pickBox('missions', m.id, redraw || (() => {}));
+  if (box) row.appendChild(box);
   row.appendChild(thumb(m.imageUrl, m.productName));
 
   const left = el('div', 'grow');
@@ -6261,9 +6388,318 @@ function runTable(runs, emptyText, lastCheckedAt) {
 
 /* \u2500\u2500 products \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */
 
-function productCard(p) {
+/* \u2500\u2500 Selecting many things at once \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+ *
+ * Roberto, 11 Sep 2026, looking at a Products tab with 161 rows in it: "I want
+ * multi select and bulk action options."
+ *
+ * The rows that make this necessary are the ones nobody will ever act on
+ * singly \u2014 a Detective Pikachu case file from 2019 with zero listings, forty
+ * Walmart archive products, nine release dates that should all say the same
+ * thing. Any of those is thirty seconds to fix alone, which is why none of
+ * them get fixed.
+ *
+ * One selection exists at a time, across all three lists. Not a limitation \u2014
+ * a selection you cannot see is a selection you act on by accident, and the
+ * only way to see one is to be on the tab it belongs to.
+ *
+ * Arming is deliberately not here and will not be. A ceiling and a tick are a
+ * decision about money, and a decision about money does not get a checkbox in
+ * a list of fifty-eight rows.
+ */
+const PICK = { list: '', ids: [] };
+
+function picking(list) { return PICK.list === list; }
+
+function pickHas(id) { return PICK.ids.indexOf(String(id)) !== -1; }
+
+function pickSet(id, on) {
+  const key = String(id);
+  const at = PICK.ids.indexOf(key);
+  if (on && at === -1) PICK.ids.push(key);
+  if (!on && at !== -1) PICK.ids.splice(at, 1);
+}
+
+/**
+ * Every list redraws, not just the one being touched.
+ *
+ * One selection exists at a time, so starting one on Missions has to take the
+ * checkboxes off Products - otherwise the other list keeps showing ticked
+ * boxes that are no longer part of any selection, which is exactly the state
+ * somebody acts on by accident.
+ */
+function redrawPicks() {
+  if (typeof renderProducts === 'function') renderProducts();
+  if (typeof renderMissions === 'function') renderMissions();
+  if (typeof renderFinds === 'function') renderFinds();
+}
+
+function pickStart(list) {
+  PICK.list = list;
+  PICK.ids = [];
+  redrawPicks();
+}
+
+function pickEnd() {
+  PICK.list = '';
+  PICK.ids = [];
+  redrawPicks();
+}
+
+/**
+ * The checkbox that goes on a card.
+ *
+ * Returns null when this list is not in selection mode, so every caller is one
+ * line: append what you get back, which is either a control or nothing.
+ */
+function pickBox(list, id, onChange) {
+  if (!picking(list)) return null;
+  const wrap = el('label', 'pick');
+  const box = document.createElement('input');
+  box.type = 'checkbox';
+  box.checked = pickHas(id);
+  box.setAttribute('aria-label', 'select this row');
+  box.addEventListener('change', () => {
+    pickSet(id, box.checked);
+    onChange();
+  });
+  wrap.appendChild(box);
+  return wrap;
+}
+
+/**
+ * The bar above a list: how to start selecting, and what to do with what is
+ * selected.
+ *
+ * The actions argument is a list of { label, danger, run }; run receives the ids.
+ * Each action reports how many rows it actually MOVED rather than how many
+ * were asked for \u2014 selecting forty and being told "40 archived" when thirty
+ * were already archived is the kind of true-sounding number that teaches you
+ * not to trust the next one.
+ */
+function pickBar(list, allIds, actions, onDone) {
+  const bar = el('div', 'card pickbar');
+
+  if (!picking(list)) {
+    if (allIds.length < 2 || DATA.canCurate !== true) return null;
+    const start = el('button', 'small', 'Select');
+    start.addEventListener('click', () => { pickStart(list); onDone(); });
+    const acts = el('div', 'actions');
+    acts.appendChild(start);
+    bar.appendChild(acts);
+    return bar;
+  }
+
+  const n = PICK.ids.length;
+  bar.appendChild(el('div', 'name', n === 0
+    ? 'Nothing selected'
+    : n + (n === 1 ? ' selected' : ' selected')));
+
+  const acts = el('div', 'actions');
+  acts.style.marginTop = '10px';
+
+  const all = el('button', 'small', 'Select all ' + allIds.length);
+  all.addEventListener('click', () => {
+    PICK.ids = allIds.map(String);
+    onDone();
+  });
+  acts.appendChild(all);
+
+  if (n > 0) {
+    const none = el('button', 'small', 'Clear');
+    none.addEventListener('click', () => { PICK.ids = []; onDone(); });
+    acts.appendChild(none);
+  }
+
+  const stop = el('button', 'small', 'Cancel');
+  stop.addEventListener('click', () => { pickEnd(); onDone(); });
+  acts.appendChild(stop);
+  bar.appendChild(acts);
+
+  // Nothing selected means no verbs. A row of buttons that all refuse is worse
+  // than no row at all.
+  if (n === 0) return bar;
+
+  /*
+   * Where the outcome lands, and why it is not inside the bar.
+   *
+   * A bulk action that changes forty rows and says nothing is one you cannot
+   * tell worked, and the honest answer is usually partial - "1 of 4", because
+   * the other three were already archived. But every one of these reloads the
+   * list, which destroys the bar and the message with it: the confirmation
+   * appeared and vanished in the same frame.
+   *
+   * So it is written to a node that outlives the redraw and re-attached to
+   * whichever bar is on screen next.
+   */
+  let msg = document.getElementById('pick-msg');
+  if (!msg) {
+    msg = el('div', 'msg');
+    msg.id = 'pick-msg';
+  }
+
+  const doers = el('div', 'actions');
+  doers.style.marginTop = '8px';
+  for (const a of actions) {
+    if (a.render) { doers.appendChild(a.render(() => PICK.ids.slice(), onDone, msg)); continue; }
+    const b = el('button', 'small' + (a.danger ? '' : ' primary'), a.label);
+    b.addEventListener('click', async (e) => {
+      await withButton(e.target, 'Working...', msg, async () => {
+        const said = await a.run(PICK.ids.slice());
+        PICK.ids = [];
+        load();
+        return said;
+      });
+    });
+    doers.appendChild(b);
+  }
+  bar.appendChild(doers);
+  bar.appendChild(msg);
+  return bar;
+}
+
+/**
+ * Keep the last bulk outcome on screen through the redraw it caused.
+ *
+ * Called by each list after it rebuilds. Without it the message is written to
+ * a node that is discarded a frame later, which is indistinguishable from an
+ * action that said nothing at all.
+ */
+function pickMsgInto(container) {
+  const msg = document.getElementById('pick-msg');
+  if (msg && msg.textContent && !container.contains(msg)) {
+    container.insertBefore(msg, container.firstChild);
+  }
+}
+
+/** "3 of 12 moved" said as a sentence, because a batch is usually partial. */
+function movedLine(out, asked, verb) {
+  const moved = out && typeof out.moved === 'number' ? out.moved : 0;
+  if (moved === asked) return moved + ' ' + verb;
+  return moved + ' of ' + asked + ' ' + verb + ' - the rest were already that way';
+}
+
+/* Which pile of products is on screen: the live ones, or what was tidied away. */
+const PRODUCT_VIEW = { archived: false };
+
+function renderProducts() {
+  const products = document.getElementById('products');
+  if (!products) return;
+  const keptMsg = document.getElementById('pick-msg');
+  products.textContent = '';
+  if (keptMsg && keptMsg.textContent) products.appendChild(keptMsg);
+
+  const archived = DATA.archivedProducts || [];
+  const source = PRODUCT_VIEW.archived ? archived : (DATA.products || []);
+  const shown = PRODUCT_VIEW.archived ? source : renderProductsBar(source);
+
+  /*
+   * Archiving, not deleting, and the way back is on the same screen.
+   *
+   * Deleting a product cascades to its listings, missions, runs and
+   * observations. That is right for "this was a mistake" and wrong for "I am
+   * tidying up" - a bulk button that destroys history the first time somebody
+   * mis-clicks is a button they never press again, and then 161 products stay
+   * 161 products forever.
+   */
+  if (archived.length > 0 || PRODUCT_VIEW.archived) {
+    const nav = el('div', 'actions');
+    nav.style.marginBottom = '10px';
+    const swap = el('button', 'small', PRODUCT_VIEW.archived
+      ? 'Back to the catalogue'
+      : 'Archived (' + archived.length + ')');
+    swap.addEventListener('click', () => {
+      PRODUCT_VIEW.archived = !PRODUCT_VIEW.archived;
+      pickEnd();
+      renderProducts();
+    });
+    nav.appendChild(swap);
+    products.appendChild(nav);
+  }
+
+  const keys = shown.map((p) => p.key);
+  const actions = PRODUCT_VIEW.archived
+    ? [{
+        label: 'Put back in the catalogue',
+        run: async (ids) => {
+          const out = await api('POST', '/api/products/bulk',
+            { keys: ids, action: 'restore' });
+          return movedLine(out, ids.length, 'back in the catalogue');
+        },
+      }]
+    : [
+        {
+          label: 'Archive',
+          danger: true,
+          run: async (ids) => {
+            const out = await api('POST', '/api/products/bulk',
+              { keys: ids, action: 'archive' });
+            // Said plainly because it is the surprising half: archiving stops
+            // the reads, and un-archiving deliberately does not start them
+            // again. "Show me this again" and "spend requests on this again"
+            // are different decisions and only one of them costs anything.
+            return movedLine(out, ids.length, 'archived') +
+              ' - their missions are paused, and nothing was deleted';
+          },
+        },
+        {
+          /*
+           * One date, applied to a batch.
+           *
+           * The case that asked for it: Target published 2026-09-15 for seven
+           * of the nine 30th Celebration products and nothing at all for the
+           * two Battle Decks - so the two that most needed the release-week
+           * cadence were the two resting hardest. Typing the same date nine
+           * times is how that stays wrong.
+           */
+          render: (ids, done, msg) => {
+            const wrap = el('span', 'dateset');
+            const input = document.createElement('input');
+            input.type = 'date';
+            input.className = 'small';
+            input.setAttribute('aria-label', 'release date for the selection');
+            const go = el('button', 'small primary', 'Set release date');
+            go.addEventListener('click', async (e) => {
+              await withButton(e.target, 'Setting...', msg, async () => {
+                const list = ids();
+                const out = await api('POST', '/api/products/bulk',
+                  { keys: list, action: 'release-date', releaseDate: input.value || null });
+                PICK.ids = [];
+                load();
+                return input.value
+                  ? movedLine(out, list.length, 'now release ' + input.value)
+                  : movedLine(out, list.length, 'had their release date cleared');
+              });
+            });
+            wrap.appendChild(input);
+            wrap.appendChild(go);
+            return wrap;
+          },
+        },
+      ];
+
+  const bar = pickBar('products', keys, actions, renderProducts);
+  if (bar) products.appendChild(bar);
+
+  if (PRODUCT_VIEW.archived && archived.length === 0) {
+    products.appendChild(emptyBlock('Nothing is archived.',
+      'Tidied-away products land here, with everything under them intact.'));
+    return;
+  }
+  if (!PRODUCT_VIEW.archived && !(DATA.products || []).length) {
+    products.appendChild(emptyBlock('No products yet.', 'Add one with the form above.'));
+  } else if (!shown.length) {
+    products.appendChild(emptyBlock('Nothing matches those filters.',
+      source.length + ' products are hidden - clear the filters above to see them.'));
+  }
+  for (const p of shown) products.appendChild(productCard(p, renderProducts));
+}
+
+function productCard(p, redraw) {
   const card = el('div', 'card');
   const row = el('div', 'row');
+  const box = pickBox('products', p.key, redraw || (() => {}));
+  if (box) row.appendChild(box);
   row.appendChild(thumb(p.imageUrl, p.name, true));
 
   const left = el('div', 'grow');
@@ -6853,28 +7289,8 @@ function renderActivityBar(runs, changes) {
 }
 
 function render() {
-  const missions = document.getElementById('missions');
-  missions.textContent = '';
-  const shownMissions = renderMissionsBar(DATA.missions);
-  if (!DATA.missions.length) {
-    missions.appendChild(emptyBlock('Nothing is being watched yet.',
-      'Add a product on the Products tab, paste a listing URL, and a mission is created for you.'));
-  } else if (!shownMissions.length) {
-    missions.appendChild(emptyBlock('Nothing matches those filters.',
-      DATA.missions.length + ' missions are hidden \u2014 clear the filters above to see them.'));
-  }
-  for (const m of shownMissions) missions.appendChild(missionCard(m));
-
-  const products = document.getElementById('products');
-  products.textContent = '';
-  const shownProducts = renderProductsBar(DATA.products);
-  if (!DATA.products.length) {
-    products.appendChild(emptyBlock('No products yet.', 'Add one with the form above.'));
-  } else if (!shownProducts.length) {
-    products.appendChild(emptyBlock('Nothing matches those filters.',
-      DATA.products.length + ' products are hidden \u2014 clear the filters above to see them.'));
-  }
-  for (const p of shownProducts) products.appendChild(productCard(p));
+  renderMissions();
+  renderProducts();
 
   const act = renderActivityBar(DATA.runs, DATA.changes);
 
@@ -9026,9 +9442,47 @@ function renderFinds() {
     return;
   }
 
+  /*
+   * Keeping or declining fifty finds, fifty clicks at a time, is why 56 of
+   * them are still waiting. Keep is the expensive verb here - it creates a
+   * product, a listing and a mission each time - so it says so before it runs.
+   */
+  const findActions = FIND_FILTER.declined
+    ? [{
+        label: 'Put back in the list',
+        run: async (ids) => {
+          const out = await api('POST', '/api/discoveries/bulk',
+            { ids: ids.map(Number), action: 'restore' });
+          return movedLine(out, ids.length, 'back in the list, undecided again');
+        },
+      }]
+    : [
+        {
+          label: 'Keep',
+          run: async (ids) => {
+            const out = await api('POST', '/api/discoveries/bulk',
+              { ids: ids.map(Number), action: 'keep' });
+            return movedLine(out, ids.length, 'kept - each is a product now, watching, never armed');
+          },
+        },
+        {
+          label: 'Decline',
+          danger: true,
+          run: async (ids) => {
+            const out = await api('POST', '/api/discoveries/bulk',
+              { ids: ids.map(Number), action: 'forget' });
+            return movedLine(out, ids.length, 'declined - all of it is under Declined, and reversible');
+          },
+        },
+      ];
+  const findBar = pickBar('finds', shown.map((d) => d.id), findActions, renderFinds);
+  if (findBar) list.appendChild(findBar);
+
   for (const d of shown) {
     const card = el('div', 'card');
     const row = el('div', 'row');
+    const box = pickBox('finds', d.id, renderFinds);
+    if (box) row.appendChild(box);
     // The picture comes with the find, straight from Target's own response.
     // A review list of twenty text rows is a chore; a list of twenty boxes you
     // recognise is a glance.
@@ -10478,7 +10932,17 @@ function createHandler(db2, env2) {
       return html(dashboardPage());
     }
     if (request.method === "GET" && path === "/api/dashboard") {
-      const [missions, runs, changes, products, listings, settings, discoveries, forgotten] = await Promise.all([
+      const [
+        missions,
+        runs,
+        changes,
+        products,
+        listings,
+        settings,
+        discoveries,
+        forgotten,
+        archivedProducts
+      ] = await Promise.all([
         listMissions(db2, userId),
         recentRuns(db2, userId, 40),
         recentObservations(db2, userId, 40),
@@ -10486,7 +10950,8 @@ function createHandler(db2, env2) {
         listListings(db2, userId),
         getSettings(db2, userId),
         discoveriesToReview(db2, userId),
-        forgottenDiscoveries(db2, userId)
+        forgottenDiscoveries(db2, userId),
+        listArchivedProducts(db2, userId)
       ]);
       const sweep = await sweepState(db2, userId, SWEEP_SOURCE, settings.sweepEveryHours);
       const you = await userHandle(db2, userId);
@@ -10526,6 +10991,9 @@ function createHandler(db2, env2) {
         // What was decided against, and by whom. Small, and a review list you
         // cannot see the other side of is half a review list.
         forgotten,
+        // Tidied away, so tidying can be undone. Small: this is a list nobody
+        // adds to on purpose.
+        archivedProducts,
         authorisations,
         committed,
         queues,
@@ -10553,6 +11021,7 @@ function createHandler(db2, env2) {
       return json({ mission, runs: await missionRuns(db2, userId, id, 200) });
     }
     const body = async () => await request.json().catch(() => null);
+    const body_ = body;
     if (request.method === "POST" && path === "/api/products") {
       const b = await body();
       if (!b) return json({ error: "body must be JSON" }, 400);
@@ -10561,6 +11030,62 @@ function createHandler(db2, env2) {
       } catch (err) {
         return json({ error: err.message }, 400);
       }
+    }
+    if (request.method === "POST" && path === "/api/products/bulk") {
+      const body2 = await body_();
+      const keys = Array.isArray(body2?.keys) ? body2.keys.map((k) => String(k)) : [];
+      const action = String(body2?.action ?? "");
+      if (keys.length === 0) return json({ error: "nothing selected" }, 400);
+      if (keys.length > 500) return json({ error: "too many at once" }, 400);
+      try {
+        if (action === "archive" || action === "restore") {
+          const moved = await archiveProducts(db2, userId, keys, action === "archive");
+          return json({ moved, action });
+        }
+        if (action === "release-date") {
+          const raw = body2?.releaseDate;
+          const date = raw === null || raw === void 0 ? null : String(raw);
+          const moved = await setProductsReleaseDate(db2, userId, keys, date);
+          return json({ moved, action });
+        }
+        return json({ error: `unknown action "${action}"` }, 400);
+      } catch (err) {
+        return json({ error: err.message }, 400);
+      }
+    }
+    if (request.method === "POST" && path === "/api/missions/bulk") {
+      const body2 = await body_();
+      const ids = Array.isArray(body2?.ids) ? body2.ids.map((n) => Number(n)) : [];
+      const action = String(body2?.action ?? "");
+      if (ids.length === 0) return json({ error: "nothing selected" }, 400);
+      if (ids.length > 500) return json({ error: "too many at once" }, 400);
+      if (action !== "pause" && action !== "resume") {
+        return json({ error: `unknown action "${action}"` }, 400);
+      }
+      const moved = await setMissionsEnabled(db2, userId, ids, action === "resume");
+      return json({ moved, action });
+    }
+    if (request.method === "POST" && path === "/api/discoveries/bulk") {
+      const body2 = await body_();
+      const ids = Array.isArray(body2?.ids) ? body2.ids.map((n) => Number(n)) : [];
+      const action = String(body2?.action ?? "");
+      if (ids.length === 0) return json({ error: "nothing selected" }, 400);
+      if (ids.length > 500) return json({ error: "too many at once" }, 400);
+      if (action !== "keep" && action !== "forget" && action !== "restore") {
+        return json({ error: `unknown action "${action}"` }, 400);
+      }
+      let moved = 0;
+      const failed = [];
+      for (const id of ids) {
+        if (!Number.isInteger(id)) continue;
+        try {
+          const ok = action === "keep" ? Boolean(await keepDiscovery(db2, userId, id)) : action === "forget" ? await forgetDiscovery(db2, userId, id) : await restoreDiscovery(db2, userId, id);
+          if (ok) moved += 1;
+        } catch (err) {
+          failed.push({ id, error: err.message });
+        }
+      }
+      return json({ moved, action, failed });
     }
     if (request.method === "DELETE" && path.startsWith("/api/products/")) {
       const key = decodeURIComponent(path.slice("/api/products/".length));
@@ -11249,11 +11774,13 @@ function createHandler(db2, env2) {
               seller: c.obs.sellerKind ?? "",
               sellerName: c.obs.sellerName ?? (m ? m.sellerName : "") ?? "",
               quantity: null,
-              orderLimit: c.obs.orderLimit ?? (m ? m.orderLimit : null)
+              orderLimit: c.obs.orderLimit ?? (m ? m.orderLimit : null),
+              isPreOrder: true,
+              releaseDate: c.obs.releaseDate ?? (m ? m.releaseDate : null) ?? null
             };
           }),
           now,
-          "PRE-ORDER \u2014 orderable now, ships on release. This is not a restock."
+          "Orderable now, ships on release. This is not a restock."
         );
       }
       const againAlerts = stillIn.filter(

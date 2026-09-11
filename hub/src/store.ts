@@ -403,10 +403,13 @@ export interface ProductRow {
   msrp: number | null;
   imageUrl: string;
   notes: string;
+  /** Tidied away. Keeps every listing, mission and run under it. */
+  archived: boolean;
 }
 
 function toProduct(r: Record<string, unknown>): ProductRow {
   return {
+    archived: r.archived_at !== null && r.archived_at !== undefined,
     key: String(r.key),
     name: String(r.name ?? ''),
     releaseDate: toDate(r.release_date),
@@ -439,8 +442,119 @@ export function keyForName(name: string): string {
  * stops taking it is a reader nobody notices has changed meaning.
  */
 export async function listProducts(db: Sql, _userId: number): Promise<ProductRow[]> {
-  const rows = await db.query('SELECT * FROM products ORDER BY name');
+  const rows = await db.query('SELECT * FROM products WHERE archived_at IS NULL ORDER BY name');
   return rows.map(toProduct);
+}
+
+/** What has been tidied away, so tidying can be undone. */
+export async function listArchivedProducts(db: Sql, _userId: number): Promise<ProductRow[]> {
+  const rows = await db.query(
+    'SELECT * FROM products WHERE archived_at IS NOT NULL ORDER BY archived_at DESC, name',
+  );
+  return rows.map(toProduct);
+}
+
+/**
+ * Tidy a batch away, or bring it back.
+ *
+ * Not a delete. `deleteProduct` cascades to listings, missions, runs and
+ * observations, which is right for "this was a mistake" and wrong for "I am
+ * tidying up" — a bulk button that destroys history the first time somebody
+ * mis-clicks is a button they never press again, and then 161 products stay
+ * 161 products forever.
+ *
+ * Archiving hides the row and keeps everything under it. Missions on an
+ * archived product are disabled in the same statement, because the point of
+ * tidying it away is to stop spending reads on it; re-opening it does NOT
+ * re-enable them, since "show me this again" and "start watching this again"
+ * are different decisions and only one of them costs anything.
+ */
+export async function archiveProducts(
+  db: Sql,
+  userId: number,
+  keys: readonly string[],
+  archived: boolean,
+): Promise<number> {
+  if (!(await canWriteCatalogue(db, userId))) {
+    throw new Error('this account may not curate the catalogue');
+  }
+  const list = [...new Set(keys.map((k) => String(k ?? '').trim()).filter(Boolean))];
+  if (list.length === 0) return 0;
+
+  const rows = await db.query<{ key: string }>(
+    `UPDATE products SET archived_at = ${archived ? 'now()' : 'NULL'}
+      WHERE key = ANY($1::text[])
+        AND (archived_at IS NULL) = $2
+      RETURNING key`,
+    [list, archived],
+  );
+  if (archived && rows.length > 0) {
+    await db.query(
+      `UPDATE missions SET enabled = false
+        WHERE user_id = $1
+          AND listing_id IN (SELECT id FROM listings WHERE product_key = ANY($2::text[]))`,
+      [userId, rows.map((r) => r.key)],
+    );
+  }
+  return rows.length;
+}
+
+/**
+ * One date, applied to a batch.
+ *
+ * The case that asked for it: Target published 2026-09-15 for seven of the
+ * nine 30th Celebration products and nothing at all for the two Battle Decks,
+ * so the two that most needed the release-week cadence were the two resting
+ * hardest. Typing the same date nine times is how that stays wrong.
+ *
+ * A blank date clears it, deliberately: a wrong date is worse than none, and
+ * the way out has to be as easy as the way in.
+ */
+export async function setProductsReleaseDate(
+  db: Sql,
+  userId: number,
+  keys: readonly string[],
+  date: string | null,
+): Promise<number> {
+  if (!(await canWriteCatalogue(db, userId))) {
+    throw new Error('this account may not curate the catalogue');
+  }
+  const want = (date ?? '').trim();
+  if (want && !/^\d{4}-\d{2}-\d{2}$/.test(want)) {
+    throw new Error('a release date must be YYYY-MM-DD, or blank to clear it');
+  }
+  const list = [...new Set(keys.map((k) => String(k ?? '').trim()).filter(Boolean))];
+  if (list.length === 0) return 0;
+
+  const rows = await db.query<{ key: string }>(
+    `UPDATE products SET release_date = $2 WHERE key = ANY($1::text[]) RETURNING key`,
+    [list, want || null],
+  );
+  return rows.length;
+}
+
+/**
+ * Stop or start watching a batch of missions.
+ *
+ * Enabled only. Arming is not here and will not be: a ceiling and a tick are a
+ * decision about money, and a decision about money does not get a checkbox in
+ * a list of fifty-eight rows.
+ */
+export async function setMissionsEnabled(
+  db: Sql,
+  userId: number,
+  ids: readonly number[],
+  enabled: boolean,
+): Promise<number> {
+  const list = [...new Set(ids.map((n) => Number(n)).filter((n) => Number.isInteger(n) && n > 0))];
+  if (list.length === 0) return 0;
+  const rows = await db.query<{ id: number }>(
+    `UPDATE missions SET enabled = $3
+      WHERE user_id = $1 AND id = ANY($2::bigint[]) AND enabled <> $3
+      RETURNING id`,
+    [userId, list, enabled],
+  );
+  return rows.length;
 }
 
 export interface ProductInput {

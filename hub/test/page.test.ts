@@ -4433,3 +4433,172 @@ test('a real count is still printed, pre-order or not', async () => {
   const h = await boot(withMissions([{ ...PRE_ORDER_MISSION, availableQuantity: 40 }]));
   assert.match($(h, '#tab-missions').textContent, /40 available/);
 });
+
+// ── Selecting many things at once ───────────────────────────────────────────
+//
+// Roberto, 11 Sep 2026, looking at a Products tab with 161 rows: "I want multi
+// select and bulk action options." The rows that make it necessary are the
+// ones nobody will ever act on singly — a 2019 Detective Pikachu case file
+// with zero listings, forty Walmart archive products, nine release dates that
+// should all say the same thing.
+
+const press = (h: Harness, where: string, label: string): void => {
+  const b = [...h.doc.querySelectorAll(where + ' button')]
+    .find((x) => x.textContent === label);
+  assert.ok(b, 'no button called "' + label + '" in ' + where);
+  (b as HTMLButtonElement).click();
+};
+
+const boxes = (h: Harness, where: string): HTMLInputElement[] =>
+  [...h.doc.querySelectorAll(where + ' .pick input')] as HTMLInputElement[];
+
+const manyProducts = (n: number) =>
+  Array.from({ length: n }, (_, i) => ({
+    key: 'prd_' + i, name: 'Product ' + i, releaseDate: null, msrp: 49.99,
+    imageUrl: '', notes: '', archived: false,
+  }));
+
+const withProducts = (products: unknown[], archived: unknown[] = []): unknown => {
+  const base = JSON.parse(JSON.stringify(DASHBOARD));
+  base.products = products;
+  base.archivedProducts = archived;
+  base.listings = [];
+  base.missions = [];
+  return base;
+};
+
+test('NOTHING IS SELECTABLE UNTIL YOU ASK, AND NO VERBS APPEAR UNTIL YOU PICK', async () => {
+  // Checkboxes on every row all the time is a list you cannot read. And a row
+  // of action buttons that all refuse because nothing is selected is worse
+  // than no row at all.
+  const h = await boot(withProducts(manyProducts(4)));
+  assert.equal(boxes(h, '#products').length, 0, 'no checkboxes before you ask');
+
+  press(h, '#products', 'Select');
+  assert.equal(boxes(h, '#products').length, 4, 'one per row, now');
+  const labels = [...h.doc.querySelectorAll('#products .pickbar button')]
+    .map((b) => b.textContent);
+  assert.deepEqual(labels, ['Select all 4', 'Cancel'], 'no verbs with nothing picked');
+
+  boxes(h, '#products')[0]!.click();
+  const after = [...h.doc.querySelectorAll('#products .pickbar button')]
+    .map((b) => b.textContent);
+  assert.ok(after.includes('Archive'));
+  assert.ok(after.includes('Set release date'));
+  assert.match($(h, '#products .pickbar').textContent, /1 selected/);
+});
+
+test('SELECT ALL MEANS WHAT IS ON SCREEN, NOT WHAT THE FILTER IS HIDING', async () => {
+  // "All 161, including the 90 your filter hides" is how somebody archives a
+  // product they were watching for.
+  const h = await boot(withProducts(manyProducts(6)));
+  press(h, '#products', 'Select');
+  press(h, '#products', 'Select all 6');
+  assert.match($(h, '#products .pickbar').textContent, /6 selected/);
+  assert.ok(boxes(h, '#products').every((b) => b.checked));
+});
+
+test('A BULK ACTION SENDS ONE REQUEST, NOT ONE PER ROW', async () => {
+  // Fifty checkboxes turning into fifty round trips is a progress bar and a
+  // half-applied change when one of them fails.
+  const h = await boot(withProducts(manyProducts(3)));
+  h.reply('POST /api/products/bulk', { moved: 3 });
+
+  press(h, '#products', 'Select');
+  press(h, '#products', 'Select all 3');
+  press(h, '#products', 'Archive');
+  await h.settle();
+
+  const bulk = h.calls.filter((c) => c.path === '/api/products/bulk');
+  assert.equal(bulk.length, 1, 'one endpoint, one request');
+  assert.deepEqual((bulk[0]!.body as any).keys, ['prd_0', 'prd_1', 'prd_2']);
+  assert.equal((bulk[0]!.body as any).action, 'archive');
+});
+
+test('IT REPORTS WHAT MOVED, NOT WHAT WAS ASKED FOR', async () => {
+  // Selecting forty products of which thirty are already archived and being
+  // told "40 archived" is the kind of true-sounding number that teaches you
+  // not to trust the next one.
+  const h = await boot(withProducts(manyProducts(4)));
+  h.reply('POST /api/products/bulk', { moved: 1 });
+  press(h, '#products', 'Select');
+  press(h, '#products', 'Select all 4');
+  press(h, '#products', 'Archive');
+  await h.settle();
+  assert.match($(h, '#pick-msg').textContent, /1 of 4 archived/);
+});
+
+test('ARCHIVED PRODUCTS ARE REACHABLE AND RESTORABLE', async () => {
+  // Archiving, not deleting. Deleting cascades to listings, missions, runs and
+  // observations — right for "this was a mistake", wrong for "I am tidying
+  // up". A bulk button that destroys history the first time somebody
+  // mis-clicks is a button they never press again.
+  const gone = [
+    { key: 'prd_old', name: 'Detective Pikachu Case File',
+      releaseDate: null, msrp: null, imageUrl: '', notes: '', archived: true },
+    { key: 'prd_old2', name: 'Rebel Clash Booster Pack',
+      releaseDate: null, msrp: null, imageUrl: '', notes: '', archived: true },
+  ];
+  const h = await boot(withProducts(manyProducts(2), gone));
+
+  assert.ok(!$(h, '#products').textContent.includes('Detective Pikachu'));
+  press(h, '#products', 'Archived (2)');
+  assert.match($(h, '#products').textContent, /Detective Pikachu/);
+
+  press(h, '#products', 'Select');
+  boxes(h, '#products')[0]!.click();
+  const verbs = [...h.doc.querySelectorAll('#products .pickbar button')]
+    .map((b) => b.textContent);
+  assert.ok(verbs.includes('Put back in the catalogue'));
+  assert.ok(!verbs.includes('Archive'), 'nothing to archive on this side');
+});
+
+test('ONE SELECTION AT A TIME, ACROSS ALL THREE LISTS', async () => {
+  // A selection you cannot see is a selection you act on by accident, and the
+  // only way to see one is to be on the tab it belongs to.
+  const base = JSON.parse(JSON.stringify(DASHBOARD));
+  base.products = manyProducts(3);
+  base.missions = [
+    { ...DASHBOARD.missions[0], id: 1 },
+    { ...DASHBOARD.missions[0], id: 2 },
+    { ...DASHBOARD.missions[0], id: 3 },
+  ];
+  const h = await boot(base);
+
+  press(h, '#products', 'Select');
+  boxes(h, '#products')[0]!.click();
+  assert.match($(h, '#products .pickbar').textContent, /1 selected/);
+
+  press(h, '#missions', 'Select');
+  assert.equal(boxes(h, '#products').length, 0, 'the products selection is gone');
+  assert.match($(h, '#missions .pickbar').textContent, /Nothing selected/);
+});
+
+test('BULK NEVER ARMS ANYTHING', async () => {
+  // The line that does not move. A ceiling and a tick are a decision about
+  // money, and the whole value of a bulk action is that you stop reading each
+  // row — which is the opposite of what arming needs.
+  const base = JSON.parse(JSON.stringify(DASHBOARD));
+  base.missions = [
+    { ...DASHBOARD.missions[0], id: 1 },
+    { ...DASHBOARD.missions[0], id: 2 },
+  ];
+  const h = await boot(base);
+  press(h, '#missions', 'Select');
+  press(h, '#missions', 'Select all 2');
+  const verbs = [...h.doc.querySelectorAll('#missions .pickbar button')]
+    .map((b) => (b.textContent ?? '').toLowerCase());
+  assert.deepEqual(verbs.filter((v) => v.includes('arm')), []);
+  assert.ok(verbs.some((v) => v.includes('pause')));
+  assert.ok(verbs.some((v) => v.includes('resume')));
+});
+
+test('a member is never offered a bulk action', async () => {
+  // The whole list is already hidden from a member. A control that exists and
+  // fails is worse than one that was never offered.
+  const base = withProducts(manyProducts(4)) as Record<string, unknown>;
+  base.canCurate = false;
+  const h = await boot(base);
+  const labels = [...h.doc.querySelectorAll('#products button')].map((b) => b.textContent);
+  assert.ok(!labels.includes('Select'));
+});

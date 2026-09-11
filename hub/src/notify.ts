@@ -10,6 +10,20 @@ const COLOR_NEW = 0x1f6b4f;
 const COLOR_OPS = 0x8a6410;
 const COLOR_STAGED = 0xc0392b;
 const COLOR_IN = 0x1f8b4c;
+/**
+ * A pre-order is not a restock, and the card must not look like one.
+ *
+ * Both are worth a message — Roberto, 11 Sep 2026: "preorders should push a
+ * Discord post like stocked items" — but they ask for different behaviour from
+ * whoever reads them. A restock is a race you might already have lost. A
+ * pre-order is a queue that will still be open after you finish your coffee,
+ * and it takes your money for something arriving in weeks.
+ *
+ * On a phone, at a glance, the two things that separate one card from another
+ * are its colour and the first few words of its title. A footer is the
+ * smallest text on a Discord embed and nobody racing reads it.
+ */
+const COLOR_PRE = 0x5865f2;
 // The queue gets its own colour, brighter than the staged red. A load-in is
 // "this will happen"; a waiting room is "this is happening, and you are late".
 const COLOR_QUEUE = 0xe67e22;
@@ -188,6 +202,10 @@ export interface StockItem {
    * true and an alert that is useful.
    */
   addToCart?: boolean | null;
+  /** Orderable ahead of release. Changes the card's colour, title and Stock field. */
+  isPreOrder?: boolean;
+  /** When it ships, for the field that replaces Stock on a pre-order. */
+  releaseDate?: string | null;
 }
 
 /**
@@ -213,9 +231,18 @@ export function buyablePhrase(addToCart: boolean | null | undefined): string | n
 
 export function buildStockEmbeds(items: StockItem[], now: string, note?: string): Embed[] {
   return items.slice(0, 10).map((i) => {
+    const pre = i.isPreOrder === true;
     const fields = [
       inline('Price', dollars(i.price)),
-      inline('Stock', stockPhrase(i.quantity, i.orderLimit, true)),
+      // "0 available" on a pre-order is the normal state of something you can
+      // order right now — nothing has been manufactured yet — and printed
+      // beside a price it reads as a listing that is already gone.
+      inline(
+        pre ? 'Ships' : 'Stock',
+        pre
+          ? (i.releaseDate ? `on ${i.releaseDate}` : 'on release')
+          : stockPhrase(i.quantity, i.orderLimit, true),
+      ),
       inline('Retailer', i.retailer || '—'),
     ];
 
@@ -246,9 +273,11 @@ export function buildStockEmbeds(items: StockItem[], now: string, note?: string)
     );
 
     return {
-      title: clip(i.name || 'a watched listing', 240),
+      // The prefix is the point. Two seconds after the notification lands,
+      // the title is all anybody has read.
+      title: clip((pre ? 'PRE-ORDER · ' : '') + (i.name || 'a watched listing'), 240),
       ...(i.url ? { url: i.url } : {}),
-      color: COLOR_IN,
+      color: pre ? COLOR_PRE : COLOR_IN,
       ...(i.imageUrl ? { thumbnail: { url: i.imageUrl } } : {}),
       fields,
       ...(note ? { footer: { text: note } } : {}),

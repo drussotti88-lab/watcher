@@ -1012,3 +1012,19 @@ UPDATE discoveries
      ELSE 'you'
    END
  WHERE status <> 'new' AND decided_by = '';
+
+-- ---------------------------------------------------------------------------
+-- Archiving a product, rather than deleting it
+--
+-- 11 Sep 2026. 161 products, many of them dead — a Detective Pikachu case file
+-- from 2019 with zero listings, Walmart archive rows nothing will ever watch.
+-- Clearing them one at a time is why nobody clears them.
+--
+-- Deleting cascades to listings, missions, runs and observations, which is the
+-- right behaviour for "this was a mistake" and the wrong one for "I am tidying
+-- up": a bulk button that destroys history the first time somebody mis-clicks
+-- is a button they never press again. Archived rows keep everything and simply
+-- stop appearing.
+-- ---------------------------------------------------------------------------
+ALTER TABLE products ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS products_archived_idx ON products (archived_at);
