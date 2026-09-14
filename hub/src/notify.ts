@@ -24,6 +24,16 @@ const COLOR_IN = 0x1f8b4c;
  * smallest text on a Discord embed and nobody racing reads it.
  */
 const COLOR_PRE = 0x5865f2;
+/**
+ * A drawing is not a drop, and must not ring like one.
+ *
+ * Walmart picks at RANDOM after the window closes, so there is nothing to race
+ * and nobody should be sprinting at this card. It gets its own colour so that
+ * a glance tells you which kind of thing just happened — and a card that reads
+ * "go now" about a lottery is a card that spends somebody's adrenaline on
+ * nothing and makes the next real drop alert worth less.
+ */
+const COLOR_DRAW = 0x7c5cd6;
 // The queue gets its own colour, brighter than the staged red. A load-in is
 // "this will happen"; a waiting room is "this is happening, and you are late".
 const COLOR_QUEUE = 0xe67e22;
@@ -293,6 +303,96 @@ export async function announceStock(
   note?: string,
 ): Promise<void> {
   const embeds = buildStockEmbeds(items, now, note);
+  if (embeds.length) await post(webhookUrl, embeds);
+}
+
+export interface DrawItem {
+  name: string;
+  retailer: string;
+  url: string;
+  imageUrl: string;
+  price: number | null;
+  orderLimit: number | null;
+  /** Walmart's own words. Never reformatted — they are never wrong. */
+  windowText: string;
+  windowLabel: string;
+  /** Resolved instant, for the countdown. Null when the text was unreadable. */
+  windowAt: string | null;
+}
+
+/** "in 2 days", "in 47 minutes", "3 hours ago". */
+function untilPhrase(iso: string | null, now: string): string {
+  if (!iso) return '';
+  const ms = Date.parse(iso) - Date.parse(now);
+  if (!Number.isFinite(ms)) return '';
+  const mins = Math.round(Math.abs(ms) / 60_000);
+  const said =
+    mins < 90 ? `${mins} minute${mins === 1 ? '' : 's'}`
+    : mins < 2880 ? `${Math.round(mins / 60)} hours`
+    : `${Math.round(mins / 1440)} days`;
+  return ms >= 0 ? `in ${said}` : `${said} ago`;
+}
+
+/**
+ * One card per drawing.
+ *
+ * The tone is the design. Everything else this file sends is about a race you
+ * might be losing right now; this is about a queue that is open for hours and
+ * decided by a coin toss at the end. So it says what it is, says when it
+ * shuts, and does not shout — an alert that cries drop at a lottery is one
+ * that makes the next real drop alert worth less.
+ */
+export function buildDrawEmbeds(
+  items: DrawItem[],
+  now: string,
+  kind: 'opened' | 'announced' | 'closing',
+): Embed[] {
+  const heading =
+    kind === 'opened' ? 'DRAWING OPEN'
+    : kind === 'closing' ? 'DRAWING CLOSING'
+    : 'DRAWING ANNOUNCED';
+
+  return items.slice(0, 10).map((i) => {
+    const fields = [
+      inline('Price', dollars(i.price)),
+      inline(
+        kind === 'closing' ? 'Closes' : kind === 'opened' ? 'Open until' : 'Opens',
+        i.windowText || 'not stated',
+      ),
+      inline('Retailer', i.retailer || '—'),
+    ];
+    const until = untilPhrase(i.windowAt, now);
+    if (until) fields.push(inline(kind === 'announced' ? 'That is' : 'Time left', until));
+    if (i.orderLimit !== null && i.orderLimit !== undefined) {
+      // Said because the limit is what a commitment gets multiplied by: three
+      // of a $239 bundle is seven hundred dollars if the draw comes in.
+      fields.push(inline('Limit', `${i.orderLimit} per entry`));
+    }
+
+    return {
+      title: clip(`${heading} · ${i.name || 'a collectibles drawing'}`, 240),
+      ...(i.url ? { url: i.url } : {}),
+      color: COLOR_DRAW,
+      ...(i.imageUrl ? { thumbnail: { url: i.imageUrl } } : {}),
+      fields,
+      footer: {
+        text:
+          kind === 'closing'
+            ? 'Entry closes soon and you have not marked this entered. Winners are drawn at random.'
+            : 'Free, one entry per account. Winners are drawn at random after the window closes — entering early is worth no more than entering late.',
+      },
+      timestamp: now,
+    };
+  });
+}
+
+export async function announceDraw(
+  webhookUrl: string,
+  items: DrawItem[],
+  now: string,
+  kind: 'opened' | 'announced' | 'closing',
+): Promise<void> {
+  const embeds = buildDrawEmbeds(items, now, kind);
   if (embeds.length) await post(webhookUrl, embeds);
 }
 

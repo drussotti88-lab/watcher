@@ -1039,3 +1039,53 @@ CREATE INDEX IF NOT EXISTS products_archived_idx ON products (archived_at);
 -- is the only record either one leaves.
 -- ---------------------------------------------------------------------------
 ALTER TABLE observations ADD COLUMN IF NOT EXISTS is_preorder BOOLEAN NOT NULL DEFAULT false;
+
+-- ---------------------------------------------------------------------------
+-- Walmart's drawings
+--
+-- Walmart started selling scarce collectibles by lottery in Aug 2026: free
+-- entry, one per account, committing an address, a card and a quantity, and
+-- they place the order for you if you are drawn.
+--
+-- Which makes this table the opposite of watch_state in one important way.
+-- Everything else here exists to win a race; a drawing is decided at RANDOM
+-- after its window closes, so being early buys nothing and the only failure is
+-- not knowing it opened. What this stores is therefore a diary, not a feed.
+--
+-- `announced_at` / `opened_at` / `gone_at` are stamped on the EDGE, once, so
+-- "a drawing opened" can be said one time and "a drawing is open" never has to
+-- be. `entered_at` is a person's own note that they have dealt with it, and is
+-- what stops the closing reminder nagging about something already done.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS drawings (
+  id            BIGSERIAL PRIMARY KEY,
+  user_id       BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  retailer      TEXT NOT NULL DEFAULT 'Walmart',
+  external_id   TEXT NOT NULL,
+  name          TEXT NOT NULL DEFAULT '',
+  url           TEXT NOT NULL DEFAULT '',
+  image_url     TEXT NOT NULL DEFAULT '',
+  price         NUMERIC(10, 2),
+  order_limit   INTEGER,
+  -- 'announced' | 'open' | 'unknown' | 'gone'
+  phase         TEXT NOT NULL DEFAULT 'unknown',
+  -- Walmart's own words for the window, never reformatted, plus that text
+  -- resolved to an instant when it could be. The words are kept because they
+  -- are never wrong, and the instant is kept because a countdown needs one.
+  window_label  TEXT NOT NULL DEFAULT '',
+  window_text   TEXT NOT NULL DEFAULT '',
+  window_at     TIMESTAMPTZ,
+  first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_seen_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  announced_at  TIMESTAMPTZ,
+  opened_at     TIMESTAMPTZ,
+  gone_at       TIMESTAMPTZ,
+  -- Said once each, so an alert cannot repeat because a page was re-read.
+  opened_alert_at  TIMESTAMPTZ,
+  closing_alert_at TIMESTAMPTZ,
+  -- "I have dealt with this." A person's note, never the machine's.
+  entered_at    TIMESTAMPTZ,
+  UNIQUE (user_id, retailer, external_id)
+);
+
+CREATE INDEX IF NOT EXISTS drawings_live_idx ON drawings (user_id, phase, window_at);

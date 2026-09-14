@@ -3133,6 +3133,250 @@ export async function recentSightings(
   }));
 }
 
+// ─── Drawings ────────────────────────────────────────────────────────────────
+//
+// Walmart's lottery for scarce collectibles. The opposite of everything else
+// in this file in one respect: a drawing is decided at RANDOM after its window
+// closes, so being early buys nothing and the only failure is not knowing it
+// opened. What follows is a diary, not a feed.
+
+export interface DrawingIn {
+  externalId: string;
+  name: string;
+  url?: string;
+  imageUrl?: string;
+  price?: number | null;
+  orderLimit?: number | null;
+  phase: string;
+  windowLabel?: string;
+  windowText?: string;
+  windowAt?: string | null;
+}
+
+export interface DrawingRow {
+  id: number;
+  retailer: string;
+  externalId: string;
+  name: string;
+  url: string;
+  imageUrl: string;
+  price: number | null;
+  orderLimit: number | null;
+  phase: string;
+  windowLabel: string;
+  windowText: string;
+  windowAt: string | null;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  openedAt: string | null;
+  goneAt: string | null;
+  enteredAt: string | null;
+}
+
+function toDrawing(r: Record<string, unknown>): DrawingRow {
+  const iso = (v: unknown): string | null =>
+    v === null || v === undefined ? null : new Date(String(v)).toISOString();
+  return {
+    id: Number(r.id),
+    retailer: String(r.retailer ?? 'Walmart'),
+    externalId: String(r.external_id ?? ''),
+    name: String(r.name ?? ''),
+    url: String(r.url ?? ''),
+    imageUrl: String(r.image_url ?? ''),
+    price: toPrice(r.price),
+    orderLimit:
+      r.order_limit === null || r.order_limit === undefined ? null : Number(r.order_limit),
+    phase: String(r.phase ?? 'unknown'),
+    windowLabel: String(r.window_label ?? ''),
+    windowText: String(r.window_text ?? ''),
+    windowAt: iso(r.window_at),
+    firstSeenAt: iso(r.first_seen_at) ?? '',
+    lastSeenAt: iso(r.last_seen_at) ?? '',
+    openedAt: iso(r.opened_at),
+    goneAt: iso(r.gone_at),
+    enteredAt: iso(r.entered_at),
+  };
+}
+
+/** What a sighting of the drawings page changed. Drives the alerts. */
+export interface DrawingOutcome {
+  row: DrawingRow;
+  /** Never seen before. */
+  isNew: boolean;
+  /** The enter button went live on this pass. Said once, ever. */
+  justOpened: boolean;
+}
+
+/**
+ * Record what the drawings page is advertising.
+ *
+ * Upsert per item, and the edges stamped once. `opened_at` is set only on the
+ * transition INTO open, so "a drawing opened" is a thing that happens once
+ * while "a drawing is open" stays true for hours — announcing the second every
+ * time the page is re-read is how a channel gets muted, and a muted channel
+ * misses the next one.
+ *
+ * Anything on the page that we had marked gone comes back to life: Walmart
+ * pulling a carousel for ten minutes during an edit must not permanently
+ * retire a drawing that is still going to happen.
+ */
+export async function recordDrawings(
+  db: Sql,
+  userId: number,
+  retailer: string,
+  items: readonly DrawingIn[],
+): Promise<DrawingOutcome[]> {
+  const out: DrawingOutcome[] = [];
+  for (const item of items) {
+    const externalId = String(item.externalId ?? '').trim();
+    if (!externalId) continue;
+
+    const [before] = await db.query<{ phase: string; opened_at: unknown }>(
+      `SELECT phase, opened_at FROM drawings
+        WHERE user_id = $1 AND retailer = $2 AND external_id = $3`,
+      [userId, retailer, externalId],
+    );
+    const isNew = before === undefined;
+    const justOpened = item.phase === 'open' && (isNew || before!.phase !== 'open');
+
+    const rows = await db.query(
+      `INSERT INTO drawings
+         (user_id, retailer, external_id, name, url, image_url, price, order_limit,
+          phase, window_label, window_text, window_at,
+          announced_at, opened_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,
+               CASE WHEN $9 <> 'open' THEN now() END,
+               CASE WHEN $9 =  'open' THEN now() END)
+       ON CONFLICT (user_id, retailer, external_id) DO UPDATE SET
+         name = EXCLUDED.name,
+         url = CASE WHEN EXCLUDED.url = '' THEN drawings.url ELSE EXCLUDED.url END,
+         image_url = CASE WHEN drawings.image_url = ''
+                          THEN EXCLUDED.image_url ELSE drawings.image_url END,
+         price = COALESCE(EXCLUDED.price, drawings.price),
+         order_limit = COALESCE(EXCLUDED.order_limit, drawings.order_limit),
+         phase = EXCLUDED.phase,
+         window_label = EXCLUDED.window_label,
+         window_text = EXCLUDED.window_text,
+         window_at = COALESCE(EXCLUDED.window_at, drawings.window_at),
+         last_seen_at = now(),
+         -- Back on the page is back. A carousel pulled for ten minutes during
+         -- an edit must not permanently retire a drawing still to come.
+         gone_at = NULL,
+         -- The edge, stamped once and never re-stamped.
+         opened_at = CASE
+           WHEN EXCLUDED.phase = 'open' AND drawings.opened_at IS NULL THEN now()
+           ELSE drawings.opened_at
+         END
+       RETURNING *`,
+      [
+        userId, retailer, externalId,
+        String(item.name ?? '').slice(0, 300),
+        String(item.url ?? '').slice(0, 500),
+        String(item.imageUrl ?? '').slice(0, 500),
+        item.price ?? null,
+        item.orderLimit ?? null,
+        String(item.phase ?? 'unknown'),
+        String(item.windowLabel ?? '').slice(0, 80),
+        String(item.windowText ?? '').slice(0, 120),
+        item.windowAt ?? null,
+      ],
+    );
+    if (rows[0]) out.push({ row: toDrawing(rows[0]), isNew, justOpened });
+  }
+  return out;
+}
+
+/**
+ * Mark everything the page is no longer advertising.
+ *
+ * Called with the ids that WERE on the page, so anything else is gone. Not a
+ * delete: a window you meant to enter and did not is worth keeping, and the
+ * record of how long they stay open is the only way we will ever learn it.
+ */
+export async function retireMissingDrawings(
+  db: Sql,
+  userId: number,
+  retailer: string,
+  seen: readonly string[],
+): Promise<number> {
+  const rows = await db.query<{ id: number }>(
+    `UPDATE drawings SET gone_at = now(), phase = 'gone'
+      WHERE user_id = $1 AND retailer = $2
+        AND gone_at IS NULL
+        AND NOT (external_id = ANY($3::text[]))
+      RETURNING id`,
+    [userId, retailer, [...seen]],
+  );
+  return rows.length;
+}
+
+/** Everything still live, soonest window first. What the dashboard shows. */
+export async function liveDrawings(db: Sql, userId: number): Promise<DrawingRow[]> {
+  const rows = await db.query(
+    `SELECT * FROM drawings
+      WHERE user_id = $1 AND gone_at IS NULL
+      ORDER BY (phase = 'open') DESC, window_at NULLS LAST, name`,
+    [userId],
+  );
+  return rows.map(toDrawing);
+}
+
+/**
+ * Drawings whose window is about to shut and that nobody has marked entered.
+ *
+ * The failure mode with a lottery is forgetting, not being slow — you had
+ * hours and the hours went by. This is the second ping, claimed exactly once
+ * per drawing so a re-read of the page cannot repeat it.
+ *
+ * Only for a drawing we have seen OPEN. Nagging about one that was announced
+ * and never opened would be nagging about Walmart's schedule.
+ */
+export async function claimClosingDrawings(
+  db: Sql,
+  userId: number,
+  withinMinutes = 60,
+): Promise<DrawingRow[]> {
+  const rows = await db.query(
+    `UPDATE drawings SET closing_alert_at = now()
+      WHERE id IN (
+        SELECT id FROM drawings
+         WHERE user_id = $1
+           AND gone_at IS NULL
+           AND entered_at IS NULL
+           AND opened_at IS NOT NULL
+           AND closing_alert_at IS NULL
+           AND window_at IS NOT NULL
+           AND window_at > now()
+           AND window_at <= now() + ($2 || ' minutes')::interval
+      )
+      RETURNING *`,
+    [userId, Math.max(1, Math.round(withinMinutes))],
+  );
+  return rows.map(toDrawing);
+}
+
+/**
+ * "I have dealt with this."
+ *
+ * A person's own note and never the machine's. Nothing here can tell whether
+ * an entry was submitted — Walmart's page is the only place that knows — so
+ * this is a checkbox, honestly labelled, whose only job is to stop the
+ * reminder nagging about something already done.
+ */
+export async function markDrawingEntered(
+  db: Sql,
+  userId: number,
+  id: number,
+  entered: boolean,
+): Promise<boolean> {
+  const rows = await db.query<{ id: number }>(
+    `UPDATE drawings SET entered_at = ${entered ? 'now()' : 'NULL'}
+      WHERE id = $1 AND user_id = $2 RETURNING id`,
+    [id, userId],
+  );
+  return rows.length > 0;
+}
+
 // ─── The activity log ────────────────────────────────────────────────────────
 //
 // The exception to this file's write-only-when-something-changed rule, and the

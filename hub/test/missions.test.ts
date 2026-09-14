@@ -1348,3 +1348,108 @@ test('an archived product keeps its sightings off the dashboard', async () => {
   await store.archiveProducts(db, USER, [row!.product_key], true);
   assert.equal((await store.recentSightings(db, USER)).length, 0);
 });
+
+// ── Walmart drawings ────────────────────────────────────────────────────────
+
+const draw = (over: Record<string, unknown> = {}) => ({
+  externalId: '21009455186',
+  name: 'Pokémon TCG: 30th Celebration ex Box Bundle',
+  url: 'https://www.walmart.com/ip/x/21009455186',
+  price: 69.49, orderLimit: 3, phase: 'announced',
+  windowLabel: 'Drawing starts', windowText: 'Sep 16, 2:00pm PDT',
+  windowAt: new Date(Date.now() + 2 * 86400000).toISOString(),
+  ...over,
+});
+
+test('OPENED IS AN EDGE, SAID ONCE — NOT A STATE SAID EVERY PASS', async () => {
+  // "A drawing is open" stays true for hours. Announcing it every two minutes
+  // is how a channel gets muted, and a muted channel misses the next one.
+  const db = await TestDb.create();
+
+  const first = await store.recordDrawings(db, USER, 'Walmart', [draw()]);
+  assert.equal(first[0]?.isNew, true);
+  assert.equal(first[0]?.justOpened, false, 'announced is not open');
+
+  const again = await store.recordDrawings(db, USER, 'Walmart', [draw()]);
+  assert.equal(again[0]?.isNew, false, 'and seeing it again is not news');
+  assert.equal(again[0]?.justOpened, false);
+
+  const opened = await store.recordDrawings(db, USER, 'Walmart', [draw({ phase: 'open' })]);
+  assert.equal(opened[0]?.justOpened, true, 'THIS is the moment');
+  assert.ok(opened[0]?.row.openedAt);
+
+  const still = await store.recordDrawings(db, USER, 'Walmart', [draw({ phase: 'open' })]);
+  assert.equal(still[0]?.justOpened, false, 'and it is only a moment once');
+  assert.equal(still[0]?.row.openedAt, opened[0]?.row.openedAt, 'the stamp never moves');
+});
+
+test('A DRAWING OFF THE PAGE IS RETIRED, NOT DELETED — AND COMES BACK', async () => {
+  // A window you meant to enter and did not is worth keeping, and the record
+  // of how long they stay open is the only way we will ever learn it. And a
+  // carousel pulled for ten minutes during an edit must not permanently retire
+  // a drawing that is still going to happen.
+  const db = await TestDb.create();
+  await store.recordDrawings(db, USER, 'Walmart', [draw(), draw({ externalId: 'b', name: 'B' })]);
+
+  const retired = await store.retireMissingDrawings(db, USER, 'Walmart', ['21009455186']);
+  assert.equal(retired, 1);
+  assert.deepEqual((await store.liveDrawings(db, USER)).map((d) => d.externalId), ['21009455186']);
+
+  await store.recordDrawings(db, USER, 'Walmart', [draw({ externalId: 'b', name: 'B' })]);
+  const back = await store.liveDrawings(db, USER);
+  assert.equal(back.length, 2, 'back on the page is back');
+  assert.ok(back.every((d) => d.goneAt === null));
+});
+
+test('THE CLOSING REMINDER FIRES ONCE, AND NEVER FOR ONE ALREADY ENTERED', async () => {
+  // With a lottery you lose by forgetting, not by being slow: you had hours
+  // and the hours went by.
+  const db = await TestDb.create();
+  const soon = new Date(Date.now() + 30 * 60000).toISOString();
+  await store.recordDrawings(db, USER, 'Walmart', [
+    draw({ externalId: 'open', phase: 'open', windowAt: soon }),
+    draw({ externalId: 'done', phase: 'open', windowAt: soon }),
+  ]);
+
+  const [entered] = (await store.liveDrawings(db, USER)).filter((d) => d.externalId === 'done');
+  await store.markDrawingEntered(db, USER, entered!.id, true);
+
+  const first = await store.claimClosingDrawings(db, USER, 60);
+  assert.deepEqual(first.map((d) => d.externalId), ['open'], 'not the one already dealt with');
+
+  const second = await store.claimClosingDrawings(db, USER, 60);
+  assert.deepEqual(second, [], 'claimed once, so a re-read cannot repeat it');
+});
+
+test('an announced drawing is never nagged about', async () => {
+  // Nagging about one that was announced and never opened is nagging about
+  // Walmart's schedule.
+  const db = await TestDb.create();
+  await store.recordDrawings(db, USER, 'Walmart', [
+    draw({ windowAt: new Date(Date.now() + 20 * 60000).toISOString() }),
+  ]);
+  assert.deepEqual(await store.claimClosingDrawings(db, USER, 60), []);
+});
+
+test('THE DISCORD CARD FOR A DRAWING DOES NOT READ LIKE A DROP', async () => {
+  const { buildDrawEmbeds } = await import('../src/notify.ts');
+  const now = new Date().toISOString();
+  const [card] = buildDrawEmbeds([{
+    name: '30th Celebration ex Box Bundle', retailer: 'Walmart',
+    url: 'https://walmart.test/x', imageUrl: '', price: 69.49, orderLimit: 3,
+    windowText: 'Sep 18, 2:00pm PDT', windowLabel: 'Drawing ends',
+    windowAt: new Date(Date.parse(now) + 3 * 3600000).toISOString(),
+  }], now, 'opened');
+
+  assert.match(card!.title, /^DRAWING OPEN · /);
+  const f = (name: string) => card!.fields.find((x: any) => x.name === name)?.value;
+  assert.equal(f('Price'), '$69.49');
+  assert.equal(f('Open until'), 'Sep 18, 2:00pm PDT', "Walmart's words, not ours");
+  assert.equal(f('Time left'), 'in 3 hours');
+  assert.equal(f('Limit'), '3 per entry');
+  // The footer is the honesty: entering early is worth no more than entering
+  // late, and a card that implies otherwise is spending adrenaline on a coin
+  // toss — which makes the next real drop alert worth less.
+  assert.match(card!.footer.text, /drawn at random/i);
+  assert.match(card!.footer.text, /entering early is worth no more/i);
+});

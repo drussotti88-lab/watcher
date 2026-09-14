@@ -1,0 +1,64 @@
+{
+  "runtimeConfig": { "drawServiceHost": "https://draw.www.walmart.com" },
+  "props": {
+    "pageProps": {
+      "bootstrapData": { "cv": { "shared": { "_all_": { "enableDrawEntry": true } } } },
+      "initialData": {
+        "contentLayout": {
+          "modules": [
+            { "type": "FAQ", "name": "(DESKTOP) Frequently Asked Questions (FAQ) Module", "configs": { "title": "FAQ" } },
+            { "type": "SkinnyBanner", "name": "(DESKTOP) Skinny Banner Module", "configs": {} },
+            {
+              "type": "PrismItemCarousel",
+              "name": "(USE THIS) Upcoming Drawing Item Carousel Module CC-Web",
+              "configs": {
+                "title": "Upcoming drawings",
+                "productsConfig": {
+                  "products": [
+                    {
+                      "usItemId": "21009455186",
+                      "name": "Pokémon TCG: 30th Celebration Pokémon ex Box Bundle - Sylveon ex & Greninja ex",
+                      "canonicalUrl": "/ip/Pok-mon-TCG-30th-Celebration-ex-Box-Bundle/21009455186?classType=REGULAR",
+                      "price": 69.49,
+                      "orderLimit": 1,
+                      "showDrawCTA": false,
+                      "availabilityStatus": "OUT_OF_STOCK",
+                      "sellerName": "Walmart.com",
+                      "sellerId": "F55CDC31AB754BB68FE0B39041159D63",
+                      "imageInfo": { "thumbnailUrl": "https://i5.walmartimages.com/a.jpeg" },
+                      "badges": {
+                        "groups": [
+                          {
+                            "members": [
+                              { "key": "DRAWING", "text": "Drawing starts ", "slaText": "Sep 16, 2:00pm PDT" }
+                            ]
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "usItemId": "20959422790",
+                      "name": "Pokémon TCG: 30th Celebration Elite Trainer Box - 2ct Bundle",
+                      "canonicalUrl": "/ip/Pok-mon-TCG-30th-Celebration-Elite-Trainer-Box-2ct/20959422790",
+                      "price": 139.94,
+                      "orderLimit": 1,
+                      "showDrawCTA": false,
+                      "sellerName": "Walmart.com",
+                      "sellerId": "F55CDC31AB754BB68FE0B39041159D63",
+                      "badges": {
+                        "groups": [
+                          { "members": [ { "text": "Drawing starts ", "slaText": "Sep 16, 2:00pm PDT" } ] }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            { "type": "TileDisplayAd", "name": "Tile Display Ad", "configs": {} }
+          ]
+        }
+      }
+    }
+  }
+}

@@ -71,6 +71,18 @@ export interface Config {
    */
   lightenReads: boolean;
   /**
+   * Watch Walmart's collectibles drawings page.
+   *
+   * Its own switch, separate from the shop toggle, because it answers a
+   * different question. Turning Walmart OFF means "stop working through my
+   * Walmart watchlist"; this is one content page on a half-hour clock whose
+   * whole job is to tell a person a thing they asked to be told, and a drawing
+   * missed is a drawing missed for good.
+   *
+   * `neverTouch` still outranks it, as it outranks everything.
+   */
+  drawWatch: boolean;
+  /**
    * Sites this machine will not contact at all, whatever the Hub says.
    *
    * Accepts a hostname ("pokemoncenter.com") or a retailer name as the app
@@ -107,6 +119,7 @@ export const DEFAULTS: Config = {
   intervalSec: 90,
   autoUpdate: true,
   lightenReads: true,
+  drawWatch: true,
   neverTouch: [],
 };
 
@@ -121,6 +134,7 @@ function merge(base: Config, over: Partial<Config>): Config {
     intervalSec: over.intervalSec ?? base.intervalSec,
     autoUpdate: over.autoUpdate ?? base.autoUpdate,
     lightenReads: over.lightenReads ?? base.lightenReads,
+    drawWatch: over.drawWatch ?? base.drawWatch,
     neverTouch: Array.isArray(over.neverTouch) ? over.neverTouch.map(String) : base.neverTouch,
   };
 }

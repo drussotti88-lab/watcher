@@ -1931,6 +1931,135 @@ async function recentSightings(db2, userId, limit = 12) {
     endedAt: r.ended_at ? new Date(String(r.ended_at)).toISOString() : null
   }));
 }
+function toDrawing(r) {
+  const iso = (v) => v === null || v === void 0 ? null : new Date(String(v)).toISOString();
+  return {
+    id: Number(r.id),
+    retailer: String(r.retailer ?? "Walmart"),
+    externalId: String(r.external_id ?? ""),
+    name: String(r.name ?? ""),
+    url: String(r.url ?? ""),
+    imageUrl: String(r.image_url ?? ""),
+    price: toPrice(r.price),
+    orderLimit: r.order_limit === null || r.order_limit === void 0 ? null : Number(r.order_limit),
+    phase: String(r.phase ?? "unknown"),
+    windowLabel: String(r.window_label ?? ""),
+    windowText: String(r.window_text ?? ""),
+    windowAt: iso(r.window_at),
+    firstSeenAt: iso(r.first_seen_at) ?? "",
+    lastSeenAt: iso(r.last_seen_at) ?? "",
+    openedAt: iso(r.opened_at),
+    goneAt: iso(r.gone_at),
+    enteredAt: iso(r.entered_at)
+  };
+}
+async function recordDrawings(db2, userId, retailer, items) {
+  const out = [];
+  for (const item of items) {
+    const externalId = String(item.externalId ?? "").trim();
+    if (!externalId) continue;
+    const [before] = await db2.query(
+      `SELECT phase, opened_at FROM drawings
+        WHERE user_id = $1 AND retailer = $2 AND external_id = $3`,
+      [userId, retailer, externalId]
+    );
+    const isNew = before === void 0;
+    const justOpened = item.phase === "open" && (isNew || before.phase !== "open");
+    const rows = await db2.query(
+      `INSERT INTO drawings
+         (user_id, retailer, external_id, name, url, image_url, price, order_limit,
+          phase, window_label, window_text, window_at,
+          announced_at, opened_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,
+               CASE WHEN $9 <> 'open' THEN now() END,
+               CASE WHEN $9 =  'open' THEN now() END)
+       ON CONFLICT (user_id, retailer, external_id) DO UPDATE SET
+         name = EXCLUDED.name,
+         url = CASE WHEN EXCLUDED.url = '' THEN drawings.url ELSE EXCLUDED.url END,
+         image_url = CASE WHEN drawings.image_url = ''
+                          THEN EXCLUDED.image_url ELSE drawings.image_url END,
+         price = COALESCE(EXCLUDED.price, drawings.price),
+         order_limit = COALESCE(EXCLUDED.order_limit, drawings.order_limit),
+         phase = EXCLUDED.phase,
+         window_label = EXCLUDED.window_label,
+         window_text = EXCLUDED.window_text,
+         window_at = COALESCE(EXCLUDED.window_at, drawings.window_at),
+         last_seen_at = now(),
+         -- Back on the page is back. A carousel pulled for ten minutes during
+         -- an edit must not permanently retire a drawing still to come.
+         gone_at = NULL,
+         -- The edge, stamped once and never re-stamped.
+         opened_at = CASE
+           WHEN EXCLUDED.phase = 'open' AND drawings.opened_at IS NULL THEN now()
+           ELSE drawings.opened_at
+         END
+       RETURNING *`,
+      [
+        userId,
+        retailer,
+        externalId,
+        String(item.name ?? "").slice(0, 300),
+        String(item.url ?? "").slice(0, 500),
+        String(item.imageUrl ?? "").slice(0, 500),
+        item.price ?? null,
+        item.orderLimit ?? null,
+        String(item.phase ?? "unknown"),
+        String(item.windowLabel ?? "").slice(0, 80),
+        String(item.windowText ?? "").slice(0, 120),
+        item.windowAt ?? null
+      ]
+    );
+    if (rows[0]) out.push({ row: toDrawing(rows[0]), isNew, justOpened });
+  }
+  return out;
+}
+async function retireMissingDrawings(db2, userId, retailer, seen) {
+  const rows = await db2.query(
+    `UPDATE drawings SET gone_at = now(), phase = 'gone'
+      WHERE user_id = $1 AND retailer = $2
+        AND gone_at IS NULL
+        AND NOT (external_id = ANY($3::text[]))
+      RETURNING id`,
+    [userId, retailer, [...seen]]
+  );
+  return rows.length;
+}
+async function liveDrawings(db2, userId) {
+  const rows = await db2.query(
+    `SELECT * FROM drawings
+      WHERE user_id = $1 AND gone_at IS NULL
+      ORDER BY (phase = 'open') DESC, window_at NULLS LAST, name`,
+    [userId]
+  );
+  return rows.map(toDrawing);
+}
+async function claimClosingDrawings(db2, userId, withinMinutes = 60) {
+  const rows = await db2.query(
+    `UPDATE drawings SET closing_alert_at = now()
+      WHERE id IN (
+        SELECT id FROM drawings
+         WHERE user_id = $1
+           AND gone_at IS NULL
+           AND entered_at IS NULL
+           AND opened_at IS NOT NULL
+           AND closing_alert_at IS NULL
+           AND window_at IS NOT NULL
+           AND window_at > now()
+           AND window_at <= now() + ($2 || ' minutes')::interval
+      )
+      RETURNING *`,
+    [userId, Math.max(1, Math.round(withinMinutes))]
+  );
+  return rows.map(toDrawing);
+}
+async function markDrawingEntered(db2, userId, id, entered) {
+  const rows = await db2.query(
+    `UPDATE drawings SET entered_at = ${entered ? "now()" : "NULL"}
+      WHERE id = $1 AND user_id = $2 RETURNING id`,
+    [id, userId]
+  );
+  return rows.length > 0;
+}
 var LEVELS = /* @__PURE__ */ new Set(["info", "warn", "error"]);
 var KINDS = /* @__PURE__ */ new Set(["check", "pass", "hub", "browser", "startup", "sweep"]);
 async function recordActivity(db2, userId, lines) {
@@ -2898,6 +3027,7 @@ var COLOR_OPS = 9069584;
 var COLOR_STAGED = 12597547;
 var COLOR_IN = 2067276;
 var COLOR_PRE = 5793266;
+var COLOR_DRAW = 8150230;
 var COLOR_QUEUE = 15105570;
 var COLOR_WIN = 16106818;
 var MAX_FIELDS = 20;
@@ -3007,6 +3137,47 @@ function buildStockEmbeds(items, now, note) {
 }
 async function announceStock(webhookUrl, items, now, note) {
   const embeds = buildStockEmbeds(items, now, note);
+  if (embeds.length) await post(webhookUrl, embeds);
+}
+function untilPhrase(iso, now) {
+  if (!iso) return "";
+  const ms = Date.parse(iso) - Date.parse(now);
+  if (!Number.isFinite(ms)) return "";
+  const mins = Math.round(Math.abs(ms) / 6e4);
+  const said = mins < 90 ? `${mins} minute${mins === 1 ? "" : "s"}` : mins < 2880 ? `${Math.round(mins / 60)} hours` : `${Math.round(mins / 1440)} days`;
+  return ms >= 0 ? `in ${said}` : `${said} ago`;
+}
+function buildDrawEmbeds(items, now, kind) {
+  const heading = kind === "opened" ? "DRAWING OPEN" : kind === "closing" ? "DRAWING CLOSING" : "DRAWING ANNOUNCED";
+  return items.slice(0, 10).map((i) => {
+    const fields = [
+      inline("Price", dollars(i.price)),
+      inline(
+        kind === "closing" ? "Closes" : kind === "opened" ? "Open until" : "Opens",
+        i.windowText || "not stated"
+      ),
+      inline("Retailer", i.retailer || "\u2014")
+    ];
+    const until = untilPhrase(i.windowAt, now);
+    if (until) fields.push(inline(kind === "announced" ? "That is" : "Time left", until));
+    if (i.orderLimit !== null && i.orderLimit !== void 0) {
+      fields.push(inline("Limit", `${i.orderLimit} per entry`));
+    }
+    return {
+      title: clip(`${heading} \xB7 ${i.name || "a collectibles drawing"}`, 240),
+      ...i.url ? { url: i.url } : {},
+      color: COLOR_DRAW,
+      ...i.imageUrl ? { thumbnail: { url: i.imageUrl } } : {},
+      fields,
+      footer: {
+        text: kind === "closing" ? "Entry closes soon and you have not marked this entered. Winners are drawn at random." : "Free, one entry per account. Winners are drawn at random after the window closes \u2014 entering early is worth no more than entering late."
+      },
+      timestamp: now
+    };
+  });
+}
+async function announceDraw(webhookUrl, items, now, kind) {
+  const embeds = buildDrawEmbeds(items, now, kind);
   if (embeds.length) await post(webhookUrl, embeds);
 }
 async function announceTest(webhookUrl, now) {
@@ -4928,6 +5099,25 @@ ${FONTS}<style>${STYLE}</style></head>
           <button type="button" class="small" id="live-all">See the watchlist</button>
         </div>
         <div id="live-list"></div>
+      </div>
+
+      <!-- \u2500\u2500 Walmart's lottery \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+           Above the sightings, and above everything else that is history,
+           because this is the one panel with a deadline on it. It disappears
+           entirely when nothing is open or coming, which is most weeks.
+
+           Tone matters here. A drawing is decided at RANDOM after its window
+           closes, so nothing on this card should read like a drop: being
+           first buys nothing, and a panel that shouts "go now" about a
+           lottery spends somebody's adrenaline on a coin toss. -->
+      <div class="card span2" id="draw-card" hidden>
+        <div class="wizhead">
+          <div>
+            <div class="name">Walmart drawings</div>
+            <div class="sub">Free to enter, one per account, drawn at random after the window shuts.</div>
+          </div>
+        </div>
+        <div id="draw-list"></div>
       </div>
 
       <!-- \u2500\u2500 What happened while nobody was looking \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
@@ -7505,6 +7695,7 @@ function render() {
   // Tying what-was-catchable to an aggregate query is how the two fastest
   // answers on the page end up behind the slowest one.
   renderSightings();
+  renderDraws();
   showWinMoment();
 
   /*
@@ -8917,6 +9108,106 @@ function clockOf(iso) {
   if (!iso) return '';
   const d = new Date(iso);
   return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
+
+/**
+ * Walmart's drawings, as a diary rather than an alarm.
+ *
+ * The panel hides itself when there is nothing open or coming, which is most
+ * weeks - a permanent empty box is a box people stop seeing, and this one has
+ * to be noticed on the four days a month it matters.
+ *
+ * Nothing here reads like a drop. The draw is random after the window closes,
+ * so being first buys nothing, and a card that shouts spends somebody's
+ * adrenaline on a coin toss and makes the next real drop alert worth less.
+ */
+function drawCountdown(iso, phase) {
+  if (!iso) return '';
+  const ms = new Date(iso).getTime() - Date.now();
+  const mins = Math.round(Math.abs(ms) / 60000);
+  const said = mins < 90 ? mins + 'm'
+    : mins < 2880 ? Math.round(mins / 60) + 'h'
+    : Math.round(mins / 1440) + 'd';
+  if (ms < 0) return phase === 'open' ? '' : said + ' ago';
+  return (phase === 'open' ? 'closes in ' : 'opens in ') + said;
+}
+
+function renderDraws() {
+  const card = document.getElementById('draw-card');
+  const list = document.getElementById('draw-list');
+  if (!card || !list) return;
+
+  const rows = (DATA.drawings || []).filter((d) => d.phase !== 'gone');
+  card.hidden = rows.length === 0;
+  list.textContent = '';
+  if (rows.length === 0) return;
+
+  for (const d of rows) {
+    const row = el('div', 'live');
+    if (d.imageUrl) {
+      const img = el('img');
+      img.src = d.imageUrl;
+      img.alt = '';
+      img.loading = 'lazy';
+      row.appendChild(img);
+    }
+    const g = el('div', 'g');
+    const nm = el('div', 'nm', shortName(d.name));
+    nm.title = d.name;
+    g.appendChild(nm);
+
+    const tags = el('div', 'tags');
+    tags.appendChild(el('span', 'pill ' + (d.phase === 'open' ? 's-in' : 'info'),
+      d.phase === 'open' ? 'OPEN FOR ENTRIES' : 'announced'));
+    if (d.enteredAt) tags.appendChild(el('span', 'pill s-in', 'you entered'));
+    g.appendChild(tags);
+
+    const meta = el('div', 'meta');
+    const bits = [];
+    // Walmart's own words first, then our arithmetic. The words are never
+    // wrong; the countdown is only as good as our parse of them.
+    if (d.windowText) bits.push((d.windowLabel || 'Window') + ' ' + d.windowText);
+    const count = drawCountdown(d.windowAt, d.phase);
+    if (count) bits.push(count);
+    // The limit is what a commitment gets multiplied by: three of a $239
+    // bundle is seven hundred dollars if the draw comes in.
+    if (d.orderLimit) bits.push('limit ' + d.orderLimit);
+    meta.textContent = bits.join(' \xB7 ');
+    g.appendChild(meta);
+    row.appendChild(g);
+
+    if (d.price !== null && d.price !== undefined) {
+      row.appendChild(el('div', 'px', money(d.price)));
+    }
+    if (d.url) {
+      const a = el('a', 'btn small go', d.phase === 'open' ? 'Enter' : 'Open');
+      a.href = d.url;
+      a.target = '_blank';
+      a.rel = 'noreferrer';
+      row.appendChild(a);
+    }
+
+    /*
+     * "I have dealt with this."
+     *
+     * A person's own note and never the machine's. Nothing here can tell
+     * whether an entry was submitted - Walmart's page is the only place that
+     * knows - so this is a checkbox, honestly labelled, whose only job is to
+     * stop the closing reminder nagging about something already done.
+     */
+    if (DATA.canCurate === true && d.phase === 'open') {
+      const mark = el('button', 'small', d.enteredAt ? 'Not entered' : 'I entered');
+      mark.addEventListener('click', async (e) => {
+        await withButton(e.target, 'Saving...', null, async () => {
+          await api('POST', '/api/drawings/' + d.id + '/entered', { entered: !d.enteredAt });
+          load();
+          return d.enteredAt ? 'unmarked' : 'marked entered - no reminder for this one';
+        });
+      });
+      row.appendChild(mark);
+    }
+    list.appendChild(row);
+  }
 }
 
 function renderSightings() {
@@ -11151,7 +11442,8 @@ function createHandler(db2, env2) {
         discoveries,
         forgotten,
         archivedProducts,
-        sightings
+        sightings,
+        drawings
       ] = await Promise.all([
         listMissions(db2, userId),
         recentRuns(db2, userId, 40),
@@ -11162,7 +11454,8 @@ function createHandler(db2, env2) {
         discoveriesToReview(db2, userId),
         forgottenDiscoveries(db2, userId),
         listArchivedProducts(db2, userId),
-        recentSightings(db2, userId, 12)
+        recentSightings(db2, userId, 12),
+        liveDrawings(db2, userId)
       ]);
       const sweep = await sweepState(db2, userId, SWEEP_SOURCE, settings.sweepEveryHours);
       const you = await userHandle(db2, userId);
@@ -11209,6 +11502,9 @@ function createHandler(db2, env2) {
         // The hero says what is buyable now; this says what happened while
         // nobody was looking, which on most days is the only news there is.
         sightings,
+        // Walmart's lottery. Random after the window closes, so this is a
+        // diary rather than a race: what is open, what is coming, when it shuts.
+        drawings,
         authorisations,
         committed,
         queues,
@@ -11279,6 +11575,54 @@ function createHandler(db2, env2) {
       }
       const moved = await setMissionsEnabled(db2, userId, ids, action === "resume");
       return json({ moved, action });
+    }
+    if (request.method === "POST" && path === "/api/drawings") {
+      const body2 = await body_();
+      const retailer = String(body2?.retailer ?? "Walmart");
+      const list = Array.isArray(body2?.drawings) ? body2.drawings : [];
+      if (list.length > 100) return json({ error: "too many drawings" }, 400);
+      const outcomes = await recordDrawings(
+        db2,
+        userId,
+        retailer,
+        list
+      );
+      const seen = outcomes.map((o) => o.row.externalId);
+      const retired = await retireMissingDrawings(db2, userId, retailer, seen);
+      const card = (r) => ({
+        name: r.name,
+        retailer: r.retailer,
+        url: r.url,
+        imageUrl: r.imageUrl,
+        price: r.price,
+        orderLimit: r.orderLimit,
+        windowText: r.windowText,
+        windowLabel: r.windowLabel,
+        windowAt: r.windowAt
+      });
+      const opened = outcomes.filter((o) => o.justOpened).map((o) => card(o.row));
+      const announced = outcomes.filter((o) => o.isNew && !o.justOpened && o.row.phase === "announced").map((o) => card(o.row));
+      const closing = (await claimClosingDrawings(db2, userId)).map(card);
+      if (env2.DISCORD_WEBHOOK_URL) {
+        if (opened.length) await announceDraw(env2.DISCORD_WEBHOOK_URL, opened, now, "opened");
+        if (announced.length) await announceDraw(env2.DISCORD_WEBHOOK_URL, announced, now, "announced");
+        if (closing.length) await announceDraw(env2.DISCORD_WEBHOOK_URL, closing, now, "closing");
+      }
+      return json({
+        recorded: outcomes.length,
+        opened: opened.length,
+        announced: announced.length,
+        closing: closing.length,
+        retired
+      });
+    }
+    if (request.method === "POST" && path.startsWith("/api/drawings/") && path.endsWith("/entered")) {
+      const id = Number(path.split("/")[3]);
+      if (!Number.isInteger(id)) return json({ error: "bad drawing id" }, 400);
+      const b = await body_();
+      const done = await markDrawingEntered(db2, userId, id, b?.entered !== false);
+      if (!done) return json({ error: "no such drawing" }, 404);
+      return json({ ok: true });
     }
     if (request.method === "POST" && path === "/api/discoveries/bulk") {
       const body2 = await body_();

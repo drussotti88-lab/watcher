@@ -32,6 +32,7 @@ import {
   announceReport,
   announceStaged,
   announceStock,
+  announceDraw,
   announceTest,
   reportOps,
 } from './notify.ts';
@@ -335,7 +336,7 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
     /** Everything the page renders, in one request. */
     if (request.method === 'GET' && path === '/api/dashboard') {
       const [missions, runs, changes, products, listings, settings, discoveries, forgotten,
-             archivedProducts, sightings] =
+             archivedProducts, sightings, drawings] =
         await Promise.all([
           store.listMissions(db, userId),
           store.recentRuns(db, userId, 40),
@@ -347,6 +348,7 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
           store.forgottenDiscoveries(db, userId),
           store.listArchivedProducts(db, userId),
           store.recentSightings(db, userId, 12),
+          store.liveDrawings(db, userId),
         ]);
       const sweep = await store.sweepState(db, userId, SWEEP_SOURCE, settings.sweepEveryHours);
       // Whose dashboard this is. Sent on every load rather than stored in the
@@ -430,6 +432,9 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
         // The hero says what is buyable now; this says what happened while
         // nobody was looking, which on most days is the only news there is.
         sightings,
+        // Walmart's lottery. Random after the window closes, so this is a
+        // diary rather than a race: what is open, what is coming, when it shuts.
+        drawings,
         authorisations, committed, queues, stockLoads, acquisitions, requests, canCurate, canArm,
         capabilities: shopStatus, agentSeenAt, me, readiness,
         // Whether alerts have anywhere to go. A boolean, never the URL.
@@ -522,6 +527,72 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       }
       const moved = await store.setMissionsEnabled(db, userId, ids, action === 'resume');
       return json({ moved, action });
+    }
+
+    /**
+     * Phantom reporting what the drawings page is advertising.
+     *
+     * A drawing is decided at random after its window closes, so nothing in
+     * here is a race. The whole value is the edge — "a drawing just opened",
+     * said once — and the closing reminder, because with a lottery the way you
+     * lose is by forgetting, not by being slow.
+     */
+    if (request.method === 'POST' && path === '/api/drawings') {
+      const body = await body_<{ retailer?: unknown; drawings?: unknown }>();
+      const retailer = String(body?.retailer ?? 'Walmart');
+      const list = Array.isArray(body?.drawings) ? body!.drawings : [];
+      if (list.length > 100) return json({ error: 'too many drawings' }, 400);
+
+      const outcomes = await store.recordDrawings(
+        db, userId, retailer, list as store.DrawingIn[],
+      );
+      const seen = outcomes.map((o) => o.row.externalId);
+      const retired = await store.retireMissingDrawings(db, userId, retailer, seen);
+
+      const card = (r: store.DrawingRow) => ({
+        name: r.name,
+        retailer: r.retailer,
+        url: r.url,
+        imageUrl: r.imageUrl,
+        price: r.price,
+        orderLimit: r.orderLimit,
+        windowText: r.windowText,
+        windowLabel: r.windowLabel,
+        windowAt: r.windowAt,
+      });
+
+      // Opened is the loud one, said once. Announced is a diary entry, and is
+      // only sent for something we had never seen — a drawing sitting
+      // announced for three days is not news on every pass.
+      const opened = outcomes.filter((o) => o.justOpened).map((o) => card(o.row));
+      const announced = outcomes
+        .filter((o) => o.isNew && !o.justOpened && o.row.phase === 'announced')
+        .map((o) => card(o.row));
+      const closing = (await store.claimClosingDrawings(db, userId)).map(card);
+
+      if (env.DISCORD_WEBHOOK_URL) {
+        if (opened.length) await announceDraw(env.DISCORD_WEBHOOK_URL, opened, now, 'opened');
+        if (announced.length) await announceDraw(env.DISCORD_WEBHOOK_URL, announced, now, 'announced');
+        if (closing.length) await announceDraw(env.DISCORD_WEBHOOK_URL, closing, now, 'closing');
+      }
+
+      return json({
+        recorded: outcomes.length,
+        opened: opened.length,
+        announced: announced.length,
+        closing: closing.length,
+        retired,
+      });
+    }
+
+    /** A person's own note that they have dealt with a drawing. */
+    if (request.method === 'POST' && path.startsWith('/api/drawings/') && path.endsWith('/entered')) {
+      const id = Number(path.split('/')[3]);
+      if (!Number.isInteger(id)) return json({ error: 'bad drawing id' }, 400);
+      const b = await body_<{ entered?: unknown }>();
+      const done = await store.markDrawingEntered(db, userId, id, b?.entered !== false);
+      if (!done) return json({ error: 'no such drawing' }, 404);
+      return json({ ok: true });
     }
 
     if (request.method === 'POST' && path === '/api/discoveries/bulk') {

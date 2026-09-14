@@ -14,6 +14,8 @@ import { Hub } from './hub.ts';
 import { Pacer } from './rate.ts';
 import { isAwake, overrides } from './hours.ts';
 import { dropWindow, burstMsFor, retailerOn, pausedList } from './drop.ts';
+import { scanDraws, drawInterval, drawChanges } from './draws.ts';
+import type { DrawRow } from './readers/walmart-draw.ts';
 import { pass } from './watch.ts';
 import {
   scanTargetSearch,
@@ -359,6 +361,16 @@ async function runPasses(once: boolean): Promise<void> {
   let sweepPlan: SweepStep[] = [];
   /** Alternates while a sweep is planned, so watching and sweeping share the budget. */
   let sweepTurn = false;
+  /*
+   * The drawings page keeps its own clock and its own memory.
+   *
+   * `lastDraws` is what the page said last time, so a change can be reported
+   * on the EDGE. "A drawing is open" stays true for hours; announcing it every
+   * two minutes is how a channel gets muted, and a muted channel misses the
+   * next one. Starts at zero so the first pass always looks.
+   */
+  let nextDrawAt = 0;
+  let lastDraws: DrawRow[] = [];
   /** Last-said states, so these lines appear on change rather than every pass. */
   let dropSaid = '';
   let retailersOffSaid = '';
@@ -893,6 +905,60 @@ async function runPasses(once: boolean): Promise<void> {
           kind: 'sweep',
           message: `sweep starting: ${sweepPlan.length} queries, one page per turn`,
         });
+      }
+
+      // ── The drawings page ─────────────────────────────────────────────
+      //
+      // On its own clock, not in the sweep rotation and not in the mission
+      // pass. A drawing is decided at RANDOM after its window closes, so this
+      // is the one thing here that cannot be raced and must not be built as
+      // though it could: half an hour between looks when nothing is imminent,
+      // two minutes in the hour around a stated start.
+      //
+      // Deliberately not gated on the Walmart shop toggle. That switch means
+      // "stop working through my Walmart watchlist"; this is one content page
+      // whose whole job is to tell a person a thing they asked to be told, and
+      // a drawing missed is missed for good. Its own switch is `drawWatch`.
+      // `neverTouch` still outranks both, in the browser context.
+      if (config.drawWatch !== false && Date.now() >= nextDrawAt) {
+        const scan = await scanDraws(browser);
+        nextDrawAt = Date.now() + drawInterval(scan.rows) * 1000;
+
+        if (scan.challenged) {
+          console.log(`  ${timestamp()}  drawings page: ${scan.challengeReason} — standing down`);
+          activity.record({
+            kind: 'draw', level: 'warn', retailer: 'Walmart',
+            message: `drawings page challenged: ${scan.challengeReason}`,
+          });
+          // A wall is a reason to back off hard, not to keep knocking.
+          nextDrawAt = Date.now() + 4 * 3600_000;
+        } else if (scan.note) {
+          console.log(`  ${timestamp()}  drawings: ${scan.note}`);
+        }
+
+        if (!scan.challenged) {
+          for (const change of drawChanges(lastDraws, scan.rows)) {
+            const line =
+              change.kind === 'opened'
+                ? `DRAWING OPEN: ${change.row.name} — enter at ${change.row.url}`
+                : change.kind === 'announced'
+                  ? `drawing announced: ${change.row.name} — ${change.row.windowLabel} ${change.row.windowText}`
+                  : `drawing gone from the page: ${change.row.name}`;
+            console.log(`  ${timestamp()}  ${line}`);
+            activity.record({
+              kind: 'draw',
+              level: change.kind === 'opened' ? 'warn' : 'info',
+              retailer: 'Walmart',
+              message: line,
+            });
+          }
+          lastDraws = scan.rows;
+          // The Hub decides what is worth announcing and to whom; this just
+          // reports what the page said. Sent every pass rather than only on a
+          // change, because the closing reminder is the Hub's to time and it
+          // needs to hear that a window is still open to do it.
+          await hub.reportDrawings('Walmart', scan.rows);
+        }
       }
 
       // Whose turn it is. Alternating rather than "sweep with whatever is left

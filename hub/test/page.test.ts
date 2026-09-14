@@ -4770,3 +4770,89 @@ test('NOTHING SEEN YET IS SAID AS A SENTENCE, NOT AN EMPTY BOX', async () => {
   assert.match($(h, '#sightings-list').textContent,
     /Nothing you watch has been orderable yet/);
 });
+
+// ── Walmart drawings ────────────────────────────────────────────────────────
+//
+// The one panel with a deadline on it, and the one that must not read like a
+// drop. A drawing is decided at random after the window closes, so being first
+// buys nothing — a card that shouts spends adrenaline on a coin toss and makes
+// the next real drop alert worth less.
+
+const drawing = (over: Record<string, unknown> = {}) => ({
+  id: 1, retailer: 'Walmart', externalId: '21009455186',
+  name: 'Pokémon TCG: 30th Celebration Pokémon ex Box Bundle',
+  url: 'https://www.walmart.com/ip/x/21009455186', imageUrl: '',
+  price: 69.49, orderLimit: 3, phase: 'announced',
+  windowLabel: 'Drawing starts', windowText: 'Sep 16, 2:00pm PDT',
+  windowAt: new Date(Date.now() + 2 * 86400000).toISOString(),
+  firstSeenAt: new Date().toISOString(), lastSeenAt: new Date().toISOString(),
+  openedAt: null, goneAt: null, enteredAt: null, ...over,
+});
+
+const withDraws = (rows: unknown[]): unknown => {
+  const base = JSON.parse(JSON.stringify(DASHBOARD));
+  base.drawings = rows;
+  return base;
+};
+
+test('THE DRAWINGS PANEL HIDES ITSELF WHEN THERE IS NOTHING', async () => {
+  // Most weeks there is nothing. A permanent empty box is a box people stop
+  // seeing, and this one has to be noticed on the four days a month it counts.
+  const h = await boot(withDraws([]));
+  assert.equal($(h, '#draw-card').hidden, true);
+
+  const live = await boot(withDraws([drawing()]));
+  assert.equal($(live, '#draw-card').hidden, false);
+});
+
+test('AN ANNOUNCED DRAWING SHOWS WALMART’S OWN WORDS AND OUR COUNTDOWN', async () => {
+  // The words first, because they are never wrong; the countdown second,
+  // because it is only as good as our parse of them.
+  const h = await boot(withDraws([drawing()]));
+  const text = $(h, '#draw-list').textContent;
+  assert.match(text, /Drawing starts Sep 16, 2:00pm PDT/);
+  assert.match(text, /opens in 2d/);
+  assert.match(text, /limit 3/, 'the number a commitment gets multiplied by');
+  assert.match(text, /\$69\.49/);
+  assert.ok(findPills(h).length >= 0);
+});
+
+test('OPEN SAYS OPEN, AND COUNTS DOWN TO THE CLOSE INSTEAD', async () => {
+  const h = await boot(withDraws([
+    drawing({
+      phase: 'open', windowLabel: 'Drawing ends', windowText: 'Sep 18, 2:00pm PDT',
+      windowAt: new Date(Date.now() + 3 * 3600000).toISOString(),
+      openedAt: new Date().toISOString(),
+    }),
+  ]));
+  const text = $(h, '#draw-list').textContent;
+  assert.match(text, /OPEN FOR ENTRIES/);
+  assert.match(text, /closes in 3h/);
+  const buttons = [...h.doc.querySelectorAll('#draw-list a, #draw-list button')]
+    .map((b) => b.textContent);
+  assert.ok(buttons.includes('Enter'));
+  assert.ok(buttons.includes('I entered'), 'a person marks it, because only Walmart knows');
+});
+
+test('MARKING IT ENTERED IS A PERSON’S NOTE, NOT A CLAIM BY THE MACHINE', async () => {
+  // Nothing here can tell whether an entry was submitted — Walmart's page is
+  // the only place that knows. So it is a checkbox, honestly labelled, whose
+  // only job is to stop the closing reminder nagging about something done.
+  const h = await boot(withDraws([
+    drawing({ phase: 'open', enteredAt: new Date().toISOString() }),
+  ]));
+  assert.match($(h, '#draw-list').textContent, /you entered/);
+  const buttons = [...h.doc.querySelectorAll('#draw-list button')].map((b) => b.textContent);
+  assert.ok(buttons.includes('Not entered'), 'and it is reversible');
+});
+
+test('an announced drawing offers no Enter button', async () => {
+  // A live-looking Enter on a window that has not opened sends somebody to a
+  // page with no button, and they learn to ignore the next one.
+  const h = await boot(withDraws([drawing()]));
+  const buttons = [...h.doc.querySelectorAll('#draw-list a, #draw-list button')]
+    .map((b) => b.textContent);
+  assert.ok(!buttons.includes('Enter'));
+  assert.ok(!buttons.includes('I entered'));
+  assert.ok(buttons.includes('Open'));
+});

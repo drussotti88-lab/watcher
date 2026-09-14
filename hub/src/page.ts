@@ -1537,6 +1537,25 @@ ${FONTS}<style>${STYLE}</style></head>
         <div id="live-list"></div>
       </div>
 
+      <!-- ── Walmart's lottery ─────────────────────────────────────────
+           Above the sightings, and above everything else that is history,
+           because this is the one panel with a deadline on it. It disappears
+           entirely when nothing is open or coming, which is most weeks.
+
+           Tone matters here. A drawing is decided at RANDOM after its window
+           closes, so nothing on this card should read like a drop: being
+           first buys nothing, and a panel that shouts "go now" about a
+           lottery spends somebody's adrenaline on a coin toss. -->
+      <div class="card span2" id="draw-card" hidden>
+        <div class="wizhead">
+          <div>
+            <div class="name">Walmart drawings</div>
+            <div class="sub">Free to enter, one per account, drawn at random after the window shuts.</div>
+          </div>
+        </div>
+        <div id="draw-list"></div>
+      </div>
+
       <!-- ── What happened while nobody was looking ────────────────────
            Directly under the hero, because the two answer the same question
            a beat apart: the hero says what is buyable this second, which on
@@ -4112,6 +4131,7 @@ function render() {
   // Tying what-was-catchable to an aggregate query is how the two fastest
   // answers on the page end up behind the slowest one.
   renderSightings();
+  renderDraws();
   showWinMoment();
 
   /*
@@ -5524,6 +5544,106 @@ function clockOf(iso) {
   if (!iso) return '';
   const d = new Date(iso);
   return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
+
+/**
+ * Walmart's drawings, as a diary rather than an alarm.
+ *
+ * The panel hides itself when there is nothing open or coming, which is most
+ * weeks - a permanent empty box is a box people stop seeing, and this one has
+ * to be noticed on the four days a month it matters.
+ *
+ * Nothing here reads like a drop. The draw is random after the window closes,
+ * so being first buys nothing, and a card that shouts spends somebody's
+ * adrenaline on a coin toss and makes the next real drop alert worth less.
+ */
+function drawCountdown(iso, phase) {
+  if (!iso) return '';
+  const ms = new Date(iso).getTime() - Date.now();
+  const mins = Math.round(Math.abs(ms) / 60000);
+  const said = mins < 90 ? mins + 'm'
+    : mins < 2880 ? Math.round(mins / 60) + 'h'
+    : Math.round(mins / 1440) + 'd';
+  if (ms < 0) return phase === 'open' ? '' : said + ' ago';
+  return (phase === 'open' ? 'closes in ' : 'opens in ') + said;
+}
+
+function renderDraws() {
+  const card = document.getElementById('draw-card');
+  const list = document.getElementById('draw-list');
+  if (!card || !list) return;
+
+  const rows = (DATA.drawings || []).filter((d) => d.phase !== 'gone');
+  card.hidden = rows.length === 0;
+  list.textContent = '';
+  if (rows.length === 0) return;
+
+  for (const d of rows) {
+    const row = el('div', 'live');
+    if (d.imageUrl) {
+      const img = el('img');
+      img.src = d.imageUrl;
+      img.alt = '';
+      img.loading = 'lazy';
+      row.appendChild(img);
+    }
+    const g = el('div', 'g');
+    const nm = el('div', 'nm', shortName(d.name));
+    nm.title = d.name;
+    g.appendChild(nm);
+
+    const tags = el('div', 'tags');
+    tags.appendChild(el('span', 'pill ' + (d.phase === 'open' ? 's-in' : 'info'),
+      d.phase === 'open' ? 'OPEN FOR ENTRIES' : 'announced'));
+    if (d.enteredAt) tags.appendChild(el('span', 'pill s-in', 'you entered'));
+    g.appendChild(tags);
+
+    const meta = el('div', 'meta');
+    const bits = [];
+    // Walmart's own words first, then our arithmetic. The words are never
+    // wrong; the countdown is only as good as our parse of them.
+    if (d.windowText) bits.push((d.windowLabel || 'Window') + ' ' + d.windowText);
+    const count = drawCountdown(d.windowAt, d.phase);
+    if (count) bits.push(count);
+    // The limit is what a commitment gets multiplied by: three of a $239
+    // bundle is seven hundred dollars if the draw comes in.
+    if (d.orderLimit) bits.push('limit ' + d.orderLimit);
+    meta.textContent = bits.join(' · ');
+    g.appendChild(meta);
+    row.appendChild(g);
+
+    if (d.price !== null && d.price !== undefined) {
+      row.appendChild(el('div', 'px', money(d.price)));
+    }
+    if (d.url) {
+      const a = el('a', 'btn small go', d.phase === 'open' ? 'Enter' : 'Open');
+      a.href = d.url;
+      a.target = '_blank';
+      a.rel = 'noreferrer';
+      row.appendChild(a);
+    }
+
+    /*
+     * "I have dealt with this."
+     *
+     * A person's own note and never the machine's. Nothing here can tell
+     * whether an entry was submitted - Walmart's page is the only place that
+     * knows - so this is a checkbox, honestly labelled, whose only job is to
+     * stop the closing reminder nagging about something already done.
+     */
+    if (DATA.canCurate === true && d.phase === 'open') {
+      const mark = el('button', 'small', d.enteredAt ? 'Not entered' : 'I entered');
+      mark.addEventListener('click', async (e) => {
+        await withButton(e.target, 'Saving...', null, async () => {
+          await api('POST', '/api/drawings/' + d.id + '/entered', { entered: !d.enteredAt });
+          load();
+          return d.enteredAt ? 'unmarked' : 'marked entered - no reminder for this one';
+        });
+      });
+      row.appendChild(mark);
+    }
+    list.appendChild(row);
+  }
 }
 
 function renderSightings() {

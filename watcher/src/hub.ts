@@ -530,6 +530,24 @@ export class Hub {
   }
 
   /**
+   * Tell the Hub what the drawings page is advertising.
+   *
+   * Returns null rather than throwing. A drawing report is news, not a
+   * mandate: a Hub having a bad minute must never stop a pass, and the page
+   * will be read again in half an hour anyway.
+   */
+  async reportDrawings(
+    retailer: string,
+    drawings: unknown[],
+  ): Promise<{ opened: number; announced: number; closing: number } | null> {
+    try {
+      return await this.call('POST', '/api/drawings', { retailer, drawings });
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Which Phantom the Hub is handing out, and to whom.
    *
    * Returns null rather than throwing: a Hub too old to answer this, or one
