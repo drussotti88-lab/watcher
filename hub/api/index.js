@@ -11587,6 +11587,12 @@ function createHandler(db2, env2) {
         retailer,
         list
       );
+      if (list.length > 0 && outcomes.length === 0) {
+        return json({
+          error: `received ${list.length} drawings and recognised none of them \u2014 each needs an externalId. Nothing was recorded.`,
+          recorded: 0
+        }, 400);
+      }
       const seen = outcomes.map((o) => o.row.externalId);
       const retired = await retireMissingDrawings(db2, userId, retailer, seen);
       const card = (r) => ({

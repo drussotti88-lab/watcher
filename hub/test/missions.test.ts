@@ -1453,3 +1453,34 @@ test('THE DISCORD CARD FOR A DRAWING DOES NOT READ LIKE A DROP', async () => {
   assert.match(card!.footer.text, /drawn at random/i);
   assert.match(card!.footer.text, /entering early is worth no more/i);
 });
+
+test('GIVEN ROWS AND RECOGNISING NONE IS A 400, NOT A CHEERFUL 200', async () => {
+  // The bug this exists to have caught. The watcher's reader calls Walmart's
+  // id `usItemId`; this contract calls it `externalId`. Every row fell through
+  // `if (!externalId) continue`, the endpoint answered 200 with recorded: 0,
+  // and for two hours Phantom logged four drawings while the Hub held none —
+  // both halves believing they had done their job, two days before the drawing
+  // the whole thing was built for.
+  const db = await TestDb.create();
+
+  const wrong = await call(db, 'POST', '/api/drawings', {
+    retailer: 'Walmart',
+    drawings: [{ usItemId: '21009455186', name: 'A bundle', phase: 'announced' }],
+  });
+  assert.equal(wrong.status, 400);
+  assert.match(wrong.body.error, /recognised none of them/);
+  assert.match(wrong.body.error, /externalId/, 'and it names the field, so the fix is obvious');
+
+  // An empty list is a legitimate "nothing advertised today" and stays a 200.
+  // Silence and a mismatch are different answers and must not share a status.
+  const empty = await call(db, 'POST', '/api/drawings', { retailer: 'Walmart', drawings: [] });
+  assert.equal(empty.status, 200);
+  assert.equal(empty.body.recorded, 0);
+
+  const right = await call(db, 'POST', '/api/drawings', {
+    retailer: 'Walmart',
+    drawings: [{ externalId: '21009455186', name: 'A bundle', phase: 'announced' }],
+  });
+  assert.equal(right.status, 200);
+  assert.equal(right.body.recorded, 1);
+});

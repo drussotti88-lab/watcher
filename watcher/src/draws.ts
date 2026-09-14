@@ -139,6 +139,47 @@ export async function scanDraws(
 }
 
 /**
+ * A reading turned into what the Hub's contract asks for.
+ *
+ * Written out field by field, and that is the whole point. The first version
+ * posted `scan.rows` straight down the wire: the reader calls Walmart's id
+ * `usItemId` and the Hub's contract calls it `externalId`, so every row was
+ * silently skipped by a `if (!externalId) continue` and the endpoint answered
+ * 200 with `recorded: 0`. Phantom logged four drawings, the Hub held none, and
+ * both halves believed they had done their job — for two hours, two days
+ * before the drawing this was built for.
+ *
+ * `toDiscovered` in scan.ts has done it this way all along, for this reason.
+ * An explicit mapper is a place where a rename shows up as a type error
+ * instead of as an empty table.
+ */
+export function toDrawingIn(row: DrawRow): {
+  externalId: string;
+  name: string;
+  url: string;
+  imageUrl: string;
+  price: number | null;
+  orderLimit: number | null;
+  phase: string;
+  windowLabel: string;
+  windowText: string;
+  windowAt: string | null;
+} {
+  return {
+    externalId: row.usItemId,
+    name: row.name,
+    url: row.url,
+    imageUrl: row.imageUrl,
+    price: row.price,
+    orderLimit: row.orderLimit,
+    phase: row.phase,
+    windowLabel: row.windowLabel,
+    windowText: row.windowText,
+    windowAt: row.windowAt,
+  };
+}
+
+/**
  * What changed since last time, in the terms a person cares about.
  *
  * Edge-triggered on purpose. "A drawing is open" is true for hours and saying

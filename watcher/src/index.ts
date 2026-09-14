@@ -14,7 +14,7 @@ import { Hub } from './hub.ts';
 import { Pacer } from './rate.ts';
 import { isAwake, overrides } from './hours.ts';
 import { dropWindow, burstMsFor, retailerOn, pausedList } from './drop.ts';
-import { scanDraws, drawInterval, drawChanges } from './draws.ts';
+import { scanDraws, drawInterval, drawChanges, toDrawingIn } from './draws.ts';
 import type { DrawRow } from './readers/walmart-draw.ts';
 import { pass } from './watch.ts';
 import {
@@ -963,7 +963,7 @@ async function runPasses(once: boolean): Promise<void> {
           // and swallowed it — so Phantom had four drawings in its log and the
           // Hub had none, with nothing saying the two disagreed. That is the
           // silent failure this project keeps re-finding in new clothes.
-          const sent = await hub.reportDrawings('Walmart', scan.rows);
+          const sent = await hub.reportDrawings('Walmart', scan.rows.map(toDrawingIn));
           if (sent === null && scan.rows.length > 0) {
             const why = `found ${scan.rows.length} drawings and could not tell the Hub` +
               (hub.lastError ? ` — ${hub.lastError}` : '');

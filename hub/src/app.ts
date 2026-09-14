@@ -546,6 +546,30 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       const outcomes = await store.recordDrawings(
         db, userId, retailer, list as store.DrawingIn[],
       );
+
+      /*
+       * ── Given rows and recorded none is a contract mismatch, not a success ──
+       *
+       * This answered 200 with `recorded: 0` for two hours while Phantom
+       * cheerfully logged four drawings it had found. The watcher's reader
+       * calls Walmart's id `usItemId` and this contract calls it `externalId`,
+       * so every row fell through `if (!externalId) continue` — and both
+       * halves believed they had done their job.
+       *
+       * An empty list is a legitimate "nothing today" and stays a 200. A list
+       * with rows in it that produced nothing is a bug somewhere, and the only
+       * question is whose. Saying so out loud costs one line and would have
+       * turned two hours of hunting into one request.
+       */
+      if (list.length > 0 && outcomes.length === 0) {
+        return json({
+          error:
+            `received ${list.length} drawings and recognised none of them — ` +
+            'each needs an externalId. Nothing was recorded.',
+          recorded: 0,
+        }, 400);
+      }
+
       const seen = outcomes.map((o) => o.row.externalId);
       const retired = await store.retireMissingDrawings(db, userId, retailer, seen);
 

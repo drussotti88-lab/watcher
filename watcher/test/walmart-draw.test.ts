@@ -164,7 +164,7 @@ test('the same item listed twice is one drawing', () => {
 
 // ── The cadence, and what counts as news ────────────────────────────────────
 
-import { drawInterval, drawChanges } from '../src/draws.ts';
+import { drawInterval, drawChanges, toDrawingIn } from '../src/draws.ts';
 import type { DrawRow } from '../src/readers/walmart-draw.ts';
 
 const row = (over: Partial<DrawRow> = {}): DrawRow => ({
@@ -223,4 +223,23 @@ test('several drawings are tracked independently', () => {
   const changes = drawChanges([a, b], [a, bOpen]);
   assert.equal(changes.length, 1);
   assert.equal(changes[0]!.row.usItemId, 'b');
+});
+
+test('A READING IS MAPPED ONTO THE CONTRACT, FIELD BY FIELD', () => {
+  // Posting scan.rows straight down the wire is what caused it: the reader
+  // calls Walmart's id `usItemId` and the Hub calls it `externalId`, so every
+  // row was silently dropped and the endpoint said 200. An explicit mapper is
+  // a place where a rename becomes a type error instead of an empty table.
+  const mapped = toDrawingIn(row({ usItemId: '21009455186', price: 69.49, orderLimit: 3 }));
+  assert.equal(mapped.externalId, '21009455186', 'the field that was wrong');
+  assert.equal(mapped.price, 69.49);
+  assert.equal(mapped.orderLimit, 3);
+  assert.equal(mapped.phase, 'announced');
+  assert.equal(mapped.windowText, 'Sep 16, 2:00pm PDT');
+  assert.equal(mapped.windowAt, '2026-09-16T21:00:00.000Z');
+  // And nothing the Hub does not ask for rides along.
+  assert.deepEqual(Object.keys(mapped).sort(), [
+    'externalId', 'imageUrl', 'name', 'orderLimit', 'phase', 'price',
+    'url', 'windowAt', 'windowLabel', 'windowText',
+  ]);
 });
