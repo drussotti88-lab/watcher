@@ -593,9 +593,20 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
         .filter((o) => o.isNew && !o.justOpened && o.row.phase === 'announced')
         .map((o) => card(o.row));
       const closing = (await store.claimClosingDrawings(db, userId)).map(card);
+      // The belt to `opened`'s brace. That one fires on Walmart's own
+      // showDrawCTA flag, which is the right signal and one nobody here has
+      // ever watched change — every row in the capture it was built from had
+      // it false. This fires on the start time Walmart printed on the page,
+      // so a window still gets announced loudly if the flag disappoints.
+      // Suppressed once a drawing has actually been seen open, so the two
+      // never both shout about the same thing.
+      const soon = opened.length > 0
+        ? []
+        : (await store.claimOpeningDrawings(db, userId)).map(card);
 
       if (env.DISCORD_WEBHOOK_URL) {
         if (opened.length) await announceDraw(env.DISCORD_WEBHOOK_URL, opened, now, 'opened');
+        if (soon.length) await announceDraw(env.DISCORD_WEBHOOK_URL, soon, now, 'soon');
         if (announced.length) await announceDraw(env.DISCORD_WEBHOOK_URL, announced, now, 'announced');
         if (closing.length) await announceDraw(env.DISCORD_WEBHOOK_URL, closing, now, 'closing');
       }
@@ -603,6 +614,7 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       return json({
         recorded: outcomes.length,
         opened: opened.length,
+        soon: soon.length,
         announced: announced.length,
         closing: closing.length,
         retired,

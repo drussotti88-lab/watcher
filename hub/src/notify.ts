@@ -320,6 +320,16 @@ export interface DrawItem {
   windowAt: string | null;
 }
 
+/**
+ * The four things worth saying about a lottery.
+ *
+ * `soon` is the odd one and earns its place: it fires off the start time
+ * Walmart printed on the page rather than off their `showDrawCTA` flag, so a
+ * window still opens loudly if that flag never behaves the way we expect. It
+ * is deliberately worded as a prediction, because that is what it is.
+ */
+export type DrawKind = 'opened' | 'announced' | 'closing' | 'soon';
+
 /** "in 2 days", "in 47 minutes", "3 hours ago". */
 function untilPhrase(iso: string | null, now: string): string {
   if (!iso) return '';
@@ -345,11 +355,12 @@ function untilPhrase(iso: string | null, now: string): string {
 export function buildDrawEmbeds(
   items: DrawItem[],
   now: string,
-  kind: 'opened' | 'announced' | 'closing',
+  kind: DrawKind,
 ): Embed[] {
   const heading =
     kind === 'opened' ? 'DRAWING OPEN'
     : kind === 'closing' ? 'DRAWING CLOSING'
+    : kind === 'soon' ? 'DRAWING OPENS SOON'
     : 'DRAWING ANNOUNCED';
 
   return items.slice(0, 10).map((i) => {
@@ -362,7 +373,11 @@ export function buildDrawEmbeds(
       inline('Retailer', i.retailer || '—'),
     ];
     const until = untilPhrase(i.windowAt, now);
-    if (until) fields.push(inline(kind === 'announced' ? 'That is' : 'Time left', until));
+    if (until) {
+      fields.push(
+        inline(kind === 'announced' || kind === 'soon' ? 'That is' : 'Time left', until),
+      );
+    }
     if (i.orderLimit !== null && i.orderLimit !== undefined) {
       // Said because the limit is what a commitment gets multiplied by: three
       // of a $239 bundle is seven hundred dollars if the draw comes in.
@@ -379,7 +394,9 @@ export function buildDrawEmbeds(
         text:
           kind === 'closing'
             ? 'Entry closes soon and you have not marked this entered. Winners are drawn at random.'
-            : 'Free, one entry per account. Winners are drawn at random after the window closes — entering early is worth no more than entering late.',
+            : kind === 'soon'
+              ? 'This is Walmart\u2019s own stated start time, not a confirmed open button \u2014 the page may take a few minutes to catch up. Free, one entry per account, drawn at random.'
+              : 'Free, one entry per account. Winners are drawn at random after the window closes \u2014 entering early is worth no more than entering late.',
       },
       timestamp: now,
     };
@@ -390,7 +407,7 @@ export async function announceDraw(
   webhookUrl: string,
   items: DrawItem[],
   now: string,
-  kind: 'opened' | 'announced' | 'closing',
+  kind: DrawKind,
 ): Promise<void> {
   const embeds = buildDrawEmbeds(items, now, kind);
   if (embeds.length) await post(webhookUrl, embeds);

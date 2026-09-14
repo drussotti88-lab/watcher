@@ -3322,6 +3322,54 @@ export async function liveDrawings(db: Sql, userId: number): Promise<DrawingRow[
 }
 
 /**
+ * Drawings Walmart said would open within the half hour.
+ *
+ * ── Why this exists alongside the opened alert ──────────────────────────────
+ *
+ * `justOpened` is the honest signal: it fires when Walmart's own `showDrawCTA`
+ * turns true, which is the only thing that proves an enter button is in the
+ * page. It is also a signal nobody in this project has ever watched change.
+ * Every row in the capture this was built from had it false, and "the flag
+ * will flip" is a prediction, not an observation.
+ *
+ * So this fires off the time Walmart WROTE ON THE PAGE, in words, which was
+ * read and is not a prediction about anything. If the flag behaves, this lands
+ * half an hour early and the real one lands on time; if the flag never flips,
+ * this is the whole alert and the drawing is not missed.
+ *
+ * It says "about to open" and never "open", because it does not know. The two
+ * mistakes do not cost the same: sending somebody to a page five minutes early
+ * costs a refresh, and staying quiet through the window costs the drawing.
+ *
+ * Claimed exactly once per drawing, like every other alert here.
+ */
+export async function claimOpeningDrawings(
+  db: Sql,
+  userId: number,
+  withinMinutes = 30,
+): Promise<DrawingRow[]> {
+  const rows = await db.query(
+    `UPDATE drawings SET soon_alert_at = now()
+      WHERE id IN (
+        SELECT id FROM drawings
+         WHERE user_id = $1
+           AND gone_at IS NULL
+           AND entered_at IS NULL
+           AND opened_at IS NULL
+           AND soon_alert_at IS NULL
+           AND phase = 'announced'
+           AND window_label ILIKE '%start%'
+           AND window_at IS NOT NULL
+           AND window_at > now() - INTERVAL '15 minutes'
+           AND window_at <= now() + ($2 || ' minutes')::interval
+      )
+      RETURNING *`,
+    [userId, Math.max(1, Math.round(withinMinutes))],
+  );
+  return rows.map(toDrawing);
+}
+
+/**
  * Drawings whose window is about to shut and that nobody has marked entered.
  *
  * The failure mode with a lottery is forgetting, not being slow — you had

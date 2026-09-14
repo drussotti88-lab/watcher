@@ -1089,3 +1089,21 @@ CREATE TABLE IF NOT EXISTS drawings (
 );
 
 CREATE INDEX IF NOT EXISTS drawings_live_idx ON drawings (user_id, phase, window_at);
+
+-- ---------------------------------------------------------------------------
+-- The alert that does not trust Walmart's flag
+--
+-- `opened_alert_at` fires when `showDrawCTA` flips true, which is the right
+-- signal and the only one that proves a button exists. But it has never been
+-- OBSERVED flipping: every row in the 14 Sep capture had it false, and a
+-- signal nobody has watched change is a signal that might not.
+--
+-- So this is the belt to that brace. It fires off Walmart's own stated start
+-- time, which was read out of the page in words, and it says "about to open"
+-- rather than "open" — because it does not know, and the cost of the two
+-- mistakes is not symmetrical. Missing a window entirely loses the drawing;
+-- arriving five minutes early costs a refresh.
+--
+-- Said once, like every other alert stamp in this table.
+-- ---------------------------------------------------------------------------
+ALTER TABLE drawings ADD COLUMN IF NOT EXISTS soon_alert_at TIMESTAMPTZ;

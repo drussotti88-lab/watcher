@@ -35,7 +35,8 @@
     "find-facet": "node --experimental-strip-types scripts/find-facet.ts",
     "keyword": "node --experimental-strip-types scripts/keyword.ts",
     "draw-probe": "node --experimental-strip-types scripts/draw-probe.ts",
-    "draws": "node --experimental-strip-types scripts/draws.ts"
+    "draws": "node --experimental-strip-types scripts/draws.ts",
+    "draw-entry": "node --experimental-strip-types scripts/draw-entry-probe.ts"
   },
   "dependencies": {
     "playwright": "^1.49.0"

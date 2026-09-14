@@ -1484,3 +1484,63 @@ test('GIVEN ROWS AND RECOGNISING NONE IS A 400, NOT A CHEERFUL 200', async () =>
   assert.equal(right.status, 200);
   assert.equal(right.body.recorded, 1);
 });
+
+test('THE OPENS-SOON ALERT DOES NOT WAIT FOR A FLAG NOBODY HAS SEEN MOVE', async () => {
+  // `justOpened` fires on Walmart's own showDrawCTA. That is the right signal
+  // and it is also one this project has never watched change — every row in
+  // the capture it was built from had it false, so "the flag will flip" is a
+  // prediction dressed as an observation. This is the belt to that brace: it
+  // fires on the start time Walmart PRINTED, in words, on the page.
+  const db = await TestDb.create();
+
+  // Two days out, nothing is said. A drawing announced on Sunday must not ping
+  // on Sunday about a window that opens on Tuesday.
+  await store.recordDrawings(db, USER, 'Walmart', [draw()]);
+  assert.deepEqual(await store.claimOpeningDrawings(db, USER, 30), []);
+
+  // Twenty minutes out, it fires.
+  await store.recordDrawings(db, USER, 'Walmart', [
+    draw({ windowAt: new Date(Date.now() + 20 * 60000).toISOString() }),
+  ]);
+  const soon = await store.claimOpeningDrawings(db, USER, 30);
+  assert.equal(soon.length, 1);
+  assert.equal(soon[0]?.externalId, '21009455186');
+
+  // Once. A page re-read every two minutes for the next half hour must not
+  // turn one window into fifteen notifications.
+  assert.deepEqual(await store.claimOpeningDrawings(db, USER, 30), []);
+});
+
+test('OPENS-SOON STAYS QUIET ONCE THE DRAWING HAS ACTUALLY OPENED', async () => {
+  // The two alerts must never both shout about the same window. If the flag
+  // does behave, the real one is the only one anybody should get.
+  const db = await TestDb.create();
+  const at = new Date(Date.now() + 20 * 60000).toISOString();
+  await store.recordDrawings(db, USER, 'Walmart', [draw({ windowAt: at, phase: 'open' })]);
+  assert.deepEqual(
+    await store.claimOpeningDrawings(db, USER, 30), [],
+    'opened_at is set, so there is nothing to predict',
+  );
+});
+
+test('OPENS-SOON IS WORDED AS A PREDICTION, BECAUSE THAT IS WHAT IT IS', async () => {
+  const { buildDrawEmbeds } = await import('../src/notify.ts');
+  const now = new Date().toISOString();
+  const [card] = buildDrawEmbeds([{
+    name: '30th Celebration ex Box Bundle', retailer: 'Walmart',
+    url: 'https://walmart.test/x', imageUrl: '', price: 69.49, orderLimit: 3,
+    windowText: 'Sep 16, 2:00pm PDT', windowLabel: 'Drawing starts',
+    windowAt: new Date(Date.parse(now) + 25 * 60000).toISOString(),
+  }], now, 'soon');
+
+  assert.match(card!.title, /^DRAWING OPENS SOON · /);
+  const f = (name: string) => card!.fields.find((x: any) => x.name === name)?.value;
+  assert.equal(f('Opens'), 'Sep 16, 2:00pm PDT');
+  assert.equal(f('That is'), 'in 25 minutes');
+  // It must not claim a button exists. Sending somebody to a page with no
+  // control on it is how an alert stops being believed, and the alert that
+  // stops being believed is the one that mattered.
+  assert.doesNotMatch(card!.footer.text, /enter now/i);
+  assert.match(card!.footer.text, /stated start time/i);
+  assert.match(card!.footer.text, /may take a few minutes/i);
+});

@@ -2033,6 +2033,27 @@ async function liveDrawings(db2, userId) {
   );
   return rows.map(toDrawing);
 }
+async function claimOpeningDrawings(db2, userId, withinMinutes = 30) {
+  const rows = await db2.query(
+    `UPDATE drawings SET soon_alert_at = now()
+      WHERE id IN (
+        SELECT id FROM drawings
+         WHERE user_id = $1
+           AND gone_at IS NULL
+           AND entered_at IS NULL
+           AND opened_at IS NULL
+           AND soon_alert_at IS NULL
+           AND phase = 'announced'
+           AND window_label ILIKE '%start%'
+           AND window_at IS NOT NULL
+           AND window_at > now() - INTERVAL '15 minutes'
+           AND window_at <= now() + ($2 || ' minutes')::interval
+      )
+      RETURNING *`,
+    [userId, Math.max(1, Math.round(withinMinutes))]
+  );
+  return rows.map(toDrawing);
+}
 async function claimClosingDrawings(db2, userId, withinMinutes = 60) {
   const rows = await db2.query(
     `UPDATE drawings SET closing_alert_at = now()
@@ -3148,7 +3169,7 @@ function untilPhrase(iso, now) {
   return ms >= 0 ? `in ${said}` : `${said} ago`;
 }
 function buildDrawEmbeds(items, now, kind) {
-  const heading = kind === "opened" ? "DRAWING OPEN" : kind === "closing" ? "DRAWING CLOSING" : "DRAWING ANNOUNCED";
+  const heading = kind === "opened" ? "DRAWING OPEN" : kind === "closing" ? "DRAWING CLOSING" : kind === "soon" ? "DRAWING OPENS SOON" : "DRAWING ANNOUNCED";
   return items.slice(0, 10).map((i) => {
     const fields = [
       inline("Price", dollars(i.price)),
@@ -3159,7 +3180,11 @@ function buildDrawEmbeds(items, now, kind) {
       inline("Retailer", i.retailer || "\u2014")
     ];
     const until = untilPhrase(i.windowAt, now);
-    if (until) fields.push(inline(kind === "announced" ? "That is" : "Time left", until));
+    if (until) {
+      fields.push(
+        inline(kind === "announced" || kind === "soon" ? "That is" : "Time left", until)
+      );
+    }
     if (i.orderLimit !== null && i.orderLimit !== void 0) {
       fields.push(inline("Limit", `${i.orderLimit} per entry`));
     }
@@ -3170,7 +3195,7 @@ function buildDrawEmbeds(items, now, kind) {
       ...i.imageUrl ? { thumbnail: { url: i.imageUrl } } : {},
       fields,
       footer: {
-        text: kind === "closing" ? "Entry closes soon and you have not marked this entered. Winners are drawn at random." : "Free, one entry per account. Winners are drawn at random after the window closes \u2014 entering early is worth no more than entering late."
+        text: kind === "closing" ? "Entry closes soon and you have not marked this entered. Winners are drawn at random." : kind === "soon" ? "This is Walmart\u2019s own stated start time, not a confirmed open button \u2014 the page may take a few minutes to catch up. Free, one entry per account, drawn at random." : "Free, one entry per account. Winners are drawn at random after the window closes \u2014 entering early is worth no more than entering late."
       },
       timestamp: now
     };
@@ -11609,14 +11634,17 @@ function createHandler(db2, env2) {
       const opened = outcomes.filter((o) => o.justOpened).map((o) => card(o.row));
       const announced = outcomes.filter((o) => o.isNew && !o.justOpened && o.row.phase === "announced").map((o) => card(o.row));
       const closing = (await claimClosingDrawings(db2, userId)).map(card);
+      const soon = opened.length > 0 ? [] : (await claimOpeningDrawings(db2, userId)).map(card);
       if (env2.DISCORD_WEBHOOK_URL) {
         if (opened.length) await announceDraw(env2.DISCORD_WEBHOOK_URL, opened, now, "opened");
+        if (soon.length) await announceDraw(env2.DISCORD_WEBHOOK_URL, soon, now, "soon");
         if (announced.length) await announceDraw(env2.DISCORD_WEBHOOK_URL, announced, now, "announced");
         if (closing.length) await announceDraw(env2.DISCORD_WEBHOOK_URL, closing, now, "closing");
       }
       return json({
         recorded: outcomes.length,
         opened: opened.length,
+        soon: soon.length,
         announced: announced.length,
         closing: closing.length,
         retired
