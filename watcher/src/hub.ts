@@ -535,6 +535,14 @@ export class Hub {
    * Returns null rather than throwing. A drawing report is news, not a
    * mandate: a Hub having a bad minute must never stop a pass, and the page
    * will be read again in half an hour anyway.
+   *
+   * But it says WHY on the way past, and that is not decoration. The first
+   * run of this posted into a Hub that was thirty seconds from finishing its
+   * deploy, got a 404, and swallowed it — so Phantom logged four drawings it
+   * had found and the Hub held none, with nothing anywhere saying the two
+   * disagreed. Silent failure is the bug this project keeps re-finding: a
+   * label nobody printed, a filter that judged nothing, a coverage number
+   * measured from an empty test. A catch with no voice is the same shape.
    */
   async reportDrawings(
     retailer: string,
@@ -542,7 +550,8 @@ export class Hub {
   ): Promise<{ opened: number; announced: number; closing: number } | null> {
     try {
       return await this.call('POST', '/api/drawings', { retailer, drawings });
-    } catch {
+    } catch (err) {
+      this.lastFailure = (err as Error).message;
       return null;
     }
   }

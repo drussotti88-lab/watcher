@@ -957,7 +957,22 @@ async function runPasses(once: boolean): Promise<void> {
           // reports what the page said. Sent every pass rather than only on a
           // change, because the closing reminder is the Hub's to time and it
           // needs to hear that a window is still open to do it.
-          await hub.reportDrawings('Walmart', scan.rows);
+          //
+          // And it says so when it does not land. The first run of this posted
+          // into a Hub thirty seconds from finishing its deploy, got a 404,
+          // and swallowed it — so Phantom had four drawings in its log and the
+          // Hub had none, with nothing saying the two disagreed. That is the
+          // silent failure this project keeps re-finding in new clothes.
+          const sent = await hub.reportDrawings('Walmart', scan.rows);
+          if (sent === null && scan.rows.length > 0) {
+            const why = `found ${scan.rows.length} drawings and could not tell the Hub` +
+              (hub.lastError ? ` — ${hub.lastError}` : '');
+            console.log(`  ${timestamp()}  ${why}`);
+            activity.record({ kind: 'draw', level: 'warn', retailer: 'Walmart', message: why });
+            // Try again on the near clock rather than in half an hour: the
+            // reading is good, only the delivery failed.
+            nextDrawAt = Math.min(nextDrawAt, Date.now() + 120_000);
+          }
         }
       }
 
