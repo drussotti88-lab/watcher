@@ -194,6 +194,72 @@ async function post(url: string, embeds: Embed[]): Promise<void> {
  * announcing to a room that a bot is about to compete with them for the same
  * box is a strange thing to put in an alert you are sending them as a favour.
  */
+/**
+ * ── Which room a card goes to ───────────────────────────────────────────────
+ *
+ * One Discord channel was fine while one shop was being watched. It stops
+ * being fine the moment two are, because the shops are not alike: Target is a
+ * race decided in seconds, and Walmart in September 2026 is a lottery decided
+ * by a coin toss days later plus a press-and-hold in front of the front door.
+ * Those belong in different rooms not for tidiness but because they ask
+ * different things of the person reading them — one says run, the other says
+ * make a note — and a feed that mixes the two teaches you to skim both.
+ *
+ * The routing is by RETAILER and not by message kind, so a Walmart stock alert
+ * and a Walmart drawing land in the same place. That is the whole point: the
+ * room is "what is Walmart doing", and a person muting it is muting one shop
+ * rather than one flavour of notification.
+ *
+ * ── The failure mode this is shaped around ──────────────────────────────────
+ *
+ * A retailer with no room of its own falls back to `main`, and so does a room
+ * whose variable is unset or empty. That is deliberate and it is the whole
+ * safety argument: the way this goes wrong is a typo in an environment
+ * variable name, and the difference between "your Walmart alerts arrive in the
+ * old channel" and "your Walmart alerts are silently discarded" is the
+ * difference between a tidy-up and a missed drop.
+ */
+export interface Rooms {
+  /** Where anything without a room of its own goes. Never empty in practice. */
+  main: string;
+  /** Lowercased retailer name to webhook. Absent means "use main". */
+  byRetailer: Readonly<Record<string, string>>;
+}
+
+export function roomFor(rooms: Rooms, retailer: string | null | undefined): string {
+  const key = String(retailer ?? '').trim().toLowerCase();
+  return rooms.byRetailer[key] || rooms.main;
+}
+
+/**
+ * One batch of cards, split into the rooms they belong in.
+ *
+ * Returned as a list rather than a Map keyed by URL so the caller cannot
+ * accidentally log the key: these strings are credentials, and a webhook URL
+ * in an error message is a webhook URL in a log file. Groups come back in the
+ * order their first card appeared, so a single-room setup behaves exactly as
+ * it did before this existed — same cards, same order, one post.
+ */
+export function splitByRoom<T extends { retailer?: string | null }>(
+  items: readonly T[],
+  rooms: Rooms,
+): { url: string; items: T[] }[] {
+  const out: { url: string; items: T[] }[] = [];
+  const index = new Map<string, number>();
+  for (const item of items) {
+    const url = roomFor(rooms, item.retailer);
+    if (!url) continue;
+    const at = index.get(url);
+    if (at === undefined) {
+      index.set(url, out.length);
+      out.push({ url, items: [item] });
+    } else {
+      out[at]!.items.push(item);
+    }
+  }
+  return out;
+}
+
 export interface StockItem {
   name: string;
   retailer: string;

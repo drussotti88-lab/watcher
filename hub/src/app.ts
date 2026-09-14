@@ -35,6 +35,8 @@ import {
   announceDraw,
   announceTest,
   reportOps,
+  splitByRoom,
+  type Rooms,
 } from './notify.ts';
 import { applyFilters, dedupe } from './filter.ts';
 import { probeUrl } from './fetcher.ts';
@@ -77,6 +79,34 @@ function json(body: unknown, status = 200, headers: Record<string, string> = {})
     status,
     headers: { 'Content-Type': 'application/json; charset=utf-8', ...headers },
   });
+}
+
+/**
+ * The Discord channels this Hub has, and which shop belongs in which.
+ *
+ * Built per request rather than at module load so a variable added in Vercel
+ * takes effect on the next deploy without anything here caching the old
+ * answer. It is three string reads; it is not worth memoising.
+ */
+function roomsFrom(env: Env): Rooms {
+  const byRetailer: Record<string, string> = {};
+  // Either spelling. See the note on Env - the walkthrough that set this
+  // channel up named it DRAWS before the scope was settled as "everything
+  // Walmart", so both are honoured and neither is the wrong answer.
+  const walmart = env.DISCORD_WALMART_WEBHOOK_URL || env.DISCORD_DRAWS_WEBHOOK_URL || '';
+  if (walmart) byRetailer['walmart'] = walmart;
+  return { main: env.DISCORD_WEBHOOK_URL, byRetailer };
+}
+
+/** Post one batch of cards, each card to the room its shop belongs in. */
+async function toRooms<T extends { retailer?: string | null }>(
+  items: readonly T[],
+  rooms: Rooms,
+  send: (url: string, group: T[]) => Promise<void>,
+): Promise<void> {
+  for (const group of splitByRoom(items, rooms)) {
+    await send(group.url, group.items);
+  }
 }
 
 /** Post everything a set of sweeps found, then mark it announced. */
@@ -440,6 +470,12 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
         // Whether alerts have anywhere to go. A boolean, never the URL.
         discord: Boolean(env.DISCORD_WEBHOOK_URL),
         discordWins: Boolean(env.DISCORD_WINS_WEBHOOK_URL),
+        // A boolean, never the URL, like the two above it. This one also
+        // answers "did the variable I typed actually land", which is the
+        // only question anybody has after setting one.
+        discordWalmart: Boolean(
+          env.DISCORD_WALMART_WEBHOOK_URL || env.DISCORD_DRAWS_WEBHOOK_URL,
+        ),
         // What the Download button would hand over. Meta only, never bytes.
         phantomZip: PHANTOM_ZIP_BASE64 ? PHANTOM_ZIP_META : null,
       });
@@ -604,11 +640,16 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
         ? []
         : (await store.claimOpeningDrawings(db, userId)).map(card);
 
+      // Every card carries its own retailer, so the room is decided per card
+      // rather than per endpoint. Drawings are Walmart's today and the routing
+      // does not assume that: the day another shop runs a lottery, its cards
+      // go to its own room without a line changing here.
+      const rooms = roomsFrom(env);
       if (env.DISCORD_WEBHOOK_URL) {
-        if (opened.length) await announceDraw(env.DISCORD_WEBHOOK_URL, opened, now, 'opened');
-        if (soon.length) await announceDraw(env.DISCORD_WEBHOOK_URL, soon, now, 'soon');
-        if (announced.length) await announceDraw(env.DISCORD_WEBHOOK_URL, announced, now, 'announced');
-        if (closing.length) await announceDraw(env.DISCORD_WEBHOOK_URL, closing, now, 'closing');
+        await toRooms(opened, rooms, (url, g) => announceDraw(url, g, now, 'opened'));
+        await toRooms(soon, rooms, (url, g) => announceDraw(url, g, now, 'soon'));
+        await toRooms(announced, rooms, (url, g) => announceDraw(url, g, now, 'announced'));
+        await toRooms(closing, rooms, (url, g) => announceDraw(url, g, now, 'closing'));
       }
 
       return json({
@@ -619,6 +660,51 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
         closing: closing.length,
         retired,
       });
+    }
+
+    /*
+     * Say the live drawings again, in the room they belong in now.
+     *
+     * The announced card is edge-triggered off `isNew`, which is right: a
+     * drawing sitting announced for three days is not news on every pass. But
+     * it means that when a channel is ADDED, everything already announced was
+     * announced somewhere else and there is no event left to re-fire. The
+     * alternative was deleting the rows so they would look new again, which
+     * throws away first_seen_at and the whole reason this table is a diary.
+     *
+     * So: a deliberate, owner-pressed repeat. Not a state change, not a stamp,
+     * nothing edge-triggered - it re-reads what is live and posts it where the
+     * current routing says it goes. Safe to run twice; it just says it twice.
+     */
+    if (request.method === 'POST' && path === '/api/drawings/announce') {
+      if (!env.DISCORD_WEBHOOK_URL) {
+        return json({ error: 'no Discord webhook is configured', sent: 0 }, 400);
+      }
+      const live = (await store.liveDrawings(db, userId)).filter((d) => d.goneAt === null);
+      if (live.length === 0) return json({ sent: 0, rooms: 0, note: 'nothing live to say' });
+
+      const rooms = roomsFrom(env);
+      const cards = live.map((r) => ({
+        name: r.name, retailer: r.retailer, url: r.url, imageUrl: r.imageUrl,
+        price: r.price, orderLimit: r.orderLimit,
+        windowText: r.windowText, windowLabel: r.windowLabel, windowAt: r.windowAt,
+      }));
+      // Phase decides the words, not the caller. Re-announcing an OPEN drawing
+      // as "announced" would be a card that tells somebody to wait for a window
+      // they are currently standing in.
+      const byKind = new Map<'opened' | 'announced', typeof cards>();
+      for (let i = 0; i < live.length; i++) {
+        const kind = live[i]!.phase === 'open' ? 'opened' : 'announced';
+        byKind.set(kind, [...(byKind.get(kind) ?? []), cards[i]!]);
+      }
+      let rooms_ = 0;
+      for (const [kind, group] of byKind) {
+        for (const slice of splitByRoom(group, rooms)) {
+          rooms_++;
+          await announceDraw(slice.url, slice.items, now, kind);
+        }
+      }
+      return json({ sent: live.length, rooms: rooms_ });
     }
 
     /** A person's own note that they have dealt with a drawing. */
@@ -1341,8 +1427,20 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
         return json({ sent: true, configured: true, items: live.map((m) => m.productName) });
       }
 
-      await announceTest(env.DISCORD_WEBHOOK_URL, now);
-      return json({ sent: true, configured: true });
+      /*
+       * Every room, not just the main one.
+       *
+       * A test that only proves the channel already known to work is a test
+       * that proves nothing about the channel just added — and setting up a
+       * webhook is the one moment where silence is ambiguous four ways at
+       * once. So this posts into each distinct room this Hub would ever use,
+       * and reports how many got one.
+       */
+      const testRooms = roomsFrom(env);
+      const urls = [...new Set([testRooms.main, ...Object.values(testRooms.byRetailer)])]
+        .filter(Boolean);
+      for (const url of urls) await announceTest(url, now);
+      return json({ sent: true, configured: true, rooms: urls.length });
     }
 
     if (request.method === 'POST' && path === '/api/activity') {
@@ -1384,10 +1482,13 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
           fresh.set(retailer, String(line.at ?? new Date().toISOString()));
         }
         if (fresh.size > 0) {
-          await announceQueues(
-            env.DISCORD_WEBHOOK_URL,
+          // A waiting room is the most shop-specific thing this sends: it is
+          // an instruction to go and stand in one particular queue. It belongs
+          // in that shop's room more than anything else here does.
+          await toRooms(
             [...fresh].map(([retailer, at]) => ({ retailer, at })),
-            new Date().toISOString(),
+            roomsFrom(env),
+            (url, group) => announceQueues(url, group, new Date().toISOString()),
           ).catch(() => {});
         }
       }
@@ -1808,12 +1909,16 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       const fromTheShop = (sellerKind: string | null | undefined): boolean =>
         sellerKind === 'retailer';
 
+      // Every card below already carries the shop it came from, so routing is
+      // per card and a mixed batch does not all land in one place. Built once
+      // here rather than four times below.
+      const alertRooms = roomsFrom(env);
+
       const freshAlerts = cameIntoStock.filter(
         (c) => speaks(c.obs.listingId) && fromTheShop(c.obs.sellerKind),
       );
       if (freshAlerts.length > 0 && env.DISCORD_WEBHOOK_URL) {
-        await announceStock(
-          env.DISCORD_WEBHOOK_URL,
+        await toRooms(
           freshAlerts.map((c) => {
             const m = byListing.get(c.obs.listingId);
             // The reading is fresher than the watchlist for price, count and
@@ -1832,7 +1937,8 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
               orderLimit: c.obs.orderLimit ?? (m ? m.orderLimit : null),
             };
           }),
-          now,
+          alertRooms,
+          (url, group) => announceStock(url, group, now),
         );
       }
 
@@ -1843,8 +1949,7 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
         (c) => speaks(c.obs.listingId) && fromTheShop(c.obs.sellerKind),
       );
       if (preOrderAlerts.length > 0 && env.DISCORD_WEBHOOK_URL) {
-        await announceStock(
-          env.DISCORD_WEBHOOK_URL,
+        await toRooms(
           preOrderAlerts.map((c) => {
             const m = byListing.get(c.obs.listingId);
             return {
@@ -1862,8 +1967,12 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
               releaseDate: c.obs.releaseDate ?? (m ? m.releaseDate : null) ?? null,
             };
           }),
-          now,
-          'Orderable now, ships on release. This is not a restock.',
+          alertRooms,
+          (url, group) =>
+            announceStock(
+              url, group, now,
+              'Orderable now, ships on release. This is not a restock.',
+            ),
         );
       }
 
@@ -1877,8 +1986,7 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
         (o) => speaks(o.listingId) && fromTheShop(o.sellerKind) && o.isPreOrder !== true,
       );
       if (againAlerts.length > 0 && env.DISCORD_WEBHOOK_URL) {
-        await announceStock(
-          env.DISCORD_WEBHOOK_URL,
+        await toRooms(
           againAlerts.map((o) => {
             const m = byListing.get(o.listingId);
             return {
@@ -1895,15 +2003,14 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
               addToCart: o.addToCart ?? null,
             };
           }),
-          now,
-          'still in stock',
+          alertRooms,
+          (url, group) => announceStock(url, group, now, 'still in stock'),
         );
       }
 
       const loadedAlerts = loaded.filter((l) => speaks(l.listingId));
       if (loadedAlerts.length > 0 && env.DISCORD_WEBHOOK_URL) {
-        await announceStaged(
-          env.DISCORD_WEBHOOK_URL,
+        await toRooms(
           loadedAlerts.map((l) => {
             const m = byListing.get(l.listingId);
             return {
@@ -1915,7 +2022,8 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
               releaseDate: m ? (m.releaseDate ?? '') : '',
             };
           }),
-          now,
+          alertRooms,
+          (url, group) => announceStaged(url, group, now),
         );
       }
 

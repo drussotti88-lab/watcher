@@ -47,6 +47,45 @@ const call = async (db: TestDb, method: string, path: string, body?: unknown) =>
   return { status: res.status, body: parsed };
 };
 
+/**
+ * The same call, against an env of this test's choosing.
+ *
+ * Used by the routing tests, which need webhooks CONFIGURED to have anything
+ * to route. The URLs point at a closed local port on purpose: post() swallows
+ * a failed send by design, so this exercises every line of the routing and
+ * refuses instantly at the wire instead of resolving a fake hostname.
+ */
+const callWith = async (
+  db: TestDb,
+  over: Partial<Env>,
+  method: string,
+  path: string,
+  body?: unknown,
+) => {
+  const res = await createHandler(db, { ...env, ...over })(
+    new Request(`https://hub.test${path}`, {
+      method,
+      headers: {
+        Authorization: `Bearer ${TOKEN}`,
+        ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    }),
+  );
+  const text = await res.text();
+  let parsed: any = text;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    /* leave as text */
+  }
+  return { status: res.status, body: parsed };
+};
+
+/** Closed ports. post() fails at connect and swallows it, which is the point. */
+const MAIN_ROOM = 'http://127.0.0.1:1/main';
+const WALMART_ROOM = 'http://127.0.0.1:1/walmart';
+
 const TARGET_URL = 'https://www.target.com/p/pokemon-tin/-/A-1012644666';
 
 async function withProduct(): Promise<{ db: TestDb; key: string }> {
@@ -1543,4 +1582,133 @@ test('OPENS-SOON IS WORDED AS A PREDICTION, BECAUSE THAT IS WHAT IT IS', async (
   assert.doesNotMatch(card!.footer.text, /enter now/i);
   assert.match(card!.footer.text, /stated start time/i);
   assert.match(card!.footer.text, /may take a few minutes/i);
+});
+
+// ── Which room a card goes to ────────────────────────────────────────────────
+
+test('A WALMART CARD GOES TO THE WALMART ROOM AND A TARGET ONE DOES NOT', async () => {
+  const { splitByRoom } = await import('../src/notify.ts');
+  const rooms = { main: 'https://hook/main', byRetailer: { walmart: 'https://hook/walmart' } };
+
+  const groups = splitByRoom(
+    [
+      { retailer: 'Target', name: 'a' },
+      { retailer: 'Walmart', name: 'b' },
+      { retailer: 'Target', name: 'c' },
+      { retailer: 'walmart', name: 'd' },
+    ],
+    rooms,
+  );
+
+  assert.equal(groups.length, 2, 'two rooms, not four posts');
+  assert.equal(groups[0]!.url, 'https://hook/main', 'first card seen decides the order');
+  assert.deepEqual(groups[0]!.items.map((i) => i.name), ['a', 'c']);
+  assert.equal(groups[1]!.url, 'https://hook/walmart');
+  // Case is Walmart's, not ours: the reader reports whatever the page said.
+  assert.deepEqual(groups[1]!.items.map((i) => i.name), ['b', 'd']);
+});
+
+test('A ROOM THAT IS NOT CONFIGURED FALLS BACK — IT NEVER SWALLOWS', async () => {
+  // The failure mode this is shaped around is a typo in an environment
+  // variable name. "Your Walmart alerts arrived in the old channel" is a
+  // tidy-up; "your Walmart alerts were silently discarded" is a missed drop,
+  // and this project has already lost two hours this week to a config name
+  // spelled two ways.
+  const { splitByRoom, roomFor } = await import('../src/notify.ts');
+  const rooms = { main: 'https://hook/main', byRetailer: {} };
+
+  assert.equal(roomFor(rooms, 'Walmart'), 'https://hook/main');
+  assert.equal(roomFor(rooms, ''), 'https://hook/main', 'and so does a card with no shop');
+  assert.equal(roomFor(rooms, null), 'https://hook/main');
+
+  const groups = splitByRoom(
+    [{ retailer: 'Walmart' }, { retailer: 'Target' }, { retailer: null }],
+    rooms,
+  );
+  assert.equal(groups.length, 1, 'one room');
+  assert.equal(groups[0]!.items.length, 3, 'and every card still in it');
+});
+
+test('AN EMPTY ROOM STRING IS UNSET, NOT A DESTINATION', async () => {
+  // Vercel hands back '' for a variable that exists with no value, and posting
+  // to '' is a request to nowhere that fails quietly.
+  const { roomFor } = await import('../src/notify.ts');
+  assert.equal(
+    roomFor({ main: 'https://hook/main', byRetailer: { walmart: '' } }, 'Walmart'),
+    'https://hook/main',
+  );
+});
+
+test('RE-ANNOUNCING SAYS OPEN DRAWINGS AS OPEN, NOT AS UPCOMING', async () => {
+  // Adding a channel leaves everything already announced sitting in the old
+  // one with no event left to re-fire. The repeat must not tell somebody to
+  // wait for a window they are currently standing in.
+  const db = await TestDb.create();
+  await store.recordDrawings(db, USER, 'Walmart', [
+    draw(),
+    draw({ externalId: 'open-one', name: 'Already open', phase: 'open' }),
+  ]);
+
+  const res = await callWith(
+    db,
+    { DISCORD_WEBHOOK_URL: MAIN_ROOM, DISCORD_WALMART_WEBHOOK_URL: WALMART_ROOM },
+    'POST', '/api/drawings/announce', {},
+  );
+  assert.equal(res.status, 200);
+  assert.equal(res.body.sent, 2, 'both live drawings said again');
+  assert.equal(res.body.rooms, 2, 'one post per kind, since both are Walmart');
+
+  // And it is a repeat, not a state change: nothing was stamped, so the real
+  // edge-triggered alerts still have their moment to fire.
+  const after = await store.liveDrawings(db, USER);
+  assert.equal(after.length, 2);
+  assert.ok(after.every((d) => d.enteredAt === null));
+});
+
+test('EITHER VARIABLE NAME WORKS, AND THE CARD LANDS IN THE WALMART ROOM', async () => {
+  // The whole reason both spellings are read. The channel was set up from a
+  // walkthrough that said DRAWS before the scope was settled as "everything
+  // Walmart", so the variable that actually got typed into Vercel may be
+  // either — and a routing change whose outcome depends on which message
+  // somebody was reading is not a routing change, it is a coin toss.
+  //
+  // Asserted at the wire rather than by reading the code, because the bug this
+  // guards against is precisely the code and the config disagreeing.
+  const real = globalThis.fetch;
+  const posted: string[] = [];
+  globalThis.fetch = (async (input: any, init?: any) => {
+    const url = String(typeof input === 'string' ? input : input.url);
+    if (url.startsWith('http://127.0.0.1:1/')) {
+      posted.push(url);
+      return new Response('', { status: 204 });
+    }
+    return real(input, init);
+  }) as typeof fetch;
+
+  try {
+    for (const name of ['DISCORD_WALMART_WEBHOOK_URL', 'DISCORD_DRAWS_WEBHOOK_URL'] as const) {
+      posted.length = 0;
+      const db = await TestDb.create();
+      const res = await callWith(
+        db,
+        { DISCORD_WEBHOOK_URL: MAIN_ROOM, [name]: WALMART_ROOM },
+        'POST', '/api/drawings',
+        { retailer: 'Walmart', drawings: [draw()] },
+      );
+      assert.equal(res.status, 200, name);
+      assert.equal(res.body.announced, 1, `${name}: the card was built`);
+      assert.deepEqual(posted, [WALMART_ROOM], `${name}: and it went to Walmart's room`);
+    }
+
+    // And with neither set it falls back rather than vanishing.
+    posted.length = 0;
+    const db = await TestDb.create();
+    await callWith(
+      db, { DISCORD_WEBHOOK_URL: MAIN_ROOM },
+      'POST', '/api/drawings', { retailer: 'Walmart', drawings: [draw()] },
+    );
+    assert.deepEqual(posted, [MAIN_ROOM], 'the old channel, never nowhere');
+  } finally {
+    globalThis.fetch = real;
+  }
 });

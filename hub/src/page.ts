@@ -1811,6 +1811,7 @@ ${FONTS}<style>${STYLE}</style></head>
           <div class="name">Discord</div>
           <div class="meta" id="discord-state">Checking…</div>
         </div>
+        <button id="discord-redraw" type="button">Say the live drawings again</button>
         <button id="discord-preview" type="button">Preview an in-stock alert</button>
         <button id="discord-test" type="button">Send a test message</button>
       </div>
@@ -4147,10 +4148,13 @@ function render() {
     const on = DATA.discord === true;
     dstate.textContent = on
       ? 'Connected. In stock, staged stock, waiting rooms and source failures post here.' +
-        (DATA.discordWins ? ' Confirmed orders post to their own wins channel.' : ' Confirmed orders post here too; set DISCORD_WINS_WEBHOOK_URL for their own channel.')
+        (DATA.discordWins ? ' Confirmed orders post to their own wins channel.' : ' Confirmed orders post here too; set DISCORD_WINS_WEBHOOK_URL for their own channel.') +
+        (DATA.discordWalmart ? ' Everything Walmart, drawings included, goes to its own channel.' : ' Walmart posts here with everything else; set DISCORD_WALMART_WEBHOOK_URL for its own channel.')
       : 'Not connected. Add DISCORD_WEBHOOK_URL to the Hub and redeploy, then test.';
     document.getElementById('discord-test').disabled = !on;
     document.getElementById('discord-preview').disabled = !on;
+    // Only worth pressing when there is somewhere new for them to land.
+    document.getElementById('discord-redraw').disabled = !on;
   }
 
   const st = DATA.settings || { taxRate: 0, shippingAllowance: 0 };
@@ -6882,6 +6886,33 @@ async function sendTest(kind) {
   }
   btns.forEach((b) => { b.disabled = false; });
 }
+
+/*
+ * Say the live drawings again, in whichever channel the routing sends them to
+ * now. For the day a channel is added: the announced card fires once, on the
+ * edge, so everything already said was said somewhere else and there is no
+ * event left to re-fire. This is the deliberate repeat.
+ */
+document.getElementById('discord-redraw').addEventListener('click', async () => {
+  const btn = document.getElementById('discord-redraw');
+  const out = document.getElementById('discord-result');
+  btn.disabled = true;
+  out.hidden = false;
+  out.textContent = 'Posting…';
+  try {
+    const res = await fetch('/api/drawings/announce', { method: 'POST' });
+    const body = await res.json();
+    if (body.error) out.textContent = body.error;
+    else if (!body.sent) out.textContent = 'Nothing live to say right now.';
+    else {
+      out.textContent = 'Posted ' + body.sent + ' drawing' + (body.sent === 1 ? '' : 's') +
+        ' to ' + body.rooms + ' channel' + (body.rooms === 1 ? '' : 's') + '.';
+    }
+  } catch (err) {
+    out.textContent = 'Could not reach the Hub: ' + err.message;
+  }
+  btn.disabled = false;
+});
 
 document.getElementById('discord-test').addEventListener('click', () => sendTest('hello'));
 // The real alert, with real data, footered as a rehearsal. See the endpoint for

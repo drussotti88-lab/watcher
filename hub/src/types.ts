@@ -132,6 +132,23 @@ export interface Env {
    * to the main webhook when unset, so a win is never lost to configuration.
    */
   DISCORD_WINS_WEBHOOK_URL?: string;
+  /**
+   * Everything Walmart, in its own room: drawings, and stock if that shop is
+   * ever switched back on.
+   *
+   * Two names are read, and that is not indecision. The channel was set up
+   * from a walkthrough that named it DRAWS before the scope was settled as
+   * "everything Walmart", so the variable that actually got typed into Vercel
+   * may be either. Accepting both costs one line and means the outcome does
+   * not depend on which message somebody was reading at the time — and this
+   * project has already lost two hours this week to exactly one field being
+   * spelled two ways in two places.
+   *
+   * Both unset falls back to the main webhook. A Walmart alert is never lost
+   * to configuration; at worst it arrives where it used to.
+   */
+  DISCORD_WALMART_WEBHOOK_URL?: string;
+  DISCORD_DRAWS_WEBHOOK_URL?: string;
   /** Bearer token Phantom presents when posting findings. */
   INGEST_TOKEN?: string;
   /** Password for the web page, and the key its session cookie is signed with. */
