@@ -4158,8 +4158,14 @@ function render() {
             // spelling you can read. Names are not credentials; values are,
             // and no value reaches this page.
             (Array.isArray(DATA.webhookVars) && DATA.webhookVars.length
-              ? ' This deploy received: ' + DATA.webhookVars.join(', ') + '.'
-              : ' This deploy received no webhook variables at all.'))
+              ? ' Holding a webhook: ' + DATA.webhookVars.join(', ') + '.'
+              : ' No variable here holds a webhook at all.') +
+            // The third state, named separately: set to the wrong thing is a
+            // different fix from never set, and they look identical otherwise.
+            (Array.isArray(DATA.nearMissVars) && DATA.nearMissVars.length
+              ? ' Named like one but not holding a webhook URL: ' +
+                DATA.nearMissVars.join(', ') + '.'
+              : ''))
       : 'Not connected. Add DISCORD_WEBHOOK_URL to the Hub and redeploy, then test.';
     document.getElementById('discord-test').disabled = !on;
     document.getElementById('discord-preview').disabled = !on;

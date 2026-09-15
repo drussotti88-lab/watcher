@@ -480,6 +480,7 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
         // "I set it and it still says no" is a question with an answer.
         // Names only - the value is the credential.
         webhookVars: env.WEBHOOK_VAR_NAMES ?? [],
+        nearMissVars: env.NEAR_MISS_VAR_NAMES ?? [],
         // What the Download button would hand over. Meta only, never bytes.
         phantomZip: PHANTOM_ZIP_BASE64 ? PHANTOM_ZIP_META : null,
       });

@@ -1803,3 +1803,24 @@ test('THE DIAGNOSTIC LISTS WEBHOOKS BY SHAPE, NOT BY NAME', async () => {
     'both webhooks, and nothing else in the environment',
   );
 });
+
+test('SET TO THE WRONG THING IS NOT THE SAME AS NEVER SET', async () => {
+  // The third state, and the one that kept this ambiguous for an hour. "No
+  // variable holds a webhook" is true both when nothing was set and when
+  // something was set to an invite link, a half-paste, or a value with a stray
+  // space — and those need opposite fixes.
+  const { nearMissVarNames, webhookVarNames } = await import('../src/notify.ts');
+  const vars = {
+    DISCORD_WEBHOOK_URL: HOOK('a'),
+    Phantom_Drawings: 'https://discord.gg/abc123',
+    WALMART_HOOK: '',
+    DATABASE_URL: 'postgres://user:pw@host/db',
+  };
+  assert.deepEqual(webhookVarNames(vars), ['DISCORD_WEBHOOK_URL']);
+  assert.deepEqual(
+    nearMissVarNames(vars), ['Phantom_Drawings', 'WALMART_HOOK'],
+    'an invite link and an empty one both say "you meant this, it is not that"',
+  );
+  // And it stays a diagnostic about intent, not an inventory of the box.
+  assert.ok(!nearMissVarNames(vars).includes('DATABASE_URL'));
+});

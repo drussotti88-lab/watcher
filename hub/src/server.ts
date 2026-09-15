@@ -33,7 +33,7 @@ import {
   type Sql,
 } from './db.ts';
 import { withDeadline } from './deadline.ts';
-import { walmartWebhookFrom, webhookVarNames } from './notify.ts';
+import { walmartWebhookFrom, webhookVarNames, nearMissVarNames } from './notify.ts';
 import type { Env } from './types.ts';
 
 /**
@@ -134,6 +134,8 @@ function env(): Env {
      * environment: a database URL is not a Discord webhook.
      */
     WEBHOOK_VAR_NAMES: webhookVarNames(process.env as Record<string, string | undefined>),
+    // Set, named like a webhook, and not holding one. The third state.
+    NEAR_MISS_VAR_NAMES: nearMissVarNames(process.env as Record<string, string | undefined>),
   };
 }
 

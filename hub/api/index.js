@@ -3117,6 +3117,9 @@ function looksLikeWebhook(value) {
 function webhookVarNames(vars) {
   return Object.keys(vars).filter((k) => looksLikeWebhook(vars[k])).sort();
 }
+function nearMissVarNames(vars) {
+  return Object.keys(vars).filter((k) => /hook|discord|walmart|draw|phantom/i.test(k) && !looksLikeWebhook(vars[k])).sort();
+}
 function walmartWebhookFrom(vars, main) {
   const ok = (v) => looksLikeWebhook(v) && String(v).trim() !== main.trim() ? String(v).trim() : "";
   const named = ok(vars["DISCORD_WALMART_WEBHOOK_URL"]) || ok(vars["DISCORD_DRAWS_WEBHOOK_URL"]);
@@ -7786,8 +7789,14 @@ function render() {
             // spelling you can read. Names are not credentials; values are,
             // and no value reaches this page.
             (Array.isArray(DATA.webhookVars) && DATA.webhookVars.length
-              ? ' This deploy received: ' + DATA.webhookVars.join(', ') + '.'
-              : ' This deploy received no webhook variables at all.'))
+              ? ' Holding a webhook: ' + DATA.webhookVars.join(', ') + '.'
+              : ' No variable here holds a webhook at all.') +
+            // The third state, named separately: set to the wrong thing is a
+            // different fix from never set, and they look identical otherwise.
+            (Array.isArray(DATA.nearMissVars) && DATA.nearMissVars.length
+              ? ' Named like one but not holding a webhook URL: ' +
+                DATA.nearMissVars.join(', ') + '.'
+              : ''))
       : 'Not connected. Add DISCORD_WEBHOOK_URL to the Hub and redeploy, then test.';
     document.getElementById('discord-test').disabled = !on;
     document.getElementById('discord-preview').disabled = !on;
@@ -11646,6 +11655,7 @@ function createHandler(db2, env2) {
         // "I set it and it still says no" is a question with an answer.
         // Names only - the value is the credential.
         webhookVars: env2.WEBHOOK_VAR_NAMES ?? [],
+        nearMissVars: env2.NEAR_MISS_VAR_NAMES ?? [],
         // What the Download button would hand over. Meta only, never bytes.
         phantomZip: PHANTOM_ZIP_BASE64 ? PHANTOM_ZIP_META : null
       });
@@ -12882,7 +12892,9 @@ function env() {
      * shape also means this cannot become an inventory of the rest of the
      * environment: a database URL is not a Discord webhook.
      */
-    WEBHOOK_VAR_NAMES: webhookVarNames(process.env)
+    WEBHOOK_VAR_NAMES: webhookVarNames(process.env),
+    // Set, named like a webhook, and not holding one. The third state.
+    NEAR_MISS_VAR_NAMES: nearMissVarNames(process.env)
   };
 }
 async function readBody(req) {

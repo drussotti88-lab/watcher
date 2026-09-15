@@ -155,6 +155,8 @@ export interface Env {
    * otherwise unanswerable from inside the process.
    */
   WEBHOOK_VAR_NAMES?: readonly string[];
+  /** Named like a webhook, not holding one: set-to-the-wrong-thing, not unset. */
+  NEAR_MISS_VAR_NAMES?: readonly string[];
   /** Bearer token Phantom presents when posting findings. */
   INGEST_TOKEN?: string;
   /** Password for the web page, and the key its session cookie is signed with. */

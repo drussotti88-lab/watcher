@@ -252,6 +252,24 @@ export function webhookVarNames(vars: Record<string, string | undefined>): strin
 }
 
 /**
+ * Variables that were clearly MEANT to be a webhook and are not one.
+ *
+ * The third state, and the one that kept this ambiguous. "No variable holds a
+ * webhook" is true both when nothing was set and when something was set to the
+ * wrong thing - an invite link instead of a webhook URL, a value with a stray
+ * space, a half-paste - and those need opposite fixes. Naming the near misses
+ * separates them in one look instead of one deploy per guess.
+ *
+ * Matched on NAME here, deliberately, because that is all a wrong value gives
+ * us to go on. Names only, as everywhere else in this file.
+ */
+export function nearMissVarNames(vars: Record<string, string | undefined>): string[] {
+  return Object.keys(vars)
+    .filter((k) => /hook|discord|walmart|draw|phantom/i.test(k) && !looksLikeWebhook(vars[k]))
+    .sort();
+}
+
+/**
  * Which variable holds the Walmart room.
  *
  * Three chances, narrowing in magic as they go:
