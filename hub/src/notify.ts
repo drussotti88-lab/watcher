@@ -219,6 +219,77 @@ async function post(url: string, embeds: Embed[]): Promise<void> {
  * old channel" and "your Walmart alerts are silently discarded" is the
  * difference between a tidy-up and a missed drop.
  */
+/**
+ * Does this value look like a Discord webhook?
+ *
+ * Shape, not name. Written because a diagnostic that matched on the NAME
+ * "WEBHOOK" reported that a correctly-set variable did not exist - the variable
+ * was called Phantom_Drawings, after the webhook's display name in Discord,
+ * which is a perfectly reasonable thing for a person to call it and contains
+ * none of the words the filter was looking for. I then told the owner it was
+ * not in Production, with more confidence than the tool had earned.
+ *
+ * A value can be checked without being trusted, and this never returns or logs
+ * the value itself - only whether it is one.
+ */
+export function looksLikeWebhook(value: string | undefined | null): boolean {
+  return /^https:\/\/(canary\.|ptb\.)?discord(app)?\.com\/api\/webhooks\/\d+\/\S+/.test(
+    String(value ?? '').trim(),
+  );
+}
+
+/**
+ * Every environment variable currently holding a Discord webhook, BY NAME.
+ *
+ * Found by value shape so any spelling is visible, and reported as names only
+ * so nothing secret crosses the wire. This is the answer to "I set it and the
+ * flag still says no", and it has to be blind to naming convention to be worth
+ * having - the whole failure it exists to catch is somebody choosing a name
+ * nobody predicted.
+ */
+export function webhookVarNames(vars: Record<string, string | undefined>): string[] {
+  return Object.keys(vars).filter((k) => looksLikeWebhook(vars[k])).sort();
+}
+
+/**
+ * Which variable holds the Walmart room.
+ *
+ * Three chances, narrowing in magic as they go:
+ *
+ *   1. DISCORD_WALMART_WEBHOOK_URL - what the docs say, what a new setup uses.
+ *   2. DISCORD_DRAWS_WEBHOOK_URL - what the walkthrough said before the scope
+ *      was settled as "everything Walmart".
+ *   3. Any variable whose NAME mentions walmart or draw AND whose VALUE is a
+ *      Discord webhook.
+ *
+ * Three exists because of Phantom_Drawings, and it is deliberately bounded on
+ * both sides: the name has to be about this shop, and the value has to already
+ * be a webhook. It cannot capture the main webhook (its name mentions neither)
+ * and it cannot promote some unrelated string to a destination. The cost of
+ * being wrong here is an alert in the wrong channel; the cost of being rigid
+ * was an hour on the evening before a drawing, which is the trade this makes.
+ *
+ * The main webhook is passed in and excluded outright: one URL in two rooms
+ * would post every Walmart card twice.
+ */
+export function walmartWebhookFrom(
+  vars: Record<string, string | undefined>,
+  main: string,
+): string {
+  const ok = (v: string | undefined): string =>
+    looksLikeWebhook(v) && String(v).trim() !== main.trim() ? String(v).trim() : '';
+
+  const named = ok(vars['DISCORD_WALMART_WEBHOOK_URL']) || ok(vars['DISCORD_DRAWS_WEBHOOK_URL']);
+  if (named) return named;
+
+  for (const key of Object.keys(vars).sort()) {
+    if (!/walmart|draw/i.test(key)) continue;
+    const found = ok(vars[key]);
+    if (found) return found;
+  }
+  return '';
+}
+
 export interface Rooms {
   /** Where anything without a room of its own goes. Never empty in practice. */
   main: string;

@@ -3109,6 +3109,25 @@ async function post(url, embeds) {
     console.warn("discord unreachable", err instanceof Error ? err.message : String(err));
   }
 }
+function looksLikeWebhook(value) {
+  return /^https:\/\/(canary\.|ptb\.)?discord(app)?\.com\/api\/webhooks\/\d+\/\S+/.test(
+    String(value ?? "").trim()
+  );
+}
+function webhookVarNames(vars) {
+  return Object.keys(vars).filter((k) => looksLikeWebhook(vars[k])).sort();
+}
+function walmartWebhookFrom(vars, main) {
+  const ok = (v) => looksLikeWebhook(v) && String(v).trim() !== main.trim() ? String(v).trim() : "";
+  const named = ok(vars["DISCORD_WALMART_WEBHOOK_URL"]) || ok(vars["DISCORD_DRAWS_WEBHOOK_URL"]);
+  if (named) return named;
+  for (const key of Object.keys(vars).sort()) {
+    if (!/walmart|draw/i.test(key)) continue;
+    const found = ok(vars[key]);
+    if (found) return found;
+  }
+  return "";
+}
 function roomFor(rooms, retailer) {
   const key = String(retailer ?? "").trim().toLowerCase();
   return rooms.byRetailer[key] || rooms.main;
@@ -12835,8 +12854,12 @@ function env() {
     DISCORD_WEBHOOK_URL: process.env.DISCORD_WEBHOOK_URL ?? "",
     DISCORD_OPS_WEBHOOK_URL: process.env.DISCORD_OPS_WEBHOOK_URL,
     DISCORD_WINS_WEBHOOK_URL: process.env.DISCORD_WINS_WEBHOOK_URL,
-    DISCORD_WALMART_WEBHOOK_URL: process.env.DISCORD_WALMART_WEBHOOK_URL,
-    DISCORD_DRAWS_WEBHOOK_URL: process.env.DISCORD_DRAWS_WEBHOOK_URL,
+    // Resolved here, at the one place that can see the whole environment, so
+    // the handler stays a pure function of its Env and stays testable.
+    DISCORD_WALMART_WEBHOOK_URL: walmartWebhookFrom(
+      process.env,
+      process.env.DISCORD_WEBHOOK_URL ?? ""
+    ),
     INGEST_TOKEN: process.env.INGEST_TOKEN,
     APP_PASSWORD: process.env.APP_PASSWORD,
     /*
@@ -12849,12 +12872,17 @@ function env() {
      * costs a deploy, because environment changes do not reach a build that
      * already exists.
      *
+     * Matched on the VALUE's shape rather than the name, which is the whole
+     * correction: the first version filtered on names containing "WEBHOOK" and
+     * so reported that Phantom_Drawings - a correctly set variable, named
+     * after the webhook's display name in Discord - did not exist.
+     *
      * Names only. A name is not a credential and a webhook URL is, so the
-     * value is never carried, never logged and never rendered. Filtered to
-     * /WEBHOOK/ so this cannot become an accidental inventory of everything
-     * else in the environment.
+     * value is never carried, never logged and never rendered. Matching on
+     * shape also means this cannot become an inventory of the rest of the
+     * environment: a database URL is not a Discord webhook.
      */
-    WEBHOOK_VAR_NAMES: Object.keys(process.env).filter((k) => /WEBHOOK/i.test(k) && String(process.env[k] ?? "").trim() !== "").sort()
+    WEBHOOK_VAR_NAMES: webhookVarNames(process.env)
   };
 }
 async function readBody(req) {

@@ -33,6 +33,7 @@ import {
   type Sql,
 } from './db.ts';
 import { withDeadline } from './deadline.ts';
+import { walmartWebhookFrom, webhookVarNames } from './notify.ts';
 import type { Env } from './types.ts';
 
 /**
@@ -104,8 +105,12 @@ function env(): Env {
     DISCORD_WEBHOOK_URL: process.env.DISCORD_WEBHOOK_URL ?? '',
     DISCORD_OPS_WEBHOOK_URL: process.env.DISCORD_OPS_WEBHOOK_URL,
     DISCORD_WINS_WEBHOOK_URL: process.env.DISCORD_WINS_WEBHOOK_URL,
-    DISCORD_WALMART_WEBHOOK_URL: process.env.DISCORD_WALMART_WEBHOOK_URL,
-    DISCORD_DRAWS_WEBHOOK_URL: process.env.DISCORD_DRAWS_WEBHOOK_URL,
+    // Resolved here, at the one place that can see the whole environment, so
+    // the handler stays a pure function of its Env and stays testable.
+    DISCORD_WALMART_WEBHOOK_URL: walmartWebhookFrom(
+      process.env as Record<string, string | undefined>,
+      process.env.DISCORD_WEBHOOK_URL ?? '',
+    ),
     INGEST_TOKEN: process.env.INGEST_TOKEN,
     APP_PASSWORD: process.env.APP_PASSWORD,
     /*
@@ -118,14 +123,17 @@ function env(): Env {
      * costs a deploy, because environment changes do not reach a build that
      * already exists.
      *
+     * Matched on the VALUE's shape rather than the name, which is the whole
+     * correction: the first version filtered on names containing "WEBHOOK" and
+     * so reported that Phantom_Drawings - a correctly set variable, named
+     * after the webhook's display name in Discord - did not exist.
+     *
      * Names only. A name is not a credential and a webhook URL is, so the
-     * value is never carried, never logged and never rendered. Filtered to
-     * /WEBHOOK/ so this cannot become an accidental inventory of everything
-     * else in the environment.
+     * value is never carried, never logged and never rendered. Matching on
+     * shape also means this cannot become an inventory of the rest of the
+     * environment: a database URL is not a Discord webhook.
      */
-    WEBHOOK_VAR_NAMES: Object.keys(process.env)
-      .filter((k) => /WEBHOOK/i.test(k) && String(process.env[k] ?? '').trim() !== '')
-      .sort(),
+    WEBHOOK_VAR_NAMES: webhookVarNames(process.env as Record<string, string | undefined>),
   };
 }
 

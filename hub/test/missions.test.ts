@@ -1737,3 +1737,69 @@ test('THE HUB SAYS WHICH WEBHOOK VARIABLES IT GOT — NAMES, NEVER VALUES', asyn
   assert.doesNotMatch(JSON.stringify(res.body), /127\.0\.0\.1:1/);
   assert.doesNotMatch(JSON.stringify(res.body), /discord\.com\/api\/webhooks/);
 });
+
+// ── Finding the Walmart room whatever it got called ──────────────────────────
+
+const HOOK = (n: string) => 'https://discord.com/api/webhooks/123456789012345678/' + n;
+
+test('A VARIABLE NAMED AFTER THE WEBHOOK STILL FINDS THE WALMART ROOM', async () => {
+  // The hour this cost. The variable was called Phantom_Drawings, after the
+  // webhook's display name in Discord — a perfectly reasonable thing to call
+  // it — and the code was looking for three specific spellings while the
+  // diagnostic was filtering on names containing "WEBHOOK". Both missed it,
+  // and the diagnostic missing it is what made me say out loud that a
+  // correctly-set variable did not exist.
+  const { walmartWebhookFrom } = await import('../src/notify.ts');
+  const main = HOOK('main');
+
+  assert.equal(
+    walmartWebhookFrom({ DISCORD_WEBHOOK_URL: main, Phantom_Drawings: HOOK('wm') }, main),
+    HOOK('wm'),
+  );
+  // And the documented names still win outright, ahead of any scanning.
+  assert.equal(
+    walmartWebhookFrom(
+      { DISCORD_WALMART_WEBHOOK_URL: HOOK('canon'), Phantom_Drawings: HOOK('wm') },
+      main,
+    ),
+    HOOK('canon'),
+  );
+});
+
+test('THE SCAN CANNOT CAPTURE THE MAIN WEBHOOK, OR PROMOTE A NON-WEBHOOK', async () => {
+  // Both sides of the bound. A name that mentions the shop is not enough — the
+  // value has to already be a webhook — and the same URL in two rooms would
+  // post every Walmart card twice.
+  const { walmartWebhookFrom } = await import('../src/notify.ts');
+  const main = HOOK('main');
+
+  assert.equal(
+    walmartWebhookFrom({ WALMART_NOTES: 'https://example.com/not-a-webhook' }, main), '',
+  );
+  assert.equal(
+    walmartWebhookFrom({ WALMART_DRAW_HOOK: main }, main), '',
+    'the same URL in two rooms is every card twice',
+  );
+  // A name that says nothing about this shop is not scanned at all, however
+  // webhook-shaped its value: that is somebody else's channel.
+  assert.equal(walmartWebhookFrom({ TEAM_ANNOUNCEMENTS: HOOK('other') }, main), '');
+  assert.equal(walmartWebhookFrom({ DISCORD_WEBHOOK_URL: main }, main), '');
+});
+
+test('THE DIAGNOSTIC LISTS WEBHOOKS BY SHAPE, NOT BY NAME', async () => {
+  // The fix to the tool that lied. It has to be blind to naming convention to
+  // be worth having, because the failure it exists to catch IS a name nobody
+  // predicted.
+  const { webhookVarNames } = await import('../src/notify.ts');
+  assert.deepEqual(
+    webhookVarNames({
+      DISCORD_WEBHOOK_URL: HOOK('a'),
+      Phantom_Drawings: HOOK('b'),
+      DATABASE_URL: 'postgres://user:pw@host/db',
+      APP_PASSWORD: 'hunter2',
+      DISCORD_WINS_WEBHOOK_URL: '',
+    }),
+    ['DISCORD_WEBHOOK_URL', 'Phantom_Drawings'],
+    'both webhooks, and nothing else in the environment',
+  );
+});

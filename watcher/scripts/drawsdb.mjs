@@ -11,6 +11,8 @@ const data = await res.json();
 console.log('discord main channel   :', data.discord === true);
 console.log('discord walmart channel:', data.discordWalmart === true);
 console.log('discord wins channel   :', data.discordWins === true);
+console.log('webhook vars this deploy received:',
+  (data.webhookVars || []).length ? data.webhookVars.join(', ') : '(none)');
 const rows = data.drawings || [];
 console.log('drawings held:', rows.length);
 for (const r of rows) {
