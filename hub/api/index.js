@@ -7758,7 +7758,17 @@ function render() {
     dstate.textContent = on
       ? 'Connected. In stock, staged stock, waiting rooms and source failures post here.' +
         (DATA.discordWins ? ' Confirmed orders post to their own wins channel.' : ' Confirmed orders post here too; set DISCORD_WINS_WEBHOOK_URL for their own channel.') +
-        (DATA.discordWalmart ? ' Everything Walmart, drawings included, goes to its own channel.' : ' Walmart posts here with everything else; set DISCORD_WALMART_WEBHOOK_URL for its own channel.')
+        (DATA.discordWalmart
+          ? ' Everything Walmart, drawings included, goes to its own channel.'
+          : ' Walmart posts here with everything else; set DISCORD_WALMART_WEBHOOK_URL for its own channel.' +
+            // The names this deployment actually received. Shown only when the
+            // Walmart room is missing, because that is the only moment anyone
+            // needs it: it turns "I set it and it still says no" into a
+            // spelling you can read. Names are not credentials; values are,
+            // and no value reaches this page.
+            (Array.isArray(DATA.webhookVars) && DATA.webhookVars.length
+              ? ' This deploy received: ' + DATA.webhookVars.join(', ') + '.'
+              : ' This deploy received no webhook variables at all.'))
       : 'Not connected. Add DISCORD_WEBHOOK_URL to the Hub and redeploy, then test.';
     document.getElementById('discord-test').disabled = !on;
     document.getElementById('discord-preview').disabled = !on;
@@ -11613,6 +11623,10 @@ function createHandler(db2, env2) {
         discordWalmart: Boolean(
           env2.DISCORD_WALMART_WEBHOOK_URL || env2.DISCORD_DRAWS_WEBHOOK_URL
         ),
+        // Names of the webhook variables this deployment received, so
+        // "I set it and it still says no" is a question with an answer.
+        // Names only - the value is the credential.
+        webhookVars: env2.WEBHOOK_VAR_NAMES ?? [],
         // What the Download button would hand over. Meta only, never bytes.
         phantomZip: PHANTOM_ZIP_BASE64 ? PHANTOM_ZIP_META : null
       });
@@ -12824,7 +12838,23 @@ function env() {
     DISCORD_WALMART_WEBHOOK_URL: process.env.DISCORD_WALMART_WEBHOOK_URL,
     DISCORD_DRAWS_WEBHOOK_URL: process.env.DISCORD_DRAWS_WEBHOOK_URL,
     INGEST_TOKEN: process.env.INGEST_TOKEN,
-    APP_PASSWORD: process.env.APP_PASSWORD
+    APP_PASSWORD: process.env.APP_PASSWORD,
+    /*
+     * The NAMES of every webhook variable that actually arrived, with a value.
+     *
+     * Because "the variable is not set" and "the variable is set under a name
+     * this code does not read" look identical from in here, and the difference
+     * is the entire fix. Without this the loop is: guess a name, redeploy,
+     * look at a boolean, guess again - and on Vercel each turn of that loop
+     * costs a deploy, because environment changes do not reach a build that
+     * already exists.
+     *
+     * Names only. A name is not a credential and a webhook URL is, so the
+     * value is never carried, never logged and never rendered. Filtered to
+     * /WEBHOOK/ so this cannot become an accidental inventory of everything
+     * else in the environment.
+     */
+    WEBHOOK_VAR_NAMES: Object.keys(process.env).filter((k) => /WEBHOOK/i.test(k) && String(process.env[k] ?? "").trim() !== "").sort()
   };
 }
 async function readBody(req) {

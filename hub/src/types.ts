@@ -149,6 +149,12 @@ export interface Env {
    */
   DISCORD_WALMART_WEBHOOK_URL?: string;
   DISCORD_DRAWS_WEBHOOK_URL?: string;
+  /**
+   * Names, never values, of the webhook variables this deployment actually
+   * received. The answer to "I set it and the flag still says false", which is
+   * otherwise unanswerable from inside the process.
+   */
+  WEBHOOK_VAR_NAMES?: readonly string[];
   /** Bearer token Phantom presents when posting findings. */
   INGEST_TOKEN?: string;
   /** Password for the web page, and the key its session cookie is signed with. */

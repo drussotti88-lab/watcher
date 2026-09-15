@@ -4149,7 +4149,17 @@ function render() {
     dstate.textContent = on
       ? 'Connected. In stock, staged stock, waiting rooms and source failures post here.' +
         (DATA.discordWins ? ' Confirmed orders post to their own wins channel.' : ' Confirmed orders post here too; set DISCORD_WINS_WEBHOOK_URL for their own channel.') +
-        (DATA.discordWalmart ? ' Everything Walmart, drawings included, goes to its own channel.' : ' Walmart posts here with everything else; set DISCORD_WALMART_WEBHOOK_URL for its own channel.')
+        (DATA.discordWalmart
+          ? ' Everything Walmart, drawings included, goes to its own channel.'
+          : ' Walmart posts here with everything else; set DISCORD_WALMART_WEBHOOK_URL for its own channel.' +
+            // The names this deployment actually received. Shown only when the
+            // Walmart room is missing, because that is the only moment anyone
+            // needs it: it turns "I set it and it still says no" into a
+            // spelling you can read. Names are not credentials; values are,
+            // and no value reaches this page.
+            (Array.isArray(DATA.webhookVars) && DATA.webhookVars.length
+              ? ' This deploy received: ' + DATA.webhookVars.join(', ') + '.'
+              : ' This deploy received no webhook variables at all.'))
       : 'Not connected. Add DISCORD_WEBHOOK_URL to the Hub and redeploy, then test.';
     document.getElementById('discord-test').disabled = !on;
     document.getElementById('discord-preview').disabled = !on;

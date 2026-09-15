@@ -1712,3 +1712,28 @@ test('EITHER VARIABLE NAME WORKS, AND THE CARD LANDS IN THE WALMART ROOM', async
     globalThis.fetch = real;
   }
 });
+
+test('THE HUB SAYS WHICH WEBHOOK VARIABLES IT GOT — NAMES, NEVER VALUES', async () => {
+  // "I set it and the flag still says false" is unanswerable from inside the
+  // process unless the process says what it received. On Vercel each guess at
+  // a name costs a full deploy, because an environment change does not reach a
+  // build that already exists — so guessing is the expensive way to find out.
+  const db = await TestDb.create();
+  const res = await callWith(
+    db,
+    {
+      DISCORD_WEBHOOK_URL: MAIN_ROOM,
+      WEBHOOK_VAR_NAMES: ['DISCORD_WEBHOOK_URL', 'WALMART_WEBHOOK_URL'],
+    },
+    'GET', '/api/dashboard',
+  );
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body.webhookVars, ['DISCORD_WEBHOOK_URL', 'WALMART_WEBHOOK_URL']);
+  assert.equal(res.body.discordWalmart, false, 'and that name is not one it routes on');
+
+  // The whole payload, stringified, must not contain a single webhook URL.
+  // The names are a diagnostic; the values are credentials and this page is
+  // the last place they should ever appear.
+  assert.doesNotMatch(JSON.stringify(res.body), /127\.0\.0\.1:1/);
+  assert.doesNotMatch(JSON.stringify(res.body), /discord\.com\/api\/webhooks/);
+});

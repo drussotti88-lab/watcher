@@ -108,6 +108,24 @@ function env(): Env {
     DISCORD_DRAWS_WEBHOOK_URL: process.env.DISCORD_DRAWS_WEBHOOK_URL,
     INGEST_TOKEN: process.env.INGEST_TOKEN,
     APP_PASSWORD: process.env.APP_PASSWORD,
+    /*
+     * The NAMES of every webhook variable that actually arrived, with a value.
+     *
+     * Because "the variable is not set" and "the variable is set under a name
+     * this code does not read" look identical from in here, and the difference
+     * is the entire fix. Without this the loop is: guess a name, redeploy,
+     * look at a boolean, guess again - and on Vercel each turn of that loop
+     * costs a deploy, because environment changes do not reach a build that
+     * already exists.
+     *
+     * Names only. A name is not a credential and a webhook URL is, so the
+     * value is never carried, never logged and never rendered. Filtered to
+     * /WEBHOOK/ so this cannot become an accidental inventory of everything
+     * else in the environment.
+     */
+    WEBHOOK_VAR_NAMES: Object.keys(process.env)
+      .filter((k) => /WEBHOOK/i.test(k) && String(process.env[k] ?? '').trim() !== '')
+      .sort(),
   };
 }
 
