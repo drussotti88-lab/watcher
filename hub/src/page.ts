@@ -5616,6 +5616,23 @@ function renderDraws() {
     tags.appendChild(el('span', 'pill ' + (d.phase === 'open' ? 's-in' : 'info'),
       d.phase === 'open' ? 'OPEN FOR ENTRIES' : 'announced'));
     if (d.enteredAt) tags.appendChild(el('span', 'pill s-in', 'you entered'));
+    /*
+     * Held back from Discord, and saying so.
+     *
+     * Walmart raffles its whole collectibles shelf from this page. Another
+     * named franchise never reaches the Hub at all; this pill is the other
+     * case - a title that named no franchise we recognise. It is stored and
+     * listed and deliberately not announced, and the pill is the honesty: a
+     * quiet channel should never be the only evidence that something was
+     * filtered. If this appears on something that IS Pokémon, the tables are
+     * wrong and that is worth telling me.
+     */
+    if (d.franchise && d.franchise !== 'pokemon') {
+      const p = el('span', 'pill overmsrp', 'not announced - unrecognised franchise');
+      p.title = 'Stored and shown here, kept out of Discord. Nothing in the ' +
+        'title said which game this is.';
+      tags.appendChild(p);
+    }
     g.appendChild(tags);
 
     const meta = el('div', 'meta');

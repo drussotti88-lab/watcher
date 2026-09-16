@@ -40,6 +40,14 @@ const COLOR_QUEUE = 0xe67e22;
 // Gold. The only colour on this list that is not a warning, a status or a
 // category: it is the one message that means the whole system did its job.
 const COLOR_WIN = 0xf5c542;
+/**
+ * A wall is grey, not red.
+ *
+ * Every other colour in this file is an instruction to move. This one is an
+ * admission that the machine has been benched, and it should not sit in the
+ * feed wearing a drop's clothes.
+ */
+const COLOR_WALL = 0x707986;
 
 /** Discord caps embeds at 10 per message and 25 fields per embed. */
 const MAX_FIELDS = 20;
@@ -671,6 +679,83 @@ export function buildQueueEmbed(retailer: string, at: string, now: string): Embe
     },
     timestamp: now,
   };
+}
+
+/**
+ * The shop has put a human check in front of this browser.
+ *
+ * ── Why this needed to reach a phone ────────────────────────────────────────
+ *
+ * A wall was recorded, counted, and shown on the readiness banner in the app -
+ * which is the surface least likely to be open, for exactly the reason the
+ * queue alert already argued: walls go up during evening drops. The failure
+ * shape is the worst one this project has: Phantom gets walled, stands down,
+ * and goes quiet. A quiet channel then means either "nothing has dropped yet"
+ * or "your watcher has been blind for forty minutes", and those look identical.
+ *
+ * ── What it must not claim ──────────────────────────────────────────────────
+ *
+ * A wall is not a drop signal. Shops raise their defences when something is
+ * dropping AND when they simply decide a browser looks wrong, and this code
+ * cannot tell the two apart from one page. So the card says what is TRUE -
+ * this browser was stopped, reading has paused, here is for how long - and
+ * names the ambiguity rather than resolving it in the exciting direction. An
+ * alert that cries drop at a bot check is one that gets muted before the night
+ * it mattered.
+ *
+ * ── And it says whose job the check is ──────────────────────────────────────
+ *
+ * Phantom does not touch a press-and-hold, a CAPTCHA or any other human check,
+ * now or later. That is not a limitation to be apologised for in a footer; it
+ * is the line this whole program is built on, and the person reading the card
+ * needs to know the next move is theirs.
+ */
+export interface WallItem {
+  retailer: string;
+  /** When it was seen, ISO. */
+  at: string;
+  /** What the detector called it: "Press-and-hold check", and so on. */
+  reason?: string;
+  /** Minutes this shop is being rested, when the watcher said. */
+  restingMinutes?: number | null;
+}
+
+export function buildWallEmbed(i: WallItem, now: string): Embed {
+  const home = SHOP_HOME[i.retailer] ?? '';
+  const fields = [
+    inline('Shop', i.retailer || '—'),
+    inline('Seen', i.at ? new Date(i.at).toLocaleTimeString('en-US') : 'just now'),
+    inline('Check', i.reason || 'a human check'),
+  ];
+  if (i.restingMinutes) {
+    fields.push(inline('Not reading for', `${i.restingMinutes} min`));
+  }
+  return {
+    title: `${(i.retailer || 'A SHOP').toUpperCase()} PUT A HUMAN CHECK UP`,
+    ...(home ? { url: home } : {}),
+    description:
+      '**Phantom is standing down and will not touch the check.** Reading has ' +
+      'paused for this shop, so treat the quiet as blindness rather than as ' +
+      'nothing happening.\n\n' +
+      'This does not on its own mean a drop is live - shops raise their ' +
+      'defences at drop time and also when a browser simply looks wrong. ' +
+      'If you are waiting on one, **look yourself**.',
+    color: COLOR_WALL,
+    fields,
+    footer: {
+      text: 'Press-and-hold and CAPTCHAs are a person\u2019s job, never this program\u2019s.',
+    },
+    timestamp: now,
+  };
+}
+
+export async function announceWalls(
+  webhookUrl: string,
+  walls: WallItem[],
+  now: string,
+): Promise<void> {
+  if (walls.length === 0) return;
+  await post(webhookUrl, walls.slice(0, 3).map((w) => buildWallEmbed(w, now)));
 }
 
 export async function announceQueues(

@@ -29,6 +29,7 @@ import {
   announce,
   announceBought,
   announceQueues,
+  announceWalls,
   announceReport,
   announceStaged,
   announceStock,
@@ -629,9 +630,27 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       // Opened is the loud one, said once. Announced is a diary entry, and is
       // only sent for something we had never seen — a drawing sitting
       // announced for three days is not news on every pass.
-      const opened = outcomes.filter((o) => o.justOpened).map((o) => card(o.row));
+      /*
+       * ── Only Pokémon reaches the channel ───────────────────────────────────
+       *
+       * Walmart runs the drawings page for its whole collectibles shelf. The
+       * watcher already drops another NAMED franchise before it travels; what
+       * can still arrive is a row whose title named no franchise at all, and
+       * that is the interesting case.
+       *
+       * It is STORED and SHOWN and not announced. Dropping it would risk
+       * losing a real window over an unusual product name, and a lottery does
+       * not reopen; announcing it would put whatever Walmart is raffling this
+       * week into a channel that exists to mean one thing. So it goes on the
+       * page, marked, where a person can look at it in their own time - and
+       * the page is honest about holding it rather than quietly short.
+       */
+      const ours = (o: store.DrawingOutcome): boolean => o.row.franchise === 'pokemon';
+      const held = outcomes.filter((o) => o.isNew && !ours(o)).length;
+
+      const opened = outcomes.filter((o) => o.justOpened && ours(o)).map((o) => card(o.row));
       const announced = outcomes
-        .filter((o) => o.isNew && !o.justOpened && o.row.phase === 'announced')
+        .filter((o) => o.isNew && ours(o) && !o.justOpened && o.row.phase === 'announced')
         .map((o) => card(o.row));
       const closing = (await store.claimClosingDrawings(db, userId)).map(card);
       // The belt to `opened`'s brace. That one fires on Walmart's own
@@ -663,6 +682,9 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
         soon: soon.length,
         announced: announced.length,
         closing: closing.length,
+        // Stored, shown, deliberately not announced. Counted so a quiet
+        // channel is never the only evidence that something was held.
+        held,
         retired,
       });
     }
@@ -685,7 +707,10 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       if (!env.DISCORD_WEBHOOK_URL) {
         return json({ error: 'no Discord webhook is configured', sent: 0 }, 400);
       }
-      const live = (await store.liveDrawings(db, userId)).filter((d) => d.goneAt === null);
+      // Pokémon only, same as the automatic cards. A repeat button that says
+      // more than the thing it is repeating is a trap.
+      const live = (await store.liveDrawings(db, userId))
+        .filter((d) => d.goneAt === null && d.franchise === 'pokemon');
       if (live.length === 0) return json({ sent: 0, rooms: 0, note: 'nothing live to say' });
 
       const rooms = roomsFrom(env);
@@ -1475,6 +1500,38 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
           (q) => q.retailer,
         ),
       );
+      /*
+       * ── And a wall has to reach a phone too ────────────────────────────────
+       *
+       * Same argument as the queue above, left unmade for walls until the
+       * night before a drop with mass press-and-hold expected. A wall was
+       * recorded, counted and put on the readiness banner - in the app, which
+       * is the surface least likely to be open at 11pm.
+       *
+       * The shape is the worst one this project has: Phantom is walled, stands
+       * down, goes quiet, and a quiet channel means either "nothing has
+       * dropped" or "your watcher has been blind for forty minutes". Those
+       * must not look the same.
+       *
+       * Longer cooldown than the queue's, because a wall repeats on every pass
+       * for as long as it stands and the second telling adds nothing.
+       */
+      /*
+       * Asked only when this batch actually contains one.
+       *
+       * /api/activity is the hottest endpoint here - every pass posts to it -
+       * and the database has already timed out twice this evening, hours
+       * before a drop. An unconditional extra query on the hot path is a cost
+       * paid on every pass to answer a question that matters on a handful of
+       * them, and drop night is the worst possible night to have added it.
+       */
+      const anyWall = lines.some((l) => store.isWallLine(l.message));
+      const walledBefore = new Set(
+        anyWall
+          ? (await store.wallSightings(db, userId, store.WALL_ALERT_COOLDOWN_MIN).catch(() => []))
+              .map((w) => w.retailer)
+          : [],
+      );
       const result = await store.recordActivity(db, userId, lines);
       const pruned = await store.pruneActivity(db, userId);
 
@@ -1494,6 +1551,42 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
             [...fresh].map(([retailer, at]) => ({ retailer, at })),
             roomsFrom(env),
             (url, group) => announceQueues(url, group, new Date().toISOString()),
+          ).catch(() => {});
+        }
+
+        /*
+         * One card per shop, not per walled listing.
+         *
+         * A pass that hits a wall drops every other listing queued for that
+         * retailer, so a single wall can write several lines; and with mass
+         * press-and-hold a shop can wall dozens of reads in a minute. The
+         * person needs to know the shop is walled, once.
+         *
+         * A shop already in a waiting room is skipped: that is the louder and
+         * more actionable signal of the two, it has just been sent, and a
+         * queue whose door has a human check on it is one event and should
+         * read as one.
+         */
+        const walls = new Map<string, { at: string; reason: string }>();
+        for (const line of lines) {
+          if (!store.isWallLine(line.message)) continue;
+          const retailer = String(line.retailer ?? '');
+          if (!retailer || walledBefore.has(retailer)) continue;
+          if (walls.has(retailer) || fresh.has(retailer)) continue;
+          walls.set(retailer, {
+            at: String(line.at ?? new Date().toISOString()),
+            // "blocked: Press-and-hold check, 20m" -> the detector's own words.
+            reason: String(line.message ?? '')
+              .replace(/^blocked:\s*/, '')
+              .replace(/,\s*\d+m\s*$/, '')
+              .slice(0, 60),
+          });
+        }
+        if (walls.size > 0) {
+          await toRooms(
+            [...walls].map(([retailer, w]) => ({ retailer, at: w.at, reason: w.reason })),
+            roomsFrom(env),
+            (url, group) => announceWalls(url, group, new Date().toISOString()),
           ).catch(() => {});
         }
       }

@@ -383,6 +383,103 @@ function band(row) {
   return offer === "resellers-hold-it" ? 2 : 1;
 }
 
+// src/franchise.ts
+function fold3(s) {
+  return String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/pok\W*(&#)?233;?\W*mon/g, "pokemon").replace(/\bpokmon\b/g, "pokemon").replace(/[^a-z0-9]+/g, " ").trim();
+}
+var RIVALS = [
+  { term: "one piece", brand: "One Piece" },
+  { term: "magic the gathering", brand: "Magic: The Gathering" },
+  { term: "mtg", brand: "Magic: The Gathering" },
+  { term: "yu gi oh", brand: "Yu-Gi-Oh!" },
+  { term: "yugioh", brand: "Yu-Gi-Oh!" },
+  { term: "lorcana", brand: "Disney Lorcana" },
+  { term: "digimon", brand: "Digimon" },
+  { term: "dragon ball", brand: "Dragon Ball" },
+  { term: "star wars", brand: "Star Wars" },
+  { term: "flesh and blood", brand: "Flesh and Blood" },
+  { term: "weiss schwarz", brand: "Weiss Schwarz" },
+  { term: "metazoo", brand: "MetaZoo" },
+  { term: "union arena", brand: "Union Arena" },
+  { term: "riftbound", brand: "Riftbound" },
+  { term: "sorcery contested realm", brand: "Sorcery" },
+  { term: "altered tcg", brand: "Altered" },
+  { term: "gundam card game", brand: "Gundam" },
+  { term: "marvel", brand: "Marvel" },
+  { term: "transformers", brand: "Transformers" },
+  // Sports and collectibles that share the shelf and the word "box".
+  { term: "topps", brand: "Topps" },
+  { term: "panini", brand: "Panini" },
+  { term: "bowman", brand: "Bowman" },
+  { term: "upper deck", brand: "Upper Deck" },
+  { term: "prizm", brand: "Panini Prizm" },
+  { term: "donruss", brand: "Donruss" },
+  { term: "fanatics", brand: "Fanatics" },
+  { term: "funko", brand: "Funko" },
+  { term: "squishmallow", brand: "Squishmallows" },
+  { term: "garbage pail kids", brand: "Garbage Pail Kids" },
+  { term: "nba", brand: "NBA" },
+  { term: "nfl", brand: "NFL" },
+  { term: "mlb", brand: "MLB" },
+  { term: "wwe", brand: "WWE" },
+  { term: "ufc", brand: "UFC" },
+  { term: "formula 1", brand: "Formula 1" }
+];
+var POKEMON_MARKERS = [
+  "pokemon",
+  "poke ball",
+  "pokeball",
+  "scarlet violet",
+  "sword shield",
+  "sun moon",
+  "prismatic evolutions",
+  "destined rivals",
+  "paldean fates",
+  "surging sparks",
+  "twilight masquerade",
+  "shrouded fable",
+  "stellar crown",
+  "paradox rift",
+  "obsidian flames",
+  "temporal forces",
+  "journey together",
+  "black bolt",
+  "white flare",
+  "mega evolution",
+  "pikachu",
+  "charizard",
+  "eevee",
+  "umbreon",
+  "espeon",
+  "sylveon",
+  "mewtwo",
+  "mew ex",
+  "snorlax",
+  "gengar",
+  "lugia",
+  "rayquaza",
+  "greninja"
+];
+function franchiseOf(title) {
+  const hay = " " + fold3(title) + " ";
+  if (!hay.trim()) return { franchise: "unknown", brand: "", why: "no title to read" };
+  for (const r of RIVALS) {
+    if (hay.includes(" " + r.term + " ") || hay.includes(" " + r.term)) {
+      return { franchise: "other", brand: r.brand, why: "names " + r.brand };
+    }
+  }
+  for (const m of POKEMON_MARKERS) {
+    if (hay.includes(" " + m)) {
+      return { franchise: "pokemon", brand: "Pok\xE9mon", why: 'names "' + m + '"' };
+    }
+  }
+  return {
+    franchise: "unknown",
+    brand: "",
+    why: "names no franchise this recognises"
+  };
+}
+
 // src/store.ts
 function toPrice(v) {
   if (v === null || v === void 0 || v === "") return null;
@@ -1950,7 +2047,8 @@ function toDrawing(r) {
     lastSeenAt: iso(r.last_seen_at) ?? "",
     openedAt: iso(r.opened_at),
     goneAt: iso(r.gone_at),
-    enteredAt: iso(r.entered_at)
+    enteredAt: iso(r.entered_at),
+    franchise: String(r.franchise ?? "unknown")
   };
 }
 async function recordDrawings(db2, userId, retailer, items) {
@@ -1965,12 +2063,15 @@ async function recordDrawings(db2, userId, retailer, items) {
     );
     const isNew = before === void 0;
     const justOpened = item.phase === "open" && (isNew || before.phase !== "open");
+    const said = String(item.franchise ?? "").trim();
+    const read = franchiseOf(String(item.name ?? "")).franchise;
+    const franchise = said === "other" || read === "other" ? "other" : read === "pokemon" && (said === "" || said === "pokemon") ? "pokemon" : "unknown";
     const rows = await db2.query(
       `INSERT INTO drawings
          (user_id, retailer, external_id, name, url, image_url, price, order_limit,
-          phase, window_label, window_text, window_at,
+          phase, window_label, window_text, window_at, franchise,
           announced_at, opened_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,
                CASE WHEN $9 <> 'open' THEN now() END,
                CASE WHEN $9 =  'open' THEN now() END)
        ON CONFLICT (user_id, retailer, external_id) DO UPDATE SET
@@ -1984,6 +2085,7 @@ async function recordDrawings(db2, userId, retailer, items) {
          window_label = EXCLUDED.window_label,
          window_text = EXCLUDED.window_text,
          window_at = COALESCE(EXCLUDED.window_at, drawings.window_at),
+         franchise = EXCLUDED.franchise,
          last_seen_at = now(),
          -- Back on the page is back. A carousel pulled for ten minutes during
          -- an edit must not permanently retire a drawing still to come.
@@ -2006,7 +2108,8 @@ async function recordDrawings(db2, userId, retailer, items) {
         String(item.phase ?? "unknown"),
         String(item.windowLabel ?? "").slice(0, 80),
         String(item.windowText ?? "").slice(0, 120),
-        item.windowAt ?? null
+        item.windowAt ?? null,
+        franchise
       ]
     );
     if (rows[0]) out.push({ row: toDrawing(rows[0]), isNew, justOpened });
@@ -2041,6 +2144,10 @@ async function claimOpeningDrawings(db2, userId, withinMinutes = 30) {
          WHERE user_id = $1
            AND gone_at IS NULL
            AND entered_at IS NULL
+           -- The channel this lands in exists to mean Pok\xE9mon. A row whose
+           -- title named no franchise is held for a person to look at, not
+           -- counted down to.
+           AND franchise = 'pokemon'
            AND opened_at IS NULL
            AND soon_alert_at IS NULL
            AND phase = 'announced'
@@ -2062,6 +2169,7 @@ async function claimClosingDrawings(db2, userId, withinMinutes = 60) {
          WHERE user_id = $1
            AND gone_at IS NULL
            AND entered_at IS NULL
+           AND franchise = 'pokemon'
            AND opened_at IS NOT NULL
            AND closing_alert_at IS NULL
            AND window_at IS NOT NULL
@@ -2396,6 +2504,26 @@ var QUEUE_ALERT_COOLDOWN_MIN = 10;
 function isQueueLine(message) {
   const m = String(message ?? "");
   return /waiting room/i.test(m) || m.startsWith("QUEUE:");
+}
+var WALL_ALERT_COOLDOWN_MIN = 20;
+function isWallLine(message) {
+  const m = String(message ?? "");
+  return m.startsWith("blocked:") && !isQueueLine(m);
+}
+async function wallSightings(db2, userId, minutes = WALL_ALERT_COOLDOWN_MIN) {
+  const rows = await db2.query(
+    `SELECT retailer, max(at) AS at
+       FROM activity
+      WHERE user_id = $1
+        AND at > now() - ($2 || ' minutes')::interval
+        AND message LIKE 'blocked:%'
+        AND message NOT ILIKE '%waiting room%'
+        AND retailer <> ''
+      GROUP BY retailer
+      ORDER BY max(at) DESC`,
+    [userId, String(minutes)]
+  );
+  return rows.map((r) => ({ retailer: r.retailer, at: String(r.at) }));
 }
 async function wallsByShop(db2, userId, hours = 24) {
   const rows = await db2.query(
@@ -3051,6 +3179,7 @@ var COLOR_PRE = 5793266;
 var COLOR_DRAW = 8150230;
 var COLOR_QUEUE = 15105570;
 var COLOR_WIN = 16106818;
+var COLOR_WALL = 7371142;
 var MAX_FIELDS = 20;
 var inline = (name, value) => ({ name, value, inline: true });
 var dollars = (n) => n === null || n === void 0 ? "\u2014" : `$${Number(n).toFixed(2)}`;
@@ -3300,6 +3429,32 @@ function buildQueueEmbed(retailer, at, now) {
     },
     timestamp: now
   };
+}
+function buildWallEmbed(i, now) {
+  const home = SHOP_HOME[i.retailer] ?? "";
+  const fields = [
+    inline("Shop", i.retailer || "\u2014"),
+    inline("Seen", i.at ? new Date(i.at).toLocaleTimeString("en-US") : "just now"),
+    inline("Check", i.reason || "a human check")
+  ];
+  if (i.restingMinutes) {
+    fields.push(inline("Not reading for", `${i.restingMinutes} min`));
+  }
+  return {
+    title: `${(i.retailer || "A SHOP").toUpperCase()} PUT A HUMAN CHECK UP`,
+    ...home ? { url: home } : {},
+    description: "**Phantom is standing down and will not touch the check.** Reading has paused for this shop, so treat the quiet as blindness rather than as nothing happening.\n\nThis does not on its own mean a drop is live - shops raise their defences at drop time and also when a browser simply looks wrong. If you are waiting on one, **look yourself**.",
+    color: COLOR_WALL,
+    fields,
+    footer: {
+      text: "Press-and-hold and CAPTCHAs are a person\u2019s job, never this program\u2019s."
+    },
+    timestamp: now
+  };
+}
+async function announceWalls(webhookUrl, walls, now) {
+  if (walls.length === 0) return;
+  await post(webhookUrl, walls.slice(0, 3).map((w) => buildWallEmbed(w, now)));
 }
 async function announceQueues(webhookUrl, sightings, now) {
   if (sightings.length === 0) return;
@@ -9247,6 +9402,23 @@ function renderDraws() {
     tags.appendChild(el('span', 'pill ' + (d.phase === 'open' ? 's-in' : 'info'),
       d.phase === 'open' ? 'OPEN FOR ENTRIES' : 'announced'));
     if (d.enteredAt) tags.appendChild(el('span', 'pill s-in', 'you entered'));
+    /*
+     * Held back from Discord, and saying so.
+     *
+     * Walmart raffles its whole collectibles shelf from this page. Another
+     * named franchise never reaches the Hub at all; this pill is the other
+     * case - a title that named no franchise we recognise. It is stored and
+     * listed and deliberately not announced, and the pill is the honesty: a
+     * quiet channel should never be the only evidence that something was
+     * filtered. If this appears on something that IS Pok\xE9mon, the tables are
+     * wrong and that is worth telling me.
+     */
+    if (d.franchise && d.franchise !== 'pokemon') {
+      const p = el('span', 'pill overmsrp', 'not announced - unrecognised franchise');
+      p.title = 'Stored and shown here, kept out of Discord. Nothing in the ' +
+        'title said which game this is.';
+      tags.appendChild(p);
+    }
     g.appendChild(tags);
 
     const meta = el('div', 'meta');
@@ -11742,8 +11914,10 @@ function createHandler(db2, env2) {
         windowLabel: r.windowLabel,
         windowAt: r.windowAt
       });
-      const opened = outcomes.filter((o) => o.justOpened).map((o) => card(o.row));
-      const announced = outcomes.filter((o) => o.isNew && !o.justOpened && o.row.phase === "announced").map((o) => card(o.row));
+      const ours = (o) => o.row.franchise === "pokemon";
+      const held = outcomes.filter((o) => o.isNew && !ours(o)).length;
+      const opened = outcomes.filter((o) => o.justOpened && ours(o)).map((o) => card(o.row));
+      const announced = outcomes.filter((o) => o.isNew && ours(o) && !o.justOpened && o.row.phase === "announced").map((o) => card(o.row));
       const closing = (await claimClosingDrawings(db2, userId)).map(card);
       const soon = opened.length > 0 ? [] : (await claimOpeningDrawings(db2, userId)).map(card);
       const rooms = roomsFrom(env2);
@@ -11759,6 +11933,9 @@ function createHandler(db2, env2) {
         soon: soon.length,
         announced: announced.length,
         closing: closing.length,
+        // Stored, shown, deliberately not announced. Counted so a quiet
+        // channel is never the only evidence that something was held.
+        held,
         retired
       });
     }
@@ -11766,7 +11943,7 @@ function createHandler(db2, env2) {
       if (!env2.DISCORD_WEBHOOK_URL) {
         return json({ error: "no Discord webhook is configured", sent: 0 }, 400);
       }
-      const live = (await liveDrawings(db2, userId)).filter((d) => d.goneAt === null);
+      const live = (await liveDrawings(db2, userId)).filter((d) => d.goneAt === null && d.franchise === "pokemon");
       if (live.length === 0) return json({ sent: 0, rooms: 0, note: "nothing live to say" });
       const rooms = roomsFrom(env2);
       const cards = live.map((r) => ({
@@ -12256,6 +12433,10 @@ function createHandler(db2, env2) {
           (q) => q.retailer
         )
       );
+      const anyWall = lines.some((l) => isWallLine(l.message));
+      const walledBefore = new Set(
+        anyWall ? (await wallSightings(db2, userId, WALL_ALERT_COOLDOWN_MIN).catch(() => [])).map((w) => w.retailer) : []
+      );
       const result = await recordActivity(db2, userId, lines);
       const pruned = await pruneActivity(db2, userId);
       if (env2.DISCORD_WEBHOOK_URL) {
@@ -12271,6 +12452,26 @@ function createHandler(db2, env2) {
             [...fresh].map(([retailer, at]) => ({ retailer, at })),
             roomsFrom(env2),
             (url2, group) => announceQueues(url2, group, (/* @__PURE__ */ new Date()).toISOString())
+          ).catch(() => {
+          });
+        }
+        const walls = /* @__PURE__ */ new Map();
+        for (const line of lines) {
+          if (!isWallLine(line.message)) continue;
+          const retailer = String(line.retailer ?? "");
+          if (!retailer || walledBefore.has(retailer)) continue;
+          if (walls.has(retailer) || fresh.has(retailer)) continue;
+          walls.set(retailer, {
+            at: String(line.at ?? (/* @__PURE__ */ new Date()).toISOString()),
+            // "blocked: Press-and-hold check, 20m" -> the detector's own words.
+            reason: String(line.message ?? "").replace(/^blocked:\s*/, "").replace(/,\s*\d+m\s*$/, "").slice(0, 60)
+          });
+        }
+        if (walls.size > 0) {
+          await toRooms(
+            [...walls].map(([retailer, w]) => ({ retailer, at: w.at, reason: w.reason })),
+            roomsFrom(env2),
+            (url2, group) => announceWalls(url2, group, (/* @__PURE__ */ new Date()).toISOString())
           ).catch(() => {
           });
         }

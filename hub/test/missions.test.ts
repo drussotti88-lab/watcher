@@ -1646,7 +1646,9 @@ test('RE-ANNOUNCING SAYS OPEN DRAWINGS AS OPEN, NOT AS UPCOMING', async () => {
   const db = await TestDb.create();
   await store.recordDrawings(db, USER, 'Walmart', [
     draw(),
-    draw({ externalId: 'open-one', name: 'Already open', phase: 'open' }),
+    // A real name, because the repeat is Pokémon-only and 'Already open'
+    // names no franchise — which is now a held row, correctly.
+    draw({ externalId: 'open-one', name: 'Pokémon TCG: Surging Sparks ETB', phase: 'open' }),
   ]);
 
   const res = await callWith(
@@ -1823,4 +1825,188 @@ test('SET TO THE WRONG THING IS NOT THE SAME AS NEVER SET', async () => {
   );
   // And it stays a diagnostic about intent, not an inventory of the box.
   assert.ok(!nearMissVarNames(vars).includes('DATABASE_URL'));
+});
+
+// ── Only Pokémon reaches the channel ─────────────────────────────────────────
+
+test('A DRAWING THAT NAMES NO FRANCHISE IS STORED, SHOWN, AND NOT ANNOUNCED', async () => {
+  // Walmart raffles its whole collectibles shelf from one page. Dropping an
+  // odd title risks losing a real window over an unusual product name, and a
+  // lottery does not reopen; announcing it puts whatever is being raffled this
+  // week into a channel that exists to mean one thing. So: held, and visible.
+  const db = await TestDb.create();
+  const res = await call(db, 'POST', '/api/drawings', {
+    retailer: 'Walmart',
+    drawings: [
+      draw(),
+      draw({ externalId: 'mystery', name: 'Collector Chest Surprise Drop', franchise: 'unknown' }),
+    ],
+  });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.recorded, 2, 'both stored — nothing was thrown away');
+  assert.equal(res.body.announced, 1, 'only the Pokémon one was said out loud');
+  assert.equal(res.body.held, 1, 'and the count says so, so silence is never the only evidence');
+
+  const live = await store.liveDrawings(db, USER);
+  assert.equal(live.length, 2);
+  assert.deepEqual(
+    live.map((d) => d.franchise).sort(), ['pokemon', 'unknown'],
+  );
+});
+
+test('A STALE PHANTOM THAT SENDS NO FRANCHISE CANNOT FAIL OPEN', async () => {
+  // The field is new. An older Phantom omits it entirely, and an absent
+  // franchise defaulting to Pokémon would announce a One Piece window into a
+  // Pokémon channel. So the Hub re-reads the title itself and takes the
+  // stricter of the two answers.
+  const db = await TestDb.create();
+  const res = await call(db, 'POST', '/api/drawings', {
+    retailer: 'Walmart',
+    drawings: [
+      { externalId: 'op1', name: 'One Piece Card Game OP-09 Booster Box', phase: 'announced' },
+      { externalId: 'pk1', name: 'Pokémon TCG: Surging Sparks ETB', phase: 'announced' },
+    ],
+  });
+  assert.equal(res.body.recorded, 2);
+  assert.equal(res.body.announced, 1, 'the One Piece box was not announced');
+
+  const live = await store.liveDrawings(db, USER);
+  const op = live.find((d) => d.externalId === 'op1');
+  assert.equal(op?.franchise, 'other', 'read from the title, not taken on trust');
+});
+
+test('A CLIENT CLAIMING POKEMON ON A ONE PIECE TITLE IS NOT BELIEVED', async () => {
+  // Both halves have to agree. Trusting the wire alone means one bad client
+  // can post anything into the channel.
+  const db = await TestDb.create();
+  await call(db, 'POST', '/api/drawings', {
+    retailer: 'Walmart',
+    drawings: [{
+      externalId: 'liar', name: 'One Piece Card Game Premium Booster',
+      phase: 'announced', franchise: 'pokemon',
+    }],
+  });
+  const [row] = await store.liveDrawings(db, USER);
+  assert.equal(row?.franchise, 'other');
+});
+
+test('THE OPENS-SOON ALERT DOES NOT COUNT DOWN TO SOMEBODY ELSE\'S GAME', async () => {
+  const db = await TestDb.create();
+  await store.recordDrawings(db, USER, 'Walmart', [
+    { externalId: 'mtg', name: 'Magic The Gathering Foundations Box', phase: 'announced',
+      windowLabel: 'Drawing starts', windowText: 'soon',
+      windowAt: new Date(Date.now() + 20 * 60000).toISOString() },
+  ]);
+  assert.deepEqual(await store.claimOpeningDrawings(db, USER, 30), []);
+});
+
+test('AN OLD PHANTOM THAT SENDS NO FRANCHISE STILL GETS ITS POKEMON ANNOUNCED', async () => {
+  // The bug this file caught the night before the drawing. Requiring both
+  // halves to say "pokemon" made every row from a Phantom too old to send the
+  // field come out 'unknown', which is a silent channel on the one afternoon
+  // that mattered. Absent is no opinion; the title is believed.
+  const db = await TestDb.create();
+  const res = await call(db, 'POST', '/api/drawings', {
+    retailer: 'Walmart',
+    drawings: [
+      { externalId: '20959422790', phase: 'announced',
+        name: 'Pokémon TCG: 30th Celebration Elite Trainer Box (2ct)' },
+      { externalId: '20959422791', phase: 'announced',
+        name: 'Pokémon TCG: 30th Celebration Tech Sticker Collection (12ct)' },
+    ],
+  });
+  assert.equal(res.body.announced, 2);
+  assert.equal(res.body.held, 0);
+});
+
+// ── A wall has to reach a phone ──────────────────────────────────────────────
+
+test('A WALL IS ANNOUNCED ONCE PER SHOP, NOT ONCE PER WALLED READ', async () => {
+  // With mass press-and-hold a shop can wall a dozen reads in a minute, and a
+  // pass that hits a wall drops every other listing queued for that retailer.
+  // The person needs to know the shop is walled. Once.
+  const db = await TestDb.create();
+  const posted: string[] = [];
+  const real = globalThis.fetch;
+  globalThis.fetch = (async (input: any, init?: any) => {
+    const url = String(typeof input === 'string' ? input : input.url);
+    if (url.startsWith('http://127.0.0.1:1/')) { posted.push(url); return new Response('', { status: 204 }); }
+    return real(input, init);
+  }) as typeof fetch;
+
+  try {
+    const res = await callWith(db, { DISCORD_WEBHOOK_URL: MAIN_ROOM }, 'POST', '/api/activity', {
+      lines: [
+        { kind: 'check', retailer: 'Target', message: 'blocked: Press-and-hold check, 20m' },
+        { kind: 'check', retailer: 'Target', message: 'blocked: Press-and-hold check, 20m' },
+        { kind: 'check', retailer: 'Target', message: 'blocked: Press-and-hold check, 40m' },
+        { kind: 'check', retailer: 'Target', message: 'out' },
+      ],
+    });
+    assert.equal(res.status, 200);
+    assert.equal(posted.length, 1, 'three walled reads, one card');
+
+    // And it stays quiet while the wall stands, because the second telling
+    // adds nothing and a muted channel misses the next real thing.
+    posted.length = 0;
+    await callWith(db, { DISCORD_WEBHOOK_URL: MAIN_ROOM }, 'POST', '/api/activity', {
+      lines: [{ kind: 'check', retailer: 'Target', message: 'blocked: Press-and-hold check, 20m' }],
+    });
+    assert.equal(posted.length, 0, 'inside the cooldown');
+  } finally {
+    globalThis.fetch = real;
+  }
+});
+
+test('A WAITING ROOM IS NOT A WALL, AND WINS WHEN BOTH ARRIVE', async () => {
+  // Opposite events: a queue says a drop is live and go stand in it, a wall
+  // says this browser has been told to go away. A queue whose door has a human
+  // check on it is one event and must read as one — and the queue is the
+  // louder, more actionable half.
+  assert.equal(store.isWallLine('blocked: Press-and-hold check, 20m'), true);
+  assert.equal(store.isWallLine('blocked: Walmart waiting room, 0m'), false);
+  assert.equal(store.isWallLine('QUEUE: waiting room up'), false);
+  assert.equal(store.isWallLine('out at $29.99'), false);
+
+  const db = await TestDb.create();
+  const posted: string[] = [];
+  const real = globalThis.fetch;
+  globalThis.fetch = (async (input: any, init?: any) => {
+    const url = String(typeof input === 'string' ? input : input.url);
+    if (url.startsWith('http://127.0.0.1:1/')) { posted.push(url); return new Response('', { status: 204 }); }
+    return real(input, init);
+  }) as typeof fetch;
+  try {
+    await callWith(db, { DISCORD_WEBHOOK_URL: MAIN_ROOM }, 'POST', '/api/activity', {
+      lines: [
+        { kind: 'check', retailer: 'Target', message: 'waiting room is up — drop likely live' },
+        { kind: 'check', retailer: 'Target', message: 'blocked: Press-and-hold check, 20m' },
+      ],
+    });
+    assert.equal(posted.length, 1, 'one card, not two, for one moment at one shop');
+  } finally {
+    globalThis.fetch = real;
+  }
+});
+
+test('THE WALL CARD DOES NOT CRY DROP, AND SAYS WHOSE JOB THE CHECK IS', async () => {
+  // A wall is not a drop signal: shops raise defences at drop time AND when a
+  // browser simply looks wrong, and one page cannot tell those apart. An alert
+  // that resolves that ambiguity in the exciting direction gets muted before
+  // the night it mattered.
+  const { buildWallEmbed } = await import('../src/notify.ts');
+  const now = new Date().toISOString();
+  const card = buildWallEmbed(
+    { retailer: 'Target', at: now, reason: 'Press-and-hold check', restingMinutes: 20 },
+    now,
+  );
+  assert.match(card.title, /^TARGET PUT A HUMAN CHECK UP$/);
+  assert.match(card.description, /standing down and will not touch the check/i);
+  assert.match(card.description, /does not on its own mean a drop is live/i);
+  assert.match(card.description, /look yourself/i);
+  // The quiet is the thing being explained. Without this the channel says
+  // nothing and nothing is indistinguishable from nothing happening.
+  assert.match(card.description, /treat the quiet as blindness/i);
+  assert.match(card.footer.text, /never this program/i);
+  assert.doesNotMatch(card.description, /drop is live now|go buy|in stock/i);
 });

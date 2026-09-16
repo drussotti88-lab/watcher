@@ -1107,3 +1107,20 @@ CREATE INDEX IF NOT EXISTS drawings_live_idx ON drawings (user_id, phase, window
 -- Said once, like every other alert stamp in this table.
 -- ---------------------------------------------------------------------------
 ALTER TABLE drawings ADD COLUMN IF NOT EXISTS soon_alert_at TIMESTAMPTZ;
+
+-- ---------------------------------------------------------------------------
+-- Whose game a drawing is
+--
+-- /shop/collectibles/draw is Walmart's whole collectibles shelf. This house
+-- watches Pokémon, so the watcher drops another NAMED franchise before it ever
+-- travels, and what arrives here is 'pokemon' or 'unknown'.
+--
+-- 'unknown' is a row whose title named no franchise at all. It is stored and
+-- shown and NOT announced: a lottery window that shuts cannot be re-entered,
+-- so a title unlike anything the tables have seen goes in front of a person
+-- rather than into a regular expression's bin.
+--
+-- Defaulted to 'pokemon' so every row already in this table - the four opening
+-- on the 16th - is unaffected by the column arriving.
+-- ---------------------------------------------------------------------------
+ALTER TABLE drawings ADD COLUMN IF NOT EXISTS franchise TEXT NOT NULL DEFAULT 'pokemon';

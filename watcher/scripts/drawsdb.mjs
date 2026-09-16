@@ -7,13 +7,13 @@ if (!base || !token) { console.log('no hub url/token in watcher.config.json'); p
 const res = await fetch(base + '/api/dashboard', { headers: { authorization: 'Bearer ' + token } });
 console.log('GET /api/dashboard ->', res.status);
 if (!res.ok) { console.log((await res.text()).slice(0, 400)); process.exit(1); }
-const data = await res.json();
-console.log('discord main channel   :', data.discord === true);
-console.log('discord walmart channel:', data.discordWalmart === true);
-console.log('discord wins channel   :', data.discordWins === true);
-console.log('webhook vars this deploy received:',
-  (data.webhookVars || []).length ? data.webhookVars.join(', ') : '(none)');
-const rows = data.drawings || [];
+const d = await res.json();
+const list = (a) => (a && a.length ? a.join(', ') : '(none)');
+console.log('discord main channel   :', d.discord === true);
+console.log('discord walmart channel:', d.discordWalmart === true);
+console.log('holding a webhook      :', list(d.webhookVars));
+console.log('named like one, is not :', list(d.nearMissVars));
+const rows = d.drawings || [];
 console.log('drawings held:', rows.length);
 for (const r of rows) {
   console.log(

@@ -24,6 +24,7 @@ import type { Sql, Statement } from './db.ts';
 import type { Discovered, SourceRow, SourceConfig } from './types.ts';
 import { productKey } from './parsers/identify.ts';
 import { currentCatalogue, eraOf, band, namesRetiredSeries, type Era } from './era.ts';
+import { franchiseOf } from './franchise.ts';
 
 /** Postgres hands NUMERIC back as a string. Never let that leak upwards. */
 function toPrice(v: unknown): number | null {
@@ -3151,6 +3152,15 @@ export interface DrawingIn {
   windowLabel?: string;
   windowText?: string;
   windowAt?: string | null;
+  /**
+   * 'pokemon' | 'unknown'. Decided by the watcher, which read the title.
+   *
+   * Never 'other' in practice - another named franchise is dropped before it
+   * travels - but accepted and re-derived here rather than trusted blindly,
+   * because an older Phantom does not send this field at all and a missing
+   * franchise must not silently become a Pokémon one.
+   */
+  franchise?: string;
 }
 
 export interface DrawingRow {
@@ -3171,6 +3181,7 @@ export interface DrawingRow {
   openedAt: string | null;
   goneAt: string | null;
   enteredAt: string | null;
+  franchise: string;
 }
 
 function toDrawing(r: Record<string, unknown>): DrawingRow {
@@ -3195,6 +3206,7 @@ function toDrawing(r: Record<string, unknown>): DrawingRow {
     openedAt: iso(r.opened_at),
     goneAt: iso(r.gone_at),
     enteredAt: iso(r.entered_at),
+    franchise: String(r.franchise ?? 'unknown'),
   };
 }
 
@@ -3239,12 +3251,41 @@ export async function recordDrawings(
     const isNew = before === undefined;
     const justOpened = item.phase === 'open' && (isNew || before!.phase !== 'open');
 
+    /*
+     * Whose game, decided here as well as at the far end.
+     *
+     * The watcher sends it, having read the title. This re-derives it from the
+     * name anyway and takes the stricter of the two, for one reason: an older
+     * Phantom does not send the field, and an absent franchise defaulting to
+     * 'pokemon' would announce a One Piece window into a Pokémon channel. A
+     * field that a stale client can omit must never fail open.
+     */
+    const said = String(item.franchise ?? '').trim();
+    const read = franchiseOf(String(item.name ?? '')).franchise;
+    /*
+     * ABSENT is "no opinion", not a vote against.
+     *
+     * The first version of this rule required both halves to say pokemon, and
+     * a Phantom too old to send the field at all therefore made every row
+     * 'unknown' - which would have silenced the four drawings this was written
+     * the night before. A test caught it, which is the only reason this
+     * comment is here rather than a quiet channel on Tuesday afternoon.
+     *
+     * So: a named rival from either side wins outright; otherwise the title is
+     * believed, unless a client that DID send an opinion disagrees with it,
+     * which means the two are running different tables and neither should be
+     * trusted to shout.
+     */
+    const franchise = said === 'other' || read === 'other' ? 'other'
+      : read === 'pokemon' && (said === '' || said === 'pokemon') ? 'pokemon'
+      : 'unknown';
+
     const rows = await db.query(
       `INSERT INTO drawings
          (user_id, retailer, external_id, name, url, image_url, price, order_limit,
-          phase, window_label, window_text, window_at,
+          phase, window_label, window_text, window_at, franchise,
           announced_at, opened_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,
                CASE WHEN $9 <> 'open' THEN now() END,
                CASE WHEN $9 =  'open' THEN now() END)
        ON CONFLICT (user_id, retailer, external_id) DO UPDATE SET
@@ -3258,6 +3299,7 @@ export async function recordDrawings(
          window_label = EXCLUDED.window_label,
          window_text = EXCLUDED.window_text,
          window_at = COALESCE(EXCLUDED.window_at, drawings.window_at),
+         franchise = EXCLUDED.franchise,
          last_seen_at = now(),
          -- Back on the page is back. A carousel pulled for ten minutes during
          -- an edit must not permanently retire a drawing still to come.
@@ -3279,6 +3321,7 @@ export async function recordDrawings(
         String(item.windowLabel ?? '').slice(0, 80),
         String(item.windowText ?? '').slice(0, 120),
         item.windowAt ?? null,
+        franchise,
       ],
     );
     if (rows[0]) out.push({ row: toDrawing(rows[0]), isNew, justOpened });
@@ -3355,6 +3398,10 @@ export async function claimOpeningDrawings(
          WHERE user_id = $1
            AND gone_at IS NULL
            AND entered_at IS NULL
+           -- The channel this lands in exists to mean Pokémon. A row whose
+           -- title named no franchise is held for a person to look at, not
+           -- counted down to.
+           AND franchise = 'pokemon'
            AND opened_at IS NULL
            AND soon_alert_at IS NULL
            AND phase = 'announced'
@@ -3391,6 +3438,7 @@ export async function claimClosingDrawings(
          WHERE user_id = $1
            AND gone_at IS NULL
            AND entered_at IS NULL
+           AND franchise = 'pokemon'
            AND opened_at IS NOT NULL
            AND closing_alert_at IS NULL
            AND window_at IS NOT NULL
@@ -4094,6 +4142,52 @@ export const QUEUE_ALERT_COOLDOWN_MIN = 10;
 export function isQueueLine(message: unknown): boolean {
   const m = String(message ?? '');
   return /waiting room/i.test(m) || m.startsWith('QUEUE:');
+}
+
+/** How long a shop gets to be walled before it is mentioned again. */
+export const WALL_ALERT_COOLDOWN_MIN = 20;
+
+/**
+ * A wall, as the watcher writes it.
+ *
+ * `watch.ts` records a challenged read as `blocked: <reason>`, and a waiting
+ * room takes the same path with "waiting room" in the reason. The two are
+ * opposite events - a queue means a drop is live and you should go and stand
+ * in it, a wall means this browser has been told to go away - so the queue
+ * spellings are excluded here rather than sorted out by the caller.
+ */
+export function isWallLine(message: unknown): boolean {
+  const m = String(message ?? '');
+  return m.startsWith('blocked:') && !isQueueLine(m);
+}
+
+/**
+ * Shops that have been walled lately, for the alert cooldown.
+ *
+ * The twin of `queueSightings`, and it exists for the same reason that one
+ * does: a wall lasts many passes and every pass writes another line, so
+ * without this Discord gets a post every twenty seconds for an hour. Asked
+ * BEFORE the insert, because after it this batch's own lines are the sighting
+ * and the answer is always "already announced".
+ */
+export async function wallSightings(
+  db: Sql,
+  userId: number,
+  minutes = WALL_ALERT_COOLDOWN_MIN,
+): Promise<{ retailer: string; at: string }[]> {
+  const rows = await db.query<{ retailer: string; at: string }>(
+    `SELECT retailer, max(at) AS at
+       FROM activity
+      WHERE user_id = $1
+        AND at > now() - ($2 || ' minutes')::interval
+        AND message LIKE 'blocked:%'
+        AND message NOT ILIKE '%waiting room%'
+        AND retailer <> ''
+      GROUP BY retailer
+      ORDER BY max(at) DESC`,
+    [userId, String(minutes)],
+  );
+  return rows.map((r) => ({ retailer: r.retailer, at: String(r.at) }));
 }
 
 /**
