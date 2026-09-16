@@ -2010,3 +2010,48 @@ test('THE WALL CARD DOES NOT CRY DROP, AND SAYS WHOSE JOB THE CHECK IS', async (
   assert.match(card.footer.text, /never this program/i);
   assert.doesNotMatch(card.description, /drop is live now|go buy|in stock/i);
 });
+
+test('A DRAWING CARD LINKS TO THE SHELF, NOT TO A LINK THAT LIES', async () => {
+  // Measured 16 Sep 2026 by following all five: three of the item links
+  // resolved to a DIFFERENT product. The 30th Celebration ETB 2ct Bundle
+  // landed on the Celebrations 25th Anniversary ETB; the 6ct Poster Collection
+  // on a Scarlet & Violet Unova one; the 12ct Tech Sticker Display on the
+  // single sticker. Our stored URL is byte-identical to the canonicalUrl
+  // Walmart publishes itself — those bundle SKUs have no browsable page and
+  // Walmart's router picks a near neighbour.
+  //
+  // A link you cannot trust is worse than no link on a card whose whole job is
+  // "go here and enter", and the shelf is where entry happens anyway.
+  const { buildDrawEmbeds } = await import('../src/notify.ts');
+  const now = new Date().toISOString();
+  const [card] = buildDrawEmbeds([{
+    name: '30th Celebration Elite Trainer Box - 2ct Bundle',
+    retailer: 'Walmart',
+    externalId: '20959422790',
+    url: 'https://www.walmart.com/ip/Pok-mon-TCG-30th-Celebration-Elite-Trainer-Box-2ct-Bundle/20959422790',
+    imageUrl: '', price: 139.94, orderLimit: 3,
+    windowText: 'Sep 16, 2:00pm PDT', windowLabel: 'Drawing starts',
+    windowAt: new Date(Date.parse(now) + 3600000).toISOString(),
+  }], now, 'announced');
+
+  assert.equal(card!.url, 'https://www.walmart.com/shop/collectibles/draw');
+  assert.doesNotMatch(String(card!.url), /\/ip\//, 'never the item page');
+  // The link no longer identifies the item, so the card has to.
+  const f = (name: string) => card!.fields.find((x: any) => x.name === name)?.value;
+  assert.equal(f('Item'), '20959422790');
+  assert.match(card!.title, /Elite Trainer Box - 2ct Bundle/);
+});
+
+test('A RETAILER WITH NO KNOWN DRAWINGS SHELF GETS NO LINK AT ALL', async () => {
+  // Rather than falling back to the item URL, which is the thing that was
+  // wrong. No link is honest; a wrong link teaches you to distrust the card.
+  const { buildDrawEmbeds } = await import('../src/notify.ts');
+  const now = new Date().toISOString();
+  const [card] = buildDrawEmbeds([{
+    name: 'Something', retailer: 'Target', externalId: '1',
+    url: 'https://www.target.com/p/x/-/A-1', imageUrl: '',
+    price: null, orderLimit: null,
+    windowText: '', windowLabel: '', windowAt: null,
+  }], now, 'announced');
+  assert.equal(card!.url, undefined);
+});

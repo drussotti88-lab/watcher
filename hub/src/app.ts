@@ -618,6 +618,7 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       const card = (r: store.DrawingRow) => ({
         name: r.name,
         retailer: r.retailer,
+        externalId: r.externalId,
         url: r.url,
         imageUrl: r.imageUrl,
         price: r.price,
@@ -715,7 +716,8 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
 
       const rooms = roomsFrom(env);
       const cards = live.map((r) => ({
-        name: r.name, retailer: r.retailer, url: r.url, imageUrl: r.imageUrl,
+        name: r.name, retailer: r.retailer, externalId: r.externalId,
+        url: r.url, imageUrl: r.imageUrl,
         price: r.price, orderLimit: r.orderLimit,
         windowText: r.windowText, windowLabel: r.windowLabel, windowAt: r.windowAt,
       }));

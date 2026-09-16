@@ -36,7 +36,8 @@
     "keyword": "node --experimental-strip-types scripts/keyword.ts",
     "draw-probe": "node --experimental-strip-types scripts/draw-probe.ts",
     "draws": "node --experimental-strip-types scripts/draws.ts",
-    "draw-entry": "node --experimental-strip-types scripts/draw-entry-probe.ts"
+    "draw-entry": "node --experimental-strip-types scripts/draw-entry-probe.ts",
+    "urlcheck": "node --experimental-strip-types scripts/urlcheck.ts"
   },
   "dependencies": {
     "playwright": "^1.49.0"

@@ -5652,11 +5652,28 @@ function renderDraws() {
     if (d.price !== null && d.price !== undefined) {
       row.appendChild(el('div', 'px', money(d.price)));
     }
-    if (d.url) {
+    /*
+     * Enter goes to the drawings SHELF, not to the item.
+     *
+     * Measured 16 Sep 2026: three of five item links resolved to a different
+     * product - the 30th Celebration ETB 2ct Bundle landed on the Celebrations
+     * 25th Anniversary ETB, the 6ct Poster Collection on a Scarlet & Violet
+     * Unova one, and the 12ct Tech Sticker Display on the single sticker. The
+     * URL is Walmart's own canonicalUrl, unaltered; those bundle SKUs have no
+     * browsable page and Walmart resolves the slug to a near neighbour.
+     *
+     * Entry happens on the shelf anyway. The item link stays available as a
+     * reference on the name, where it reads as "here is the page for this" and
+     * not as "press this to enter".
+     */
+    const shelf = d.retailer === 'Walmart'
+      ? 'https://www.walmart.com/shop/collectibles/draw' : '';
+    if (shelf || d.url) {
       const a = el('a', 'btn small go', d.phase === 'open' ? 'Enter' : 'Open');
-      a.href = d.url;
+      a.href = shelf || d.url;
       a.target = '_blank';
       a.rel = 'noreferrer';
+      if (shelf) a.title = 'Opens the drawings page. Item ' + (d.externalId || '');
       row.appendChild(a);
     }
 

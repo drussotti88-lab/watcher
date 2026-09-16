@@ -472,6 +472,15 @@ export async function announceStock(
 export interface DrawItem {
   name: string;
   retailer: string;
+  /**
+   * The retailer's id for the item.
+   *
+   * Carried because the card links to the drawings SHELF rather than to the
+   * item - see DRAW_HOME - so this is what tells a person which row they are
+   * looking for once they are there.
+   */
+  externalId?: string;
+  /** Walmart's canonical item URL. Kept as reference; not what the card links. */
   url: string;
   imageUrl: string;
   price: number | null;
@@ -505,6 +514,37 @@ function untilPhrase(iso: string | null, now: string): string {
     : `${Math.round(mins / 1440)} days`;
   return ms >= 0 ? `in ${said}` : `${said} ago`;
 }
+
+/**
+ * Where a drawing is actually entered.
+ *
+ * ── Why this is not the product link ────────────────────────────────────────
+ *
+ * The obvious destination for a drawing card is the item's own page, and for
+ * three of five items measured on 16 Sep 2026 that page sent the reader to a
+ * DIFFERENT PRODUCT:
+ *
+ *   30th Celebration Elite Trainer Box, 2ct Bundle
+ *     -> /ip/Pokemon-Celebrations-25th-Anniversary-Elite-Trainer...
+ *   30th Celebration Poster Collection, 6ct Bundle
+ *     -> /ip/Pokemon-TCG-Scarlet-Violet-10-5-Unova-Poster-Collec...
+ *   30th Celebration Tech Sticker Collection, 12ct Display
+ *     -> /ip/Pokemon-TCG-30th-Celebration-Tech-Sticker-Alolan-Ex...  (the single)
+ *
+ * Nothing was corrupted at this end. The URL we hold is byte-identical to the
+ * `canonicalUrl` Walmart publishes in its own page data; these bundle SKUs
+ * simply have no browsable item page of their own, and Walmart's router
+ * resolves the slug to a near neighbour. A link we cannot trust is worse than
+ * no link on a card whose whole job is "go here and enter".
+ *
+ * The drawings page is the honest destination anyway: it is where an entry is
+ * made, it lists every open drawing, and it cannot resolve to the wrong item.
+ * The product URL stays in the database and on the dashboard row, where it is
+ * a reference rather than an instruction.
+ */
+const DRAW_HOME: Record<string, string> = {
+  Walmart: 'https://www.walmart.com/shop/collectibles/draw',
+};
 
 /**
  * One card per drawing.
@@ -541,15 +581,21 @@ export function buildDrawEmbeds(
         inline(kind === 'announced' || kind === 'soon' ? 'That is' : 'Time left', until),
       );
     }
+    // The link goes to the shelf, so the card has to say which row to look
+    // for once you are there.
+    if (i.externalId) fields.push(inline('Item', i.externalId));
     if (i.orderLimit !== null && i.orderLimit !== undefined) {
       // Said because the limit is what a commitment gets multiplied by: three
       // of a $239 bundle is seven hundred dollars if the draw comes in.
       fields.push(inline('Limit', `${i.orderLimit} per entry`));
     }
 
+    // The drawings page, never the item page. See DRAW_HOME for the three
+    // items whose own link went to a different product.
+    const go = DRAW_HOME[i.retailer] ?? '';
     return {
       title: clip(`${heading} · ${i.name || 'a collectibles drawing'}`, 240),
-      ...(i.url ? { url: i.url } : {}),
+      ...(go ? { url: go } : {}),
       color: COLOR_DRAW,
       ...(i.imageUrl ? { thumbnail: { url: i.imageUrl } } : {}),
       fields,
