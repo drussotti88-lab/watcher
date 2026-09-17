@@ -1159,7 +1159,79 @@ dialog .card:has(.dlgbody) { overflow-y: visible; }
 .login { max-width: 350px; margin: 15vh auto; }
 .login .card { padding: 26px 24px; }
 .err { color: var(--alert); font-size: 13px; min-height: 20px; }
+/* THE FAMILY STRIP */
+.family{display:flex;justify-content:center;align-items:center;gap:26px;
+  margin:44px auto 18px;padding-top:15px;max-width:1100px;
+  border-top:1px solid rgba(255,255,255,.09)}
+.family a{position:relative;font-size:13px;font-weight:600;padding:7px 4px;
+  color:#7d8698;text-decoration:none;transition:color .15s}
+.family a:hover,.family a:focus-visible{color:#e8ecf4}
+.family a + a::before{content:'';position:absolute;left:-17px;top:50%;
+  margin-top:-1.5px;width:3px;height:3px;border-radius:50%;
+  background:#7d8698;opacity:.5}
+
 `;
+
+/* ---------------------------------------------------------------------
+   THE FAMILY STRIP — the other two DNA apps, at the foot of every page.
+
+   DNA runs three products and they share one collector. Somebody holding
+   their place at a drop here is the person who wants that box priced in
+   the vault and a sealed Originals pack in their binder, and until now
+   the only way across was to already know the URL.
+
+   ONE LIST, THREE READERS. The list lives in the vault and is served at
+   https://www.dnacardvault.com/api/family, so a fourth product or a
+   moved domain is one edit in one repo. Phantom renders the compiled-in
+   copy below immediately and swaps in the served one if and when it
+   arrives — so a vault that is down, slow or mid-deploy costs this page
+   nothing at all. The fetch is the update mechanism, not a dependency.
+
+   Everything that comes back over the wire is treated as data: names are
+   capped and written with textContent, and a row is dropped unless its
+   url is an ordinary absolute https address.
+   --------------------------------------------------------------------- */
+const FAMILY_ME = 'phantom';
+const FAMILY_BAKED = [
+  { id: 'vault',     name: 'DNA Card Vault', url: 'https://www.dnacardvault.com' },
+  { id: 'originals', name: 'DNA Originals',  url: 'https://dna-originals.vercel.app' },
+  { id: 'phantom',   name: 'Phantom',        url: 'https://watcher-gold.vercel.app' },
+];
+
+const FAMILY = `<nav class="family" aria-label="The other DNA apps">${
+  FAMILY_BAKED.filter((a) => a.id !== FAMILY_ME)
+    .map((a) => `<a href="${a.url}" rel="noopener">${a.name}</a>`).join('')
+}</nav>
+<script>
+(function(){
+  var nav = document.querySelector('.family'); if (!nav) return;
+  var ok = /^https:\\/\\/[a-z0-9-]+(\\.[a-z0-9-]+)+(\\/\\S*)?$/i;
+  fetch('https://www.dnacardvault.com/api/family', { cache: 'default' })
+    .then(function(r){ return r.ok ? r.json() : null; })
+    .then(function(j){
+      var rows = (j && j.apps) || [];
+      var out = [];
+      for (var i = 0; i < rows.length; i++) {
+        var a = rows[i] || {};
+        var id = String(a.id || '').slice(0, 24);
+        var nm = String(a.name || '').slice(0, 40);
+        var url = String(a.url || '');
+        if (!id || !nm || id === '${FAMILY_ME}' || !ok.test(url)) continue;
+        out.push({ name: nm, url: url });
+      }
+      if (!out.length) return;
+      nav.textContent = '';
+      for (var k = 0; k < out.length; k++) {
+        var el = document.createElement('a');
+        el.href = out[k].url; el.rel = 'noopener';
+        el.textContent = out[k].name;
+        nav.appendChild(el);
+      }
+    })
+    .catch(function(){});
+})();
+</script>`;
+
 
 export function loginPage(message = '', handle = ''): string {
   return `<!doctype html>
@@ -1187,7 +1259,7 @@ ${FONTS}<style>${STYLE}</style></head>
       <button type="submit" class="primary" style="width:100%">Sign in</button>
     </form>
   </div>
-</main></body></html>`;
+${FAMILY}</main></body></html>`;
 }
 
 /**
@@ -1237,7 +1309,7 @@ ${FONTS}<style>${STYLE}</style></head>
   }).catch(function () { fail('The server could not be reached.'); });
 })();
 </script>
-</main></body></html>`;
+${FAMILY}</main></body></html>`;
 }
 
 /**
@@ -1280,7 +1352,7 @@ ${FONTS}<style>${STYLE}</style></head>
   }).catch(function () { fail('The server could not be reached.'); });
 })();
 </script>
-</main></body></html>`;
+${FAMILY}</main></body></html>`;
 }
 
 export function dashboardPage(): string {
@@ -7538,5 +7610,6 @@ document.getElementById('auto').addEventListener('change', (e) => {
 });
 load();
 </script>
+${FAMILY}
 </body></html>`;
 }
