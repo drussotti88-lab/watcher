@@ -327,3 +327,19 @@ test('ENDING IS AN EDGE, SAID ONCE', async () => {
   // And seeing it again is not news.
   assert.deepEqual(drawChanges(after, after), []);
 });
+
+test('A WINDOW THAT CLOSED BEFORE WE LOOKED IS NOT "ANNOUNCED"', async () => {
+  // lastDraws is empty after every restart, so the first pass sees the whole
+  // carousel as new. On 25 Sep that meant six windows which had closed two days
+  // earlier were each logged as "drawing announced". The Hub was not fooled —
+  // it reads the phase — but a log that says the opposite of what happened is
+  // worse than a quiet one.
+  const { drawChanges } = await import('../src/draws.ts');
+  const over = readWalmartDraw(withBadge('Drawing ended ', 'Sep 23, 3:00pm PDT'), AFTER);
+  const [change] = drawChanges([], over);
+  assert.equal(change!.kind, 'ended');
+
+  // And an announced one arriving cold is still a diary entry.
+  const soon = readWalmartDraw(withBadge('Drawing starts ', 'Sep 30, 2:00pm PDT'), AFTER);
+  assert.equal(drawChanges([], soon)[0]!.kind, 'announced');
+});
