@@ -2055,3 +2055,85 @@ test('A RETAILER WITH NO KNOWN DRAWINGS SHELF GETS NO LINK AT ALL', async () => 
   }], now, 'announced');
   assert.equal(card!.url, undefined);
 });
+
+// ── A finished drawing closes, and lingers just long enough ──────────────────
+
+test('AN ENDED DRAWING IS STAMPED ONCE AND STOPS BEING ALERTED ABOUT', async () => {
+  const db = await TestDb.create();
+  const soon = () => new Date(Date.now() + 20 * 60000).toISOString();
+
+  // Announced, twenty minutes out: the opens-soon alert is available.
+  await store.recordDrawings(db, USER, 'Walmart', [draw({ windowAt: soon() })]);
+  assert.equal((await store.claimOpeningDrawings(db, USER, 30)).length, 1);
+
+  // Now it ends.
+  const [out] = await store.recordDrawings(db, USER, 'Walmart', [
+    draw({ phase: 'ended', windowLabel: 'Drawing ended', windowAt: soon() }),
+  ]);
+  assert.ok(out!.row.endedAt, 'stamped');
+
+  const stamp = out!.row.endedAt;
+  const [again] = await store.recordDrawings(db, USER, 'Walmart', [
+    draw({ phase: 'ended', windowLabel: 'Drawing ended', windowAt: soon() }),
+  ]);
+  assert.equal(again!.row.endedAt, stamp, 'and the stamp never moves');
+
+  // Neither alert counts down to a window that has shut.
+  assert.deepEqual(await store.claimClosingDrawings(db, USER, 60), []);
+  const db2 = await TestDb.create();
+  await store.recordDrawings(db2, USER, 'Walmart', [
+    draw({ phase: 'ended', windowLabel: 'Drawing ended', windowAt: soon() }),
+  ]);
+  assert.deepEqual(await store.claimOpeningDrawings(db2, USER, 30), []);
+});
+
+test('AN ENDED DRAWING SHOWS FOR THE GRACE PERIOD AND THEN CLEARS', async () => {
+  // Not zero: a window that shut at four in the morning is worth seeing when
+  // you get up, and a board that silently drops rows is one you cannot trust to
+  // have told you anything. Not forever: a finished lottery is not news.
+  const db = await TestDb.create();
+  await store.recordDrawings(db, USER, 'Walmart', [
+    draw({ phase: 'ended', windowLabel: 'Drawing ended' }),
+  ]);
+
+  assert.equal((await store.liveDrawings(db, USER)).length, 1, 'still on the board');
+  assert.equal(store.ENDED_GRACE_MIN, 120);
+
+  // Asked as though the grace period had already run out.
+  assert.deepEqual(await store.liveDrawings(db, USER, 0), [], 'and then it is gone');
+
+  // A live one is never aged off, whatever the grace period is set to.
+  const db2 = await TestDb.create();
+  await store.recordDrawings(db2, USER, 'Walmart', [draw()]);
+  assert.equal((await store.liveDrawings(db2, USER, 0)).length, 1);
+});
+
+test('AN ENDED DRAWING IS NOT RE-ANNOUNCED BY THE REPEAT BUTTON', async () => {
+  // The repeat exists for the day a channel is added. Re-announcing a closed
+  // window would send somebody to a shelf with nothing on it.
+  const db = await TestDb.create();
+  await store.recordDrawings(db, USER, 'Walmart', [
+    draw({ phase: 'ended', windowLabel: 'Drawing ended' }),
+    draw({ externalId: 'live-one', name: 'Pokémon TCG: Surging Sparks ETB' }),
+  ]);
+  const res = await callWith(
+    db,
+    { DISCORD_WEBHOOK_URL: MAIN_ROOM, DISCORD_WALMART_WEBHOOK_URL: WALMART_ROOM },
+    'POST', '/api/drawings/announce', {},
+  );
+  assert.equal(res.status, 200);
+  assert.equal(res.body.sent, 1, 'only the one still open to entries');
+});
+
+test('FIRST SIGHT OF AN ALREADY-ENDED DRAWING IS STILL STAMPED', async () => {
+  // The machine sleeps, the watch is off, and the carousel still carries the
+  // row for a while afterwards. Without a stamp on INSERT as well as on
+  // UPDATE, a first sighting like that would never get an ended_at and would
+  // never age off the board.
+  const db = await TestDb.create();
+  const [out] = await store.recordDrawings(db, USER, 'Walmart', [
+    draw({ externalId: 'never-seen-live', phase: 'ended', windowLabel: 'Drawing ended' }),
+  ]);
+  assert.ok(out!.row.endedAt, 'stamped on the way in');
+  assert.deepEqual(await store.liveDrawings(db, USER, 0), []);
+});

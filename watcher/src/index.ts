@@ -943,7 +943,9 @@ async function runPasses(once: boolean): Promise<void> {
                 ? `DRAWING OPEN: ${change.row.name} — enter at ${change.row.url}`
                 : change.kind === 'announced'
                   ? `drawing announced: ${change.row.name} — ${change.row.windowLabel} ${change.row.windowText}`
-                  : `drawing gone from the page: ${change.row.name}`;
+                  : change.kind === 'ended'
+                    ? `drawing ended: ${change.row.name} — ${change.row.windowLabel} ${change.row.windowText}`
+                    : `drawing gone from the page: ${change.row.name}`;
             console.log(`  ${timestamp()}  ${line}`);
             activity.record({
               kind: 'draw',

@@ -711,7 +711,7 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       // Pokémon only, same as the automatic cards. A repeat button that says
       // more than the thing it is repeating is a trap.
       const live = (await store.liveDrawings(db, userId))
-        .filter((d) => d.goneAt === null && d.franchise === 'pokemon');
+        .filter((d) => d.goneAt === null && d.endedAt === null && d.franchise === 'pokemon');
       if (live.length === 0) return json({ sent: 0, rooms: 0, note: 'nothing live to say' });
 
       const rooms = roomsFrom(env);

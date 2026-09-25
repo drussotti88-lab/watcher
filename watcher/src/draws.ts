@@ -73,6 +73,12 @@ export function drawInterval(rows: readonly DrawRow[], now: number = Date.now())
   const SLOW = 30 * 60;
   const NEAR = 2 * 60;
   for (const row of rows) {
+    // An ended drawing is not a reason to hurry. It is the opposite, and
+    // without this line it was the loudest reason in the list: its windowAt is
+    // in the past, and the grace period below reads "recently past" as "about
+    // to happen", so a window that shut ten minutes ago pulled the whole page
+    // onto the two-minute clock for three hours.
+    if (row.phase === 'ended') continue;
     if (row.phase === 'open') return NEAR;
     if (row.windowAt) {
       const until = Date.parse(row.windowAt) - now;
@@ -188,12 +194,14 @@ export function toDrawingIn(row: DrawRow): {
  *
  *   - **opened**   — the button is live. Go and enter.
  *   - **announced** — a new one has a date. Put it in the diary.
+ *   - **ended**    — the badge turned past tense. The window shut; the row is
+ *                    finished and stops being watched.
  *   - **gone**     — it was on the page and is not any more. Said because a
  *                    window you meant to enter and did not is worth knowing
  *                    about, and because it is how we learn how long they last.
  */
 export interface DrawChange {
-  kind: 'opened' | 'announced' | 'gone';
+  kind: 'opened' | 'announced' | 'ended' | 'gone';
   row: DrawRow;
 }
 
@@ -214,6 +222,11 @@ export function drawChanges(
       continue;
     }
     if (row.phase === 'open' && prior.phase !== 'open') out.push({ kind: 'opened', row });
+    // Said once, on the edge, like the others. Not an alert - nobody needs
+    // waking to be told a lottery they could no longer enter has closed - but
+    // it belongs in the log, because "when did it shut" is half of how long
+    // these windows last and that is the only way we will ever learn it.
+    if (row.phase === 'ended' && prior.phase !== 'ended') out.push({ kind: 'ended', row });
   }
 
   for (const row of before) {

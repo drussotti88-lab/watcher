@@ -55,6 +55,18 @@ export type DrawPhase =
   | 'announced'
   /** The enter button is live. */
   | 'open'
+  /**
+   * The window has shut. Terminal: there is nothing left to watch for.
+   *
+   * Worth having its own phase rather than falling through to `unknown`,
+   * which is what happened until 25 Sep 2026. An ended drawing said
+   * "Drawing ended", matched none of the start-time rules, came out
+   * `unknown` - and `unknown` is not a state the board or the pacer knew
+   * how to retire, so the row sat there labelled "announced" until Walmart
+   * eventually dropped it from the carousel. A finished lottery advertised
+   * as upcoming is the most misleading thing this page could say.
+   */
+  | 'ended'
   /** The two signals disagree, or neither said anything. */
   | 'unknown';
 
@@ -136,6 +148,17 @@ export function windowBadge(product: unknown): { label: string; text: string } {
   }
   return { label: '', text: '' };
 }
+
+/**
+ * Walmart saying the window has shut, in the past tense.
+ *
+ * Past tense only. "Drawing ends" is a live drawing telling you when to be
+ * done by, and reading that as over would retire a window somebody could still
+ * enter - the one mistake in this file that costs a drawing rather than a
+ * glance. The present tense is handled separately, and only once its stated
+ * time has actually gone by.
+ */
+const ENDED_WORDS = /\b(ended|closed|has ended|is over|no longer)\b/i;
 
 /** Month names, because Walmart writes the date for a person to read. */
 const MONTHS: Record<string, number> = {
@@ -243,9 +266,29 @@ export function readWalmartDraw(data: unknown, now: number = Date.now()): DrawRo
       // when it is not and the stated time is still ahead. Anything else is
       // unknown and says so: a drawing reported open with no button teaches
       // somebody to ignore the next alert, which is the one that mattered.
+      // ── The phase, in the order the signals deserve ──
+      //
+      // Walmart's own flag first: if it says the button is live, the button is
+      // live, whatever the badge reads. Then the past tense, which is the only
+      // unambiguous statement of an end. Then a resolved end time that has
+      // passed. Only then the start-time rules.
       let phase: DrawPhase = 'unknown';
-      if (cta) phase = 'open';
-      else if (/start/i.test(badge.label) && windowAt !== null && Date.parse(windowAt) > now) {
+      if (cta) {
+        phase = 'open';
+      } else if (ENDED_WORDS.test(badge.label) || ENDED_WORDS.test(badge.text)) {
+        // "Drawing ended", "Drawing closed". Walmart said it in the past tense
+        // and there is nothing to second-guess.
+        phase = 'ended';
+      } else if (
+        /\bend(s|ing)?\b/i.test(badge.label) &&
+        windowAt !== null &&
+        Date.parse(windowAt) <= now
+      ) {
+        // "Drawing ends <time>" where the time has gone by. Present tense, but
+        // the clock has answered. Deliberately NOT applied to a start label:
+        // a start time in the past means the window opened, not that it shut.
+        phase = 'ended';
+      } else if (/start/i.test(badge.label) && windowAt !== null && Date.parse(windowAt) > now) {
         phase = 'announced';
       } else if (/start/i.test(badge.label) && badge.text) {
         // A start time we could not resolve is still an announcement.

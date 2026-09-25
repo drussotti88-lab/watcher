@@ -5685,8 +5685,24 @@ function renderDraws() {
     g.appendChild(nm);
 
     const tags = el('div', 'tags');
-    tags.appendChild(el('span', 'pill ' + (d.phase === 'open' ? 's-in' : 'info'),
-      d.phase === 'open' ? 'OPEN FOR ENTRIES' : 'announced'));
+    /*
+     * Three states, and until 25 Sep this said two.
+     *
+     * An ended drawing matched none of the reader's start-time rules and came
+     * out as the catch-all phase, and this line rendered anything-not-open as
+     * "announced" - so a lottery that had already shut sat on the board
+     * advertised as upcoming, until Walmart eventually dropped the row from its
+     * carousel. A finished window described as coming up is the most
+     * misleading thing this card could say.
+     */
+    const ended = d.phase === 'ended' || Boolean(d.endedAt);
+    tags.appendChild(el(
+      'span',
+      // s-out, the same muted treatment a paused mission and an out-of-stock
+      // listing get. Finished is not an alarm; it is a thing to stop looking at.
+      'pill ' + (d.phase === 'open' ? 's-in' : ended ? 's-out' : 'info'),
+      d.phase === 'open' ? 'OPEN FOR ENTRIES' : ended ? 'DRAWING ENDED' : 'announced',
+    ));
     if (d.enteredAt) tags.appendChild(el('span', 'pill s-in', 'you entered'));
     /*
      * Held back from Discord, and saying so.
@@ -5717,6 +5733,16 @@ function renderDraws() {
     // The limit is what a commitment gets multiplied by: three of a $239
     // bundle is seven hundred dollars if the draw comes in.
     if (d.orderLimit) bits.push('limit ' + d.orderLimit);
+    // Once it is over, when it ended is the only clock that matters — and
+    // saying it is leaving the board is how a row that vanishes in an hour
+    // does not read as something going missing.
+    if (ended && d.endedAt) {
+      const mins = Math.round((Date.now() - Date.parse(d.endedAt)) / 60000);
+      bits.push(mins < 1 ? 'ended just now'
+        : mins < 90 ? 'ended ' + mins + ' min ago'
+        : 'ended ' + Math.round(mins / 60) + 'h ago');
+      bits.push('clears from here shortly');
+    }
     meta.textContent = bits.join(' · ');
     g.appendChild(meta);
     row.appendChild(g);
@@ -5740,7 +5766,9 @@ function renderDraws() {
      */
     const shelf = d.retailer === 'Walmart'
       ? 'https://www.walmart.com/shop/collectibles/draw' : '';
-    if (shelf || d.url) {
+    // Nothing to press once it is over. An Enter button on a closed window is
+    // an invitation to go and be disappointed.
+    if (!ended && (shelf || d.url)) {
       const a = el('a', 'btn small go', d.phase === 'open' ? 'Enter' : 'Open');
       a.href = shelf || d.url;
       a.target = '_blank';
@@ -5757,7 +5785,7 @@ function renderDraws() {
      * knows - so this is a checkbox, honestly labelled, whose only job is to
      * stop the closing reminder nagging about something already done.
      */
-    if (DATA.canCurate === true && d.phase === 'open') {
+    if (DATA.canCurate === true && d.phase === 'open' && !ended) {
       const mark = el('button', 'small', d.enteredAt ? 'Not entered' : 'I entered');
       mark.addEventListener('click', async (e) => {
         await withButton(e.target, 'Saving...', null, async () => {
