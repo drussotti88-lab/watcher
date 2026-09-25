@@ -216,9 +216,19 @@ export function drawChanges(
   for (const row of after) {
     const prior = was.get(row.usItemId);
     if (!prior) {
-      // Brand new on the page. Open on arrival is the loud one; anything else
-      // is a diary entry.
-      out.push({ kind: row.phase === 'open' ? 'opened' : 'announced', row });
+      // Brand new to US, which is not the same as new on the page. `lastDraws`
+      // is empty after every restart, so the first pass reports the whole
+      // carousel as new - and on 25 Sep that meant six windows that had closed
+      // two days earlier were each logged as "drawing announced". The Hub was
+      // not fooled, because it reads the phase; the log was, and a log that
+      // says the opposite of what happened is worse than a quiet one.
+      //
+      // Open on arrival is the loud one, ended on arrival is already over, and
+      // anything else is a diary entry.
+      out.push({
+        kind: row.phase === 'open' ? 'opened' : row.phase === 'ended' ? 'ended' : 'announced',
+        row,
+      });
       continue;
     }
     if (row.phase === 'open' && prior.phase !== 'open') out.push({ kind: 'opened', row });
