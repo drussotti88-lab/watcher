@@ -2048,6 +2048,7 @@ function toDrawing(r) {
     openedAt: iso(r.opened_at),
     goneAt: iso(r.gone_at),
     enteredAt: iso(r.entered_at),
+    endedAt: iso(r.ended_at),
     franchise: String(r.franchise ?? "unknown")
   };
 }
@@ -2070,10 +2071,16 @@ async function recordDrawings(db2, userId, retailer, items) {
       `INSERT INTO drawings
          (user_id, retailer, external_id, name, url, image_url, price, order_limit,
           phase, window_label, window_text, window_at, franchise,
-          announced_at, opened_at)
+          announced_at, opened_at, ended_at)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,
                CASE WHEN $9 <> 'open' THEN now() END,
-               CASE WHEN $9 =  'open' THEN now() END)
+               CASE WHEN $9 =  'open' THEN now() END,
+               -- A drawing can be ended the first time we ever see it: the
+               -- machine was asleep, or the watch was off, and the carousel
+               -- still carries the row for a while afterwards. Stamped here as
+               -- well as in the UPDATE, or a first sighting like that would
+               -- never get an ended_at and never age off the board.
+               CASE WHEN $9 =  'ended' THEN now() END)
        ON CONFLICT (user_id, retailer, external_id) DO UPDATE SET
          name = EXCLUDED.name,
          url = CASE WHEN EXCLUDED.url = '' THEN drawings.url ELSE EXCLUDED.url END,
@@ -2094,6 +2101,14 @@ async function recordDrawings(db2, userId, retailer, items) {
          opened_at = CASE
            WHEN EXCLUDED.phase = 'open' AND drawings.opened_at IS NULL THEN now()
            ELSE drawings.opened_at
+         END,
+         -- Terminal, and stamped the same way. Never cleared: a badge that
+         -- flickers back to a start time after saying "ended" is Walmart
+         -- reusing a row, not a window reopening, and un-ending a drawing
+         -- would put a finished lottery back on the board as upcoming.
+         ended_at = CASE
+           WHEN EXCLUDED.phase = 'ended' AND drawings.ended_at IS NULL THEN now()
+           ELSE drawings.ended_at
          END
        RETURNING *`,
       [
@@ -2127,12 +2142,16 @@ async function retireMissingDrawings(db2, userId, retailer, seen) {
   );
   return rows.length;
 }
-async function liveDrawings(db2, userId) {
+var ENDED_GRACE_MIN = 120;
+async function liveDrawings(db2, userId, graceMinutes = ENDED_GRACE_MIN) {
   const rows = await db2.query(
     `SELECT * FROM drawings
-      WHERE user_id = $1 AND gone_at IS NULL
-      ORDER BY (phase = 'open') DESC, window_at NULLS LAST, name`,
-    [userId]
+      WHERE user_id = $1
+        AND gone_at IS NULL
+        AND (ended_at IS NULL OR ended_at > now() - ($2 || ' minutes')::interval)
+      ORDER BY (phase = 'open') DESC, (ended_at IS NOT NULL),
+               window_at NULLS LAST, name`,
+    [userId, String(Math.max(0, Math.round(graceMinutes)))]
   );
   return rows.map(toDrawing);
 }
@@ -2148,6 +2167,8 @@ async function claimOpeningDrawings(db2, userId, withinMinutes = 30) {
            -- title named no franchise is held for a person to look at, not
            -- counted down to.
            AND franchise = 'pokemon'
+           -- A finished window is not counted down to, in either direction.
+           AND ended_at IS NULL
            AND opened_at IS NULL
            AND soon_alert_at IS NULL
            AND phase = 'announced'
@@ -2170,6 +2191,8 @@ async function claimClosingDrawings(db2, userId, withinMinutes = 60) {
            AND gone_at IS NULL
            AND entered_at IS NULL
            AND franchise = 'pokemon'
+           -- A finished window is not counted down to, in either direction.
+           AND ended_at IS NULL
            AND opened_at IS NOT NULL
            AND closing_alert_at IS NULL
            AND window_at IS NOT NULL
@@ -9451,8 +9474,24 @@ function renderDraws() {
     g.appendChild(nm);
 
     const tags = el('div', 'tags');
-    tags.appendChild(el('span', 'pill ' + (d.phase === 'open' ? 's-in' : 'info'),
-      d.phase === 'open' ? 'OPEN FOR ENTRIES' : 'announced'));
+    /*
+     * Three states, and until 25 Sep this said two.
+     *
+     * An ended drawing matched none of the reader's start-time rules and came
+     * out as the catch-all phase, and this line rendered anything-not-open as
+     * "announced" - so a lottery that had already shut sat on the board
+     * advertised as upcoming, until Walmart eventually dropped the row from its
+     * carousel. A finished window described as coming up is the most
+     * misleading thing this card could say.
+     */
+    const ended = d.phase === 'ended' || Boolean(d.endedAt);
+    tags.appendChild(el(
+      'span',
+      // s-out, the same muted treatment a paused mission and an out-of-stock
+      // listing get. Finished is not an alarm; it is a thing to stop looking at.
+      'pill ' + (d.phase === 'open' ? 's-in' : ended ? 's-out' : 'info'),
+      d.phase === 'open' ? 'OPEN FOR ENTRIES' : ended ? 'DRAWING ENDED' : 'announced',
+    ));
     if (d.enteredAt) tags.appendChild(el('span', 'pill s-in', 'you entered'));
     /*
      * Held back from Discord, and saying so.
@@ -9483,6 +9522,16 @@ function renderDraws() {
     // The limit is what a commitment gets multiplied by: three of a $239
     // bundle is seven hundred dollars if the draw comes in.
     if (d.orderLimit) bits.push('limit ' + d.orderLimit);
+    // Once it is over, when it ended is the only clock that matters \u2014 and
+    // saying it is leaving the board is how a row that vanishes in an hour
+    // does not read as something going missing.
+    if (ended && d.endedAt) {
+      const mins = Math.round((Date.now() - Date.parse(d.endedAt)) / 60000);
+      bits.push(mins < 1 ? 'ended just now'
+        : mins < 90 ? 'ended ' + mins + ' min ago'
+        : 'ended ' + Math.round(mins / 60) + 'h ago');
+      bits.push('clears from here shortly');
+    }
     meta.textContent = bits.join(' \xB7 ');
     g.appendChild(meta);
     row.appendChild(g);
@@ -9506,7 +9555,9 @@ function renderDraws() {
      */
     const shelf = d.retailer === 'Walmart'
       ? 'https://www.walmart.com/shop/collectibles/draw' : '';
-    if (shelf || d.url) {
+    // Nothing to press once it is over. An Enter button on a closed window is
+    // an invitation to go and be disappointed.
+    if (!ended && (shelf || d.url)) {
       const a = el('a', 'btn small go', d.phase === 'open' ? 'Enter' : 'Open');
       a.href = shelf || d.url;
       a.target = '_blank';
@@ -9523,7 +9574,7 @@ function renderDraws() {
      * knows - so this is a checkbox, honestly labelled, whose only job is to
      * stop the closing reminder nagging about something already done.
      */
-    if (DATA.canCurate === true && d.phase === 'open') {
+    if (DATA.canCurate === true && d.phase === 'open' && !ended) {
       const mark = el('button', 'small', d.enteredAt ? 'Not entered' : 'I entered');
       mark.addEventListener('click', async (e) => {
         await withButton(e.target, 'Saving...', null, async () => {
@@ -12014,7 +12065,7 @@ function createHandler(db2, env2) {
       if (!env2.DISCORD_WEBHOOK_URL) {
         return json({ error: "no Discord webhook is configured", sent: 0 }, 400);
       }
-      const live = (await liveDrawings(db2, userId)).filter((d) => d.goneAt === null && d.franchise === "pokemon");
+      const live = (await liveDrawings(db2, userId)).filter((d) => d.goneAt === null && d.endedAt === null && d.franchise === "pokemon");
       if (live.length === 0) return json({ sent: 0, rooms: 0, note: "nothing live to say" });
       const rooms = roomsFrom(env2);
       const cards = live.map((r) => ({

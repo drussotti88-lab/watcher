@@ -1124,3 +1124,21 @@ ALTER TABLE drawings ADD COLUMN IF NOT EXISTS soon_alert_at TIMESTAMPTZ;
 -- on the 16th - is unaffected by the column arriving.
 -- ---------------------------------------------------------------------------
 ALTER TABLE drawings ADD COLUMN IF NOT EXISTS franchise TEXT NOT NULL DEFAULT 'pokemon';
+
+-- ---------------------------------------------------------------------------
+-- When a drawing's window shut
+--
+-- Stamped once, on the edge, the first time Walmart's badge turns past tense
+-- ("Drawing ended"). Terminal: an ended drawing is not watched, not paced for,
+-- and not alerted about.
+--
+-- It is kept SEPARATE from gone_at, which means "no longer on the carousel".
+-- Those are different facts and gone_at is deliberately reversible - a carousel
+-- pulled for ten minutes during a content edit must not permanently retire a
+-- window that is still to come. An ended drawing is over for good.
+--
+-- The row is still shown for a couple of hours afterwards. A lottery that shut
+-- while you were asleep is worth seeing when you wake up, and a board that
+-- silently loses rows is a board you cannot trust to have told you anything.
+-- ---------------------------------------------------------------------------
+ALTER TABLE drawings ADD COLUMN IF NOT EXISTS ended_at TIMESTAMPTZ;

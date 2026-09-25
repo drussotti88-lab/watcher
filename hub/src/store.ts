@@ -3181,6 +3181,8 @@ export interface DrawingRow {
   openedAt: string | null;
   goneAt: string | null;
   enteredAt: string | null;
+  /** When the window shut, stamped once. Null while it is still live. */
+  endedAt: string | null;
   franchise: string;
 }
 
@@ -3206,6 +3208,7 @@ function toDrawing(r: Record<string, unknown>): DrawingRow {
     openedAt: iso(r.opened_at),
     goneAt: iso(r.gone_at),
     enteredAt: iso(r.entered_at),
+    endedAt: iso(r.ended_at),
     franchise: String(r.franchise ?? 'unknown'),
   };
 }
@@ -3284,10 +3287,16 @@ export async function recordDrawings(
       `INSERT INTO drawings
          (user_id, retailer, external_id, name, url, image_url, price, order_limit,
           phase, window_label, window_text, window_at, franchise,
-          announced_at, opened_at)
+          announced_at, opened_at, ended_at)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,
                CASE WHEN $9 <> 'open' THEN now() END,
-               CASE WHEN $9 =  'open' THEN now() END)
+               CASE WHEN $9 =  'open' THEN now() END,
+               -- A drawing can be ended the first time we ever see it: the
+               -- machine was asleep, or the watch was off, and the carousel
+               -- still carries the row for a while afterwards. Stamped here as
+               -- well as in the UPDATE, or a first sighting like that would
+               -- never get an ended_at and never age off the board.
+               CASE WHEN $9 =  'ended' THEN now() END)
        ON CONFLICT (user_id, retailer, external_id) DO UPDATE SET
          name = EXCLUDED.name,
          url = CASE WHEN EXCLUDED.url = '' THEN drawings.url ELSE EXCLUDED.url END,
@@ -3308,6 +3317,14 @@ export async function recordDrawings(
          opened_at = CASE
            WHEN EXCLUDED.phase = 'open' AND drawings.opened_at IS NULL THEN now()
            ELSE drawings.opened_at
+         END,
+         -- Terminal, and stamped the same way. Never cleared: a badge that
+         -- flickers back to a start time after saying "ended" is Walmart
+         -- reusing a row, not a window reopening, and un-ending a drawing
+         -- would put a finished lottery back on the board as upcoming.
+         ended_at = CASE
+           WHEN EXCLUDED.phase = 'ended' AND drawings.ended_at IS NULL THEN now()
+           ELSE drawings.ended_at
          END
        RETURNING *`,
       [
@@ -3353,13 +3370,33 @@ export async function retireMissingDrawings(
   return rows.length;
 }
 
-/** Everything still live, soonest window first. What the dashboard shows. */
-export async function liveDrawings(db: Sql, userId: number): Promise<DrawingRow[]> {
+/**
+ * How long a finished drawing stays on the board.
+ *
+ * Not zero, because a window that shut at four in the morning is worth seeing
+ * when you get up, and a board that silently drops rows is one you cannot trust
+ * to have told you anything. Not forever, because a finished lottery is not
+ * news and the board is for things you can still act on.
+ */
+export const ENDED_GRACE_MIN = 120;
+
+/**
+ * Everything worth showing: live, plus whatever shut in the last couple of
+ * hours. Soonest window first, open at the top and finished at the bottom.
+ */
+export async function liveDrawings(
+  db: Sql,
+  userId: number,
+  graceMinutes = ENDED_GRACE_MIN,
+): Promise<DrawingRow[]> {
   const rows = await db.query(
     `SELECT * FROM drawings
-      WHERE user_id = $1 AND gone_at IS NULL
-      ORDER BY (phase = 'open') DESC, window_at NULLS LAST, name`,
-    [userId],
+      WHERE user_id = $1
+        AND gone_at IS NULL
+        AND (ended_at IS NULL OR ended_at > now() - ($2 || ' minutes')::interval)
+      ORDER BY (phase = 'open') DESC, (ended_at IS NOT NULL),
+               window_at NULLS LAST, name`,
+    [userId, String(Math.max(0, Math.round(graceMinutes)))],
   );
   return rows.map(toDrawing);
 }
@@ -3402,6 +3439,8 @@ export async function claimOpeningDrawings(
            -- title named no franchise is held for a person to look at, not
            -- counted down to.
            AND franchise = 'pokemon'
+           -- A finished window is not counted down to, in either direction.
+           AND ended_at IS NULL
            AND opened_at IS NULL
            AND soon_alert_at IS NULL
            AND phase = 'announced'
@@ -3439,6 +3478,8 @@ export async function claimClosingDrawings(
            AND gone_at IS NULL
            AND entered_at IS NULL
            AND franchise = 'pokemon'
+           -- A finished window is not counted down to, in either direction.
+           AND ended_at IS NULL
            AND opened_at IS NOT NULL
            AND closing_alert_at IS NULL
            AND window_at IS NOT NULL

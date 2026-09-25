@@ -243,3 +243,87 @@ test('A READING IS MAPPED ONTO THE CONTRACT, FIELD BY FIELD', () => {
     'url', 'windowAt', 'windowLabel', 'windowText',
   ]);
 });
+
+// ── When the window shuts ────────────────────────────────────────────────────
+
+/** One product, with whatever badge the test needs. */
+const withBadge = (label: string, slaText: string, cta = false) => ({
+  props: { pageProps: { initialData: { contentLayout: { modules: [{
+    type: 'PrismItemCarousel',
+    configs: { productsConfig: { products: [{
+      usItemId: '20959422790',
+      name: 'Pokémon TCG: 30th Celebration Elite Trainer Box - 2ct Bundle',
+      canonicalUrl: '/ip/x/20959422790',
+      price: 139.94,
+      orderLimit: 3,
+      showDrawCTA: cta,
+      badges: { groups: [{ members: [{ key: 'drawing', text: label, slaText }] }] },
+    }] } },
+  }] } } } },
+});
+
+const AFTER = Date.parse('2026-09-17T12:00:00.000Z');
+
+test('THE PAST TENSE IS AN ENDING, AND IT USED TO READ AS "ANNOUNCED"', () => {
+  // The bug, in one assertion. "Drawing ended" matched none of the start-time
+  // rules, fell through to `unknown`, and the board rendered anything-not-open
+  // as "announced" — so a lottery that had already shut sat there advertised as
+  // upcoming until Walmart dropped the row from its carousel.
+  const [row] = readWalmartDraw(withBadge('Drawing ended ', 'Sep 16, 5:00pm PDT'), AFTER);
+  assert.equal(row!.phase, 'ended');
+
+  // Walmart's own words are kept either way — they are never wrong.
+  assert.equal(row!.windowLabel, 'Drawing ended');
+  assert.equal(row!.windowText, 'Sep 16, 5:00pm PDT');
+});
+
+test('"DRAWING ENDS" IN THE FUTURE IS A LIVE WINDOW, NOT AN ENDED ONE', () => {
+  // The mistake that would cost a drawing rather than a glance: an open window
+  // telling you when to be done by, read as already over. Present tense is
+  // only an ending once its stated time has actually gone by.
+  const soon = Date.parse('2026-09-16T20:00:00.000Z'); // an hour before 5pm PDT
+  const [live] = readWalmartDraw(withBadge('Drawing ends ', 'Sep 16, 5:00pm PDT'), soon);
+  assert.notEqual(live!.phase, 'ended');
+
+  const [over] = readWalmartDraw(withBadge('Drawing ends ', 'Sep 16, 5:00pm PDT'), AFTER);
+  assert.equal(over!.phase, 'ended', 'and once the clock has answered, it is over');
+});
+
+test('A LIVE BUTTON BEATS ANY BADGE', () => {
+  // showDrawCTA is Walmart's own flag for "the enter button is in the page".
+  // If it says yes, nothing written on a badge should send somebody away.
+  const [row] = readWalmartDraw(withBadge('Drawing ended ', 'Sep 16, 5:00pm PDT', true), AFTER);
+  assert.equal(row!.phase, 'open');
+});
+
+test('A START TIME IN THE PAST IS NOT AN ENDING', () => {
+  // It means the window opened. Reading "Drawing starts <yesterday>" as over is
+  // how you retire a drawing on its busiest hour.
+  const [row] = readWalmartDraw(withBadge('Drawing starts ', 'Sep 16, 2:00pm PDT'), AFTER);
+  assert.notEqual(row!.phase, 'ended');
+});
+
+test('AN ENDED DRAWING DOES NOT PULL THE PAGE ONTO THE FAST CLOCK', async () => {
+  // It was the loudest reason in the list before this: an ended row's windowAt
+  // is in the past, and the near-window grace period reads "recently past" as
+  // "about to happen" — so a window that shut ten minutes ago put the whole
+  // page on a two-minute cadence for three hours, at the exact moment there
+  // was nothing left to see.
+  const { drawInterval } = await import('../src/draws.ts');
+  const [ended] = readWalmartDraw(withBadge('Drawing ended ', 'Sep 16, 5:00pm PDT'),
+    Date.parse('2026-09-16T21:10:00.000Z'));
+  assert.equal(drawInterval([ended!], Date.parse('2026-09-16T21:10:00.000Z')), 1800);
+});
+
+test('ENDING IS AN EDGE, SAID ONCE', async () => {
+  const { drawChanges } = await import('../src/draws.ts');
+  const before = readWalmartDraw(withBadge('Drawing ends ', 'Sep 16, 5:00pm PDT'),
+    Date.parse('2026-09-16T20:00:00.000Z'));
+  const after = readWalmartDraw(withBadge('Drawing ended ', 'Sep 16, 5:00pm PDT'), AFTER);
+
+  const changes = drawChanges(before, after);
+  assert.equal(changes.length, 1);
+  assert.equal(changes[0]!.kind, 'ended');
+  // And seeing it again is not news.
+  assert.deepEqual(drawChanges(after, after), []);
+});
