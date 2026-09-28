@@ -2137,3 +2137,68 @@ test('FIRST SIGHT OF AN ALREADY-ENDED DRAWING IS STILL STAMPED', async () => {
   assert.ok(out!.row.endedAt, 'stamped on the way in');
   assert.deepEqual(await store.liveDrawings(db, USER, 0), []);
 });
+
+// ── Pokémon Center's own room ────────────────────────────────────────────────
+
+test('A SHOP SPELLED TWO WAYS IS STILL ONE ROOM', async () => {
+  // Both spellings already exist in this codebase: KNOWN_RETAILERS has the
+  // plain one, the capability table serves the accented one. A router that
+  // treats them as two shops sends half a shop's alerts to the wrong channel
+  // and nobody notices for a week.
+  const { roomKey, roomFor } = await import('../src/notify.ts');
+  assert.equal(roomKey('Pokémon Center'), 'pokemoncenter');
+  assert.equal(roomKey('Pokemon Center'), 'pokemoncenter');
+  assert.equal(roomKey('pokemon-center'), 'pokemoncenter');
+
+  const rooms = { main: MAIN_ROOM, byRetailer: { pokemoncenter: 'https://hook/pkc' } };
+  assert.equal(roomFor(rooms, 'Pokémon Center'), 'https://hook/pkc');
+  assert.equal(roomFor(rooms, 'Pokemon Center'), 'https://hook/pkc');
+  assert.equal(roomFor(rooms, 'Target'), MAIN_ROOM);
+});
+
+test('A VARIABLE CALLED PKC IS NOT AMBIGUOUS ABOUT WHICH SHOP IT MEANS', async () => {
+  // It is what the community calls the shop and what the webhook was named.
+  // Asking somebody to rename their variable to match a constant in here is
+  // the wrong way round — the same argument that made PHANTOM_DRAWINGS work.
+  const { pokemonCenterWebhookFrom } = await import('../src/notify.ts');
+  const hook = (n: string) => 'https://discord.com/api/webhooks/123456789012345678/' + n;
+
+  assert.equal(pokemonCenterWebhookFrom({ PKC: hook('a') }, [hook('main')]), hook('a'));
+  assert.equal(
+    pokemonCenterWebhookFrom({ DISCORD_POKEMON_CENTER_WEBHOOK_URL: hook('b'), PKC: hook('a') },
+      [hook('main')]),
+    hook('b'), 'the documented name wins outright',
+  );
+  // A name about the shop with a value that is not a webhook proves nothing.
+  assert.equal(pokemonCenterWebhookFrom({ PKC_NOTES: 'https://example.com/x' }, [hook('main')]), '');
+});
+
+test('ONE WEBHOOK CANNOT SERVE TWO ROOMS', async () => {
+  // Pasted into two variables, it would post every card twice. Each shop is
+  // told what is already spoken for.
+  const { pokemonCenterWebhookFrom } = await import('../src/notify.ts');
+  const hook = (n: string) => 'https://discord.com/api/webhooks/123456789012345678/' + n;
+
+  assert.equal(pokemonCenterWebhookFrom({ PKC: hook('wm') }, [hook('main'), hook('wm')]), '');
+  assert.equal(pokemonCenterWebhookFrom({ PKC: hook('main') }, [hook('main')]), '');
+});
+
+test('A POKEMON CENTER CARD LANDS IN THE POKEMON CENTER ROOM', async () => {
+  const { splitByRoom } = await import('../src/notify.ts');
+  const rooms = {
+    main: MAIN_ROOM,
+    byRetailer: { walmart: WALMART_ROOM, pokemoncenter: 'http://127.0.0.1:1/pkc' },
+  };
+  const groups = splitByRoom(
+    [
+      { retailer: 'Target', name: 'a' },
+      { retailer: 'Pokémon Center', name: 'b' },
+      { retailer: 'Walmart', name: 'c' },
+      { retailer: 'Pokemon Center', name: 'd' },
+    ],
+    rooms,
+  );
+  assert.equal(groups.length, 3);
+  const pkc = groups.find((g) => g.url === 'http://127.0.0.1:1/pkc');
+  assert.deepEqual(pkc!.items.map((i) => i.name), ['b', 'd'], 'both spellings, one post');
+});

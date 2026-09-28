@@ -33,7 +33,12 @@ import {
   type Sql,
 } from './db.ts';
 import { withDeadline } from './deadline.ts';
-import { walmartWebhookFrom, webhookVarNames, nearMissVarNames } from './notify.ts';
+import {
+  walmartWebhookFrom,
+  pokemonCenterWebhookFrom,
+  webhookVarNames,
+  nearMissVarNames,
+} from './notify.ts';
 import type { Env } from './types.ts';
 
 /**
@@ -100,6 +105,10 @@ function tooSlow(): Response {
 }
 
 function env(): Env {
+  const walmart = walmartWebhookFrom(
+    process.env as Record<string, string | undefined>,
+    process.env.DISCORD_WEBHOOK_URL ?? '',
+  );
   return {
     DATABASE_URL: process.env.DATABASE_URL ?? '',
     DISCORD_WEBHOOK_URL: process.env.DISCORD_WEBHOOK_URL ?? '',
@@ -107,9 +116,13 @@ function env(): Env {
     DISCORD_WINS_WEBHOOK_URL: process.env.DISCORD_WINS_WEBHOOK_URL,
     // Resolved here, at the one place that can see the whole environment, so
     // the handler stays a pure function of its Env and stays testable.
-    DISCORD_WALMART_WEBHOOK_URL: walmartWebhookFrom(
+    DISCORD_WALMART_WEBHOOK_URL: walmart,
+    // Resolved after Walmart's and told what is already spoken for, so one
+    // webhook pasted into two variables cannot end up serving two rooms and
+    // posting every card twice.
+    DISCORD_POKEMON_CENTER_WEBHOOK_URL: pokemonCenterWebhookFrom(
       process.env as Record<string, string | undefined>,
-      process.env.DISCORD_WEBHOOK_URL ?? '',
+      [process.env.DISCORD_WEBHOOK_URL ?? '', walmart],
     ),
     INGEST_TOKEN: process.env.INGEST_TOKEN,
     APP_PASSWORD: process.env.APP_PASSWORD,

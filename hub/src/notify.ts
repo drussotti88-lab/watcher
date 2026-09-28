@@ -298,22 +298,67 @@ export function nearMissVarNames(vars: Record<string, string | undefined>): stri
  * The main webhook is passed in and excluded outright: one URL in two rooms
  * would post every Walmart card twice.
  */
-export function walmartWebhookFrom(
+export function shopWebhookFrom(
   vars: Record<string, string | undefined>,
-  main: string,
+  spec: {
+    /** The documented names, tried in order, before any scanning. */
+    named: readonly string[];
+    /** A variable name about this shop. Only consulted if the value is a webhook. */
+    hint: RegExp;
+    /** URLs already spoken for: the main room, and any shop resolved before this one. */
+    taken: readonly string[];
+  },
 ): string {
-  const ok = (v: string | undefined): string =>
-    looksLikeWebhook(v) && String(v).trim() !== main.trim() ? String(v).trim() : '';
+  const spoken = spec.taken.map((t) => String(t ?? '').trim()).filter(Boolean);
+  const ok = (v: string | undefined): string => {
+    const url = String(v ?? '').trim();
+    // The same URL in two rooms posts every card twice, so a webhook already
+    // claimed by another shop - or by the main room - is not available here.
+    return looksLikeWebhook(url) && !spoken.includes(url) ? url : '';
+  };
 
-  const named = ok(vars['DISCORD_WALMART_WEBHOOK_URL']) || ok(vars['DISCORD_DRAWS_WEBHOOK_URL']);
-  if (named) return named;
-
+  for (const name of spec.named) {
+    const found = ok(vars[name]);
+    if (found) return found;
+  }
   for (const key of Object.keys(vars).sort()) {
-    if (!/walmart|draw/i.test(key)) continue;
+    if (!spec.hint.test(key)) continue;
     const found = ok(vars[key]);
     if (found) return found;
   }
   return '';
+}
+
+/** Kept as its own name because the tests and the docs both say it. */
+export function walmartWebhookFrom(
+  vars: Record<string, string | undefined>,
+  main: string,
+): string {
+  return shopWebhookFrom(vars, {
+    named: ['DISCORD_WALMART_WEBHOOK_URL', 'DISCORD_DRAWS_WEBHOOK_URL'],
+    hint: /walmart|draw/i,
+    taken: [main],
+  });
+}
+
+/**
+ * Pokémon Center's room.
+ *
+ * `PKC` is in the hint list because that is what the community this house
+ * follows calls the shop, and it is what the webhook itself was named. A
+ * variable called PKC holding a Discord webhook is not ambiguous about which
+ * shop it means, and asking somebody to rename it to match a constant in here
+ * is the wrong way round.
+ */
+export function pokemonCenterWebhookFrom(
+  vars: Record<string, string | undefined>,
+  taken: readonly string[],
+): string {
+  return shopWebhookFrom(vars, {
+    named: ['DISCORD_POKEMON_CENTER_WEBHOOK_URL', 'DISCORD_PKC_WEBHOOK_URL'],
+    hint: /pok[e\u00e9]?mon|\bpkc\b|centre?\b/i,
+    taken,
+  });
 }
 
 export interface Rooms {
@@ -323,9 +368,25 @@ export interface Rooms {
   byRetailer: Readonly<Record<string, string>>;
 }
 
+/**
+ * One shop, one key, however it happens to be spelled.
+ *
+ * "Pokémon Center" and "Pokemon Center" are both in this codebase already -
+ * KNOWN_RETAILERS has the plain one, the capability table serves the accented
+ * one - and a router that treats them as two shops sends half a shop's alerts
+ * to the wrong channel and nobody notices for a week. Accents folded, spaces
+ * and punctuation dropped: pokemoncenter either way.
+ */
+export function roomKey(retailer: string | null | undefined): string {
+  return String(retailer ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '');
+}
+
 export function roomFor(rooms: Rooms, retailer: string | null | undefined): string {
-  const key = String(retailer ?? '').trim().toLowerCase();
-  return rooms.byRetailer[key] || rooms.main;
+  return rooms.byRetailer[roomKey(retailer)] || rooms.main;
 }
 
 /**
