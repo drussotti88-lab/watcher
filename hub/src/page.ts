@@ -4221,6 +4221,9 @@ function render() {
     dstate.textContent = on
       ? 'Connected. In stock, staged stock, waiting rooms and source failures post here.' +
         (DATA.discordWins ? ' Confirmed orders post to their own wins channel.' : ' Confirmed orders post here too; set DISCORD_WINS_WEBHOOK_URL for their own channel.') +
+        (DATA.discordPkc
+          ? ' Pokemon Center has its own channel.'
+          : ' Pokemon Center posts here with everything else; set DISCORD_POKEMON_CENTER_WEBHOOK_URL for its own channel.') +
         (DATA.discordWalmart
           ? ' Everything Walmart, drawings included, goes to its own channel.'
           : ' Walmart posts here with everything else; set DISCORD_WALMART_WEBHOOK_URL for its own channel.' +

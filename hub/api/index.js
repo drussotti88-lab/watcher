@@ -3272,20 +3272,42 @@ function webhookVarNames(vars) {
 function nearMissVarNames(vars) {
   return Object.keys(vars).filter((k) => /hook|discord|walmart|draw|phantom/i.test(k) && !looksLikeWebhook(vars[k])).sort();
 }
-function walmartWebhookFrom(vars, main) {
-  const ok = (v) => looksLikeWebhook(v) && String(v).trim() !== main.trim() ? String(v).trim() : "";
-  const named = ok(vars["DISCORD_WALMART_WEBHOOK_URL"]) || ok(vars["DISCORD_DRAWS_WEBHOOK_URL"]);
-  if (named) return named;
+function shopWebhookFrom(vars, spec) {
+  const spoken = spec.taken.map((t) => String(t ?? "").trim()).filter(Boolean);
+  const ok = (v) => {
+    const url = String(v ?? "").trim();
+    return looksLikeWebhook(url) && !spoken.includes(url) ? url : "";
+  };
+  for (const name of spec.named) {
+    const found = ok(vars[name]);
+    if (found) return found;
+  }
   for (const key of Object.keys(vars).sort()) {
-    if (!/walmart|draw/i.test(key)) continue;
+    if (!spec.hint.test(key)) continue;
     const found = ok(vars[key]);
     if (found) return found;
   }
   return "";
 }
+function walmartWebhookFrom(vars, main) {
+  return shopWebhookFrom(vars, {
+    named: ["DISCORD_WALMART_WEBHOOK_URL", "DISCORD_DRAWS_WEBHOOK_URL"],
+    hint: /walmart|draw/i,
+    taken: [main]
+  });
+}
+function pokemonCenterWebhookFrom(vars, taken) {
+  return shopWebhookFrom(vars, {
+    named: ["DISCORD_POKEMON_CENTER_WEBHOOK_URL", "DISCORD_PKC_WEBHOOK_URL"],
+    hint: /pok[e\u00e9]?mon|\bpkc\b|centre?\b/i,
+    taken
+  });
+}
+function roomKey(retailer) {
+  return String(retailer ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
 function roomFor(rooms, retailer) {
-  const key = String(retailer ?? "").trim().toLowerCase();
-  return rooms.byRetailer[key] || rooms.main;
+  return rooms.byRetailer[roomKey(retailer)] || rooms.main;
 }
 function splitByRoom(items, rooms) {
   const out = [];
@@ -8010,6 +8032,9 @@ function render() {
     dstate.textContent = on
       ? 'Connected. In stock, staged stock, waiting rooms and source failures post here.' +
         (DATA.discordWins ? ' Confirmed orders post to their own wins channel.' : ' Confirmed orders post here too; set DISCORD_WINS_WEBHOOK_URL for their own channel.') +
+        (DATA.discordPkc
+          ? ' Pokemon Center has its own channel.'
+          : ' Pokemon Center posts here with everything else; set DISCORD_POKEMON_CENTER_WEBHOOK_URL for its own channel.') +
         (DATA.discordWalmart
           ? ' Everything Walmart, drawings included, goes to its own channel.'
           : ' Walmart posts here with everything else; set DISCORD_WALMART_WEBHOOK_URL for its own channel.' +
@@ -11680,7 +11705,9 @@ function json(body, status = 200, headers = {}) {
 function roomsFrom(env2) {
   const byRetailer = {};
   const walmart = env2.DISCORD_WALMART_WEBHOOK_URL || env2.DISCORD_DRAWS_WEBHOOK_URL || "";
-  if (walmart) byRetailer["walmart"] = walmart;
+  if (walmart) byRetailer[roomKey("Walmart")] = walmart;
+  const pkc = env2.DISCORD_POKEMON_CENTER_WEBHOOK_URL || "";
+  if (pkc) byRetailer[roomKey("Pokemon Center")] = pkc;
   return { main: env2.DISCORD_WEBHOOK_URL, byRetailer };
 }
 async function toRooms(items, rooms, send) {
@@ -11944,6 +11971,7 @@ function createHandler(db2, env2) {
         discordWalmart: Boolean(
           env2.DISCORD_WALMART_WEBHOOK_URL || env2.DISCORD_DRAWS_WEBHOOK_URL
         ),
+        discordPkc: Boolean(env2.DISCORD_POKEMON_CENTER_WEBHOOK_URL),
         // Names of the webhook variables this deployment received, so
         // "I set it and it still says no" is a question with an answer.
         // Names only - the value is the credential.
@@ -13183,6 +13211,10 @@ function tooSlow() {
   );
 }
 function env() {
+  const walmart = walmartWebhookFrom(
+    process.env,
+    process.env.DISCORD_WEBHOOK_URL ?? ""
+  );
   return {
     DATABASE_URL: process.env.DATABASE_URL ?? "",
     DISCORD_WEBHOOK_URL: process.env.DISCORD_WEBHOOK_URL ?? "",
@@ -13190,9 +13222,13 @@ function env() {
     DISCORD_WINS_WEBHOOK_URL: process.env.DISCORD_WINS_WEBHOOK_URL,
     // Resolved here, at the one place that can see the whole environment, so
     // the handler stays a pure function of its Env and stays testable.
-    DISCORD_WALMART_WEBHOOK_URL: walmartWebhookFrom(
+    DISCORD_WALMART_WEBHOOK_URL: walmart,
+    // Resolved after Walmart's and told what is already spoken for, so one
+    // webhook pasted into two variables cannot end up serving two rooms and
+    // posting every card twice.
+    DISCORD_POKEMON_CENTER_WEBHOOK_URL: pokemonCenterWebhookFrom(
       process.env,
-      process.env.DISCORD_WEBHOOK_URL ?? ""
+      [process.env.DISCORD_WEBHOOK_URL ?? "", walmart]
     ),
     INGEST_TOKEN: process.env.INGEST_TOKEN,
     APP_PASSWORD: process.env.APP_PASSWORD,

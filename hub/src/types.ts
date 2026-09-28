@@ -150,6 +150,15 @@ export interface Env {
   DISCORD_WALMART_WEBHOOK_URL?: string;
   DISCORD_DRAWS_WEBHOOK_URL?: string;
   /**
+   * Pokémon Center's own room.
+   *
+   * Set up 28 Sep 2026 as a #pokemon-center channel, webhook named PkC. Read
+   * from DISCORD_POKEMON_CENTER_WEBHOOK_URL or DISCORD_PKC_WEBHOOK_URL, or
+   * from any variable whose name is about this shop and whose value is a
+   * Discord webhook - the same tolerance Walmart's has, for the same reason.
+   */
+  DISCORD_POKEMON_CENTER_WEBHOOK_URL?: string;
+  /**
    * Names, never values, of the webhook variables this deployment actually
    * received. The answer to "I set it and the flag still says false", which is
    * otherwise unanswerable from inside the process.

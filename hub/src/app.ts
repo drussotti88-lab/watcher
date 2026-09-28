@@ -37,6 +37,7 @@ import {
   announceTest,
   reportOps,
   splitByRoom,
+  roomKey,
   type Rooms,
 } from './notify.ts';
 import { applyFilters, dedupe } from './filter.ts';
@@ -95,7 +96,11 @@ function roomsFrom(env: Env): Rooms {
   // channel up named it DRAWS before the scope was settled as "everything
   // Walmart", so both are honoured and neither is the wrong answer.
   const walmart = env.DISCORD_WALMART_WEBHOOK_URL || env.DISCORD_DRAWS_WEBHOOK_URL || '';
-  if (walmart) byRetailer['walmart'] = walmart;
+  if (walmart) byRetailer[roomKey('Walmart')] = walmart;
+  const pkc = env.DISCORD_POKEMON_CENTER_WEBHOOK_URL || '';
+  // Keyed through roomKey, so the accented and unaccented spellings of this
+  // shop - both of which exist in this codebase - land in the same room.
+  if (pkc) byRetailer[roomKey('Pokemon Center')] = pkc;
   return { main: env.DISCORD_WEBHOOK_URL, byRetailer };
 }
 
@@ -477,6 +482,7 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
         discordWalmart: Boolean(
           env.DISCORD_WALMART_WEBHOOK_URL || env.DISCORD_DRAWS_WEBHOOK_URL,
         ),
+        discordPkc: Boolean(env.DISCORD_POKEMON_CENTER_WEBHOOK_URL),
         // Names of the webhook variables this deployment received, so
         // "I set it and it still says no" is a question with an answer.
         // Names only - the value is the credential.
