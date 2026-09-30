@@ -39,20 +39,21 @@
  * is handled first and tested by name.
  */
 
-export type Franchise = 'pokemon' | 'mtg' | 'other' | 'unknown';
+export type Franchise = 'pokemon' | 'mtg' | 'onepiece' | 'other' | 'unknown';
 
 /**
  * The franchises this house wants to hear about.
  *
  * Pokémon from the start; Magic: The Gathering added 30 Sep 2026, when a
  * Walmart drawing that afternoon carried three Reality Fracture products and
- * this filter would have kept every one of them out of the channel.
+ * this filter would have kept every one of them out of the channel; One Piece
+ * added the same morning (Roberto: "One piece and mtg").
  *
  * Adding one is a line here and a key in WANTED_RIVALS below. Everything that
  * decides whether a drawing is announced asks isWanted(), so there is no
  * second list to forget.
  */
-export const WANTED: readonly Franchise[] = ['pokemon', 'mtg'];
+export const WANTED: readonly Franchise[] = ['pokemon', 'mtg', 'onepiece'];
 
 export function isWanted(f: string | null | undefined): boolean {
   return (WANTED as readonly string[]).includes(String(f ?? ''));
@@ -89,7 +90,6 @@ export function fold(s: string): string {
  * anything is more likely a crossover this list should not be guessing about.
  */
 const RIVALS: { term: string; brand: string }[] = [
-  { term: 'one piece', brand: 'One Piece' },
   { term: 'yu gi oh', brand: 'Yu-Gi-Oh!' },
   { term: 'yugioh', brand: 'Yu-Gi-Oh!' },
   { term: 'lorcana', brand: 'Disney Lorcana' },
@@ -135,6 +135,12 @@ const WANTED_RIVALS: { term: string; brand: string; key: Franchise }[] = [
   { term: 'magic the gathering', brand: 'Magic: The Gathering', key: 'mtg' },
   { term: 'mtg', brand: 'Magic: The Gathering', key: 'mtg' },
   { term: 'secret lair', brand: 'Magic: The Gathering', key: 'mtg' },
+  // Only as a card game. A bare "one piece" is also an anime figure, a
+  // swimsuit and "(1 piece, colour may vary)" on a fidget toy; a title that
+  // says One Piece without saying cards stays unknown - shown, not announced.
+  { term: 'one piece card game', brand: 'One Piece Card Game', key: 'onepiece' },
+  { term: 'one piece tcg', brand: 'One Piece Card Game', key: 'onepiece' },
+  { term: 'one piece trading card', brand: 'One Piece Card Game', key: 'onepiece' },
 ];
 
 /**
