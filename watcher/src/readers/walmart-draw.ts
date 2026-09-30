@@ -186,6 +186,8 @@ const ZONES: Record<string, number> = {
  * Walmart's own words in that case, which are never wrong.
  */
 export function parseDrawWhen(text: string, now: number = Date.now()): string | null {
+  const relative = parseRelativeWhen(text, now);
+  if (relative !== undefined) return relative;
   const m = /([A-Za-z]{3,9})\.?\s+(\d{1,2})(?:,)?\s*(?:at\s*)?(\d{1,2})(?::(\d{2}))?\s*([ap])\.?m\.?\s*([A-Z]{2,4})?/i
     .exec(String(text ?? ''));
   if (!m) return null;
@@ -224,6 +226,46 @@ export function parseDrawWhen(text: string, now: number = Date.now()): string | 
   for (const candidate of [at(year - 1), at(year + 1)]) {
     if (Math.abs(candidate - now) < Math.abs(when - now)) when = candidate;
   }
+  return new Date(when).toISOString();
+}
+
+/**
+ * "today, 3:00pm PDT" / "tomorrow, 9:00am PDT" -> an instant.
+ *
+ * Walmart switches to these words on the day itself. On 30 Sep 2026 the open
+ * badge read "Drawing ends today, 3:00pm PDT"; the month-and-day reader did
+ * not understand it, the Hub kept the START time as the window, and the
+ * "closes soon" reminder never had an end time to count down to.
+ *
+ * "Today" means today where the named zone is, not where this machine is: at
+ * 11pm in Chicago it is already tomorrow in UTC and still today in LA.
+ *
+ * Returns undefined when the text is not in this shape at all (so the month
+ * reader gets its turn), and null when it is this shape but not understood.
+ */
+function parseRelativeWhen(text: string, now: number): string | null | undefined {
+  const m = /\b(today|tomorrow)\b,?\s*(?:at\s*)?(\d{1,2})(?::(\d{2}))?\s*([ap])\.?m\.?\s*([A-Z]{2,4})?/i
+    .exec(String(text ?? ''));
+  if (!m) return undefined;
+
+  let hour = Number(m[2]);
+  if (!(hour >= 1 && hour <= 12)) return null;
+  const minute = m[3] === undefined ? 0 : Number(m[3]);
+  if (!(minute >= 0 && minute <= 59)) return null;
+  if (String(m[4]).toLowerCase() === 'p' && hour !== 12) hour += 12;
+  if (String(m[4]).toLowerCase() === 'a' && hour === 12) hour = 0;
+
+  const zone = String(m[5] ?? '').toUpperCase();
+  if (!zone || !(zone in ZONES)) return null;
+  const offset = ZONES[zone]!;
+
+  // The calendar date in that zone, right now.
+  const local = new Date(now + offset * 3600_000);
+  const extra = String(m[1]).toLowerCase() === 'tomorrow' ? 1 : 0;
+  const when = Date.UTC(
+    local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate() + extra,
+    hour - offset, minute, 0, 0,
+  );
   return new Date(when).toISOString();
 }
 

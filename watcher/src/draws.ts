@@ -65,13 +65,22 @@ export interface DrawScan {
  *   - **Something announced, opening later**: still half an hour, until the
  *     last hour before the stated start.
  *
- *   - **Inside the hour before a start, or something already open**: two
- *     minutes. This is the only part that is time-sensitive, and even here
- *     two minutes is generous — being first buys nothing.
+ *   - **Inside the hour before a start**: two minutes. This is the only part
+ *     that is time-sensitive, and even here two minutes is generous — being
+ *     first buys nothing.
+ *
+ *   - **Something already open**: ten minutes. See OPEN below.
  */
 export function drawInterval(rows: readonly DrawRow[], now: number = Date.now()): number {
   const SLOW = 30 * 60;
   const NEAR = 2 * 60;
+  // Once a window is open, the only things left to learn are that it closed
+  // (and Walmart printed when) and whether a new one appeared. On 30 Sep 2026
+  // the page was read every two minutes from the hour before the start, and
+  // six minutes after it opened Walmart put up a press-and-hold check - and
+  // the watcher was blind for the rest of the window. Ten minutes is plenty.
+  const OPEN = 10 * 60;
+  let best = SLOW;
   for (const row of rows) {
     // An ended drawing is not a reason to hurry. It is the opposite, and
     // without this line it was the loudest reason in the list: its windowAt is
@@ -79,7 +88,11 @@ export function drawInterval(rows: readonly DrawRow[], now: number = Date.now())
     // to happen", so a window that shut ten minutes ago pulled the whole page
     // onto the two-minute clock for three hours.
     if (row.phase === 'ended') continue;
-    if (row.phase === 'open') return NEAR;
+    if (row.phase === 'open') {
+      // An open row's windowAt is its END, not a start to hurry towards.
+      best = Math.min(best, OPEN);
+      continue;
+    }
     if (row.windowAt) {
       const until = Date.parse(row.windowAt) - now;
       // The hour before, and a grace period after: Walmart's stated minute and
@@ -88,7 +101,7 @@ export function drawInterval(rows: readonly DrawRow[], now: number = Date.now())
       if (until < 60 * 60_000 && until > -3 * 60 * 60_000) return NEAR;
     }
   }
-  return SLOW;
+  return best;
 }
 
 /**
