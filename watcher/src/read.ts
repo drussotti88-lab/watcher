@@ -14,7 +14,7 @@
  */
 import type { Page, Response } from 'playwright';
 import type { Browser } from './browser.ts';
-import { detectChallenge } from './challenge.ts';
+import { detectChallenge, detectApiBlock } from './challenge.ts';
 import { captureOddPage, worthCapturing } from './capture.ts';
 import { raceToRead } from './racer.ts';
 import { readWhenReady } from './settle.ts';
@@ -218,6 +218,24 @@ export async function readListing(
       };
     }
 
+    // ── A wall on the data calls ────────────────────────────────────────────
+    //
+    // Checked before the slow path, because a page whose product calls came
+    // back as a bot check will never answer however long it is watched, and
+    // the slow path would spend another ten seconds looking at a page that
+    // renders perfectly. See detectApiBlock for the sixteen hours this cost.
+    await withTimeout(Promise.all(pending), BODIES_MS, [] as unknown[]);
+    const apiBlock = detectApiBlock(bodies);
+    if (apiBlock.challenged) {
+      return {
+        ...unknownRead(`challenged: ${apiBlock.reason}`),
+        challenged: true,
+        challengeReason: apiBlock.reason,
+        imageUrl: '',
+        ms: Date.now() - started,
+      };
+    }
+
     // ── The page did not answer ─────────────────────────────────────────────
     //
     // Either it is a wall, or it is genuinely slow. Both need the page's title
@@ -250,6 +268,17 @@ export async function readListing(
         ...unknownRead(`challenged: ${challenge.reason}`),
         challenged: true,
         challengeReason: challenge.reason,
+        imageUrl: '',
+        ms: Date.now() - started,
+      };
+    }
+
+    const lateBlock = detectApiBlock(bodies);
+    if (lateBlock.challenged) {
+      return {
+        ...unknownRead(`challenged: ${lateBlock.reason}`),
+        challenged: true,
+        challengeReason: lateBlock.reason,
         imageUrl: '',
         ms: Date.now() - started,
       };

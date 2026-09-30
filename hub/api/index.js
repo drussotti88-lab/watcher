@@ -2528,6 +2528,42 @@ function isQueueLine(message) {
   const m = String(message ?? "");
   return /waiting room/i.test(m) || m.startsWith("QUEUE:");
 }
+var BLIND_WINDOW_MIN = 30;
+var BLIND_MIN_CHECKS = 8;
+var BLIND_ALERT_COOLDOWN_MIN = 60;
+async function blindShops(db2, userId, minutes = BLIND_WINDOW_MIN) {
+  const rows = await db2.query(
+    `SELECT retailer, count(*)::text AS n
+       FROM activity
+      WHERE user_id = $1
+        AND kind = 'check'
+        AND retailer <> ''
+        AND at > now() - ($2 || ' minutes')::interval
+        AND message NOT LIKE 'blocked:%'
+      GROUP BY retailer
+     HAVING count(*) >= $3
+        AND count(*) FILTER (WHERE state NOT IN ('', 'unknown')) = 0`,
+    [userId, String(minutes), BLIND_MIN_CHECKS]
+  );
+  return rows.map((r) => ({ retailer: r.retailer, checks: Number(r.n) }));
+}
+async function blindAlertedRecently(db2, userId, minutes = BLIND_ALERT_COOLDOWN_MIN) {
+  const rows = await db2.query(
+    `SELECT DISTINCT retailer FROM activity
+      WHERE user_id = $1 AND kind = 'hub' AND message LIKE 'BLIND:%'
+        AND at > now() - ($2 || ' minutes')::interval`,
+    [userId, String(minutes)]
+  );
+  return new Set(rows.map((r) => r.retailer));
+}
+async function noteBlindAlert(db2, userId, retailer, checks) {
+  await recordActivity(db2, userId, [{
+    kind: "hub",
+    level: "warn",
+    retailer,
+    message: `BLIND: every ${retailer} read failed for ${BLIND_WINDOW_MIN}+ min (${checks} checks) - told Discord`
+  }]);
+}
 var WALL_ALERT_COOLDOWN_MIN = 20;
 function isWallLine(message) {
   const m = String(message ?? "");
@@ -3505,6 +3541,28 @@ function buildWallEmbed(i, now) {
 async function announceWalls(webhookUrl, walls, now) {
   if (walls.length === 0) return;
   await post(webhookUrl, walls.slice(0, 3).map((w) => buildWallEmbed(w, now)));
+}
+function buildBlindEmbed(i, now) {
+  const home = SHOP_HOME[i.retailer] ?? "";
+  return {
+    title: `${(i.retailer || "A SHOP").toUpperCase()}: PHANTOM IS BLIND`,
+    ...home ? { url: home } : {},
+    description: `**Every read of this shop has failed for the last ${i.minutes} minutes** (${i.checks} checks), and none of it looked like a wall the detector knows.
+
+Whatever is live there right now, nothing is watching it. **Check by hand** if you are expecting stock. The usual causes are a new kind of bot check or the shop changing its pages - either way it needs a person to look.`,
+    color: COLOR_WALL,
+    fields: [
+      inline("Shop", i.retailer || "\u2014"),
+      inline("Failed reads", String(i.checks)),
+      inline("For at least", `${i.minutes} min`)
+    ],
+    footer: { text: "Said once an hour while it lasts, so it cannot be mistaken for a quiet day." },
+    timestamp: now
+  };
+}
+async function announceBlind(webhookUrl, items, now) {
+  if (items.length === 0) return;
+  await post(webhookUrl, items.slice(0, 3).map((i) => buildBlindEmbed(i, now)));
 }
 async function announceQueues(webhookUrl, sightings, now) {
   if (sightings.length === 0) return;
@@ -12625,6 +12683,25 @@ function createHandler(db2, env2) {
             (url2, group) => announceWalls(url2, group, (/* @__PURE__ */ new Date()).toISOString())
           ).catch(() => {
           });
+        }
+        const failedCheck = lines.some((l) => l.kind === "check" && !["in", "out", "in_stock", "staged"].includes(String(l.state ?? "")) && !isWallLine(l.message));
+        if (failedCheck) {
+          try {
+            const blind = await blindShops(db2, userId);
+            if (blind.length > 0) {
+              const told = await blindAlertedRecently(db2, userId);
+              const fresh2 = blind.filter((b2) => !told.has(b2.retailer));
+              if (fresh2.length > 0) {
+                await toRooms(
+                  fresh2.map((b2) => ({ ...b2, minutes: BLIND_WINDOW_MIN })),
+                  roomsFrom(env2),
+                  (url2, group) => announceBlind(url2, group, (/* @__PURE__ */ new Date()).toISOString())
+                );
+                for (const b2 of fresh2) await noteBlindAlert(db2, userId, b2.retailer, b2.checks);
+              }
+            }
+          } catch {
+          }
         }
       }
       return json({ ...result, pruned });

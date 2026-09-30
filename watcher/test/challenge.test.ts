@@ -327,3 +327,45 @@ test('A WALMART QUEUE IS ONE ITEM; A QUEUE-IT ROOM IS THE WHOLE SHOP', () => {
   assert.equal(queueScope('Walmart waiting room'), 'item');
   assert.equal(queueScope('Walmart queue redirect'), 'item');
 });
+
+// ------------------------------------------------- a wall on the data calls
+
+import { detectApiBlock } from '../src/challenge.ts';
+
+/** The body Target's product calls returned on 30 Sep 2026, ids shortened. */
+const PX_BLOCK = {
+  appId: 'PXGWPp4wUS',
+  blockScript: 'https://captcha.px-cdn.net/PXGWPp4wUS/captcha.js?a=c&u=x&v=y&m=0',
+  firstPartyEnabled: false,
+  hostUrl: 'https://collector-PXGWPp4wUS.perimeterx.net',
+  jsClientSrc: 'https://client.perimeterx.net/PXGWPp4wUS/main.min.js',
+  uuid: 'x',
+  vid: 'y',
+};
+
+test('A CAPTCHA SERVED ON THE PRODUCT CALLS IS A WALL, NOT A PARSER FAILURE', () => {
+  // Sixteen hours of "no product node for tcin N in 17 captured responses",
+  // on a page that rendered perfectly. The detector read the title and the
+  // text, both fine, and called it a parser problem — so the pacer never stood
+  // down and the wall alert never fired.
+  const got = detectApiBlock([{ other: 'noise' }, PX_BLOCK]);
+  assert.equal(got.challenged, true);
+  assert.match(got.reason, /PerimeterX/);
+  assert.equal(isQueue(got.reason), false, 'a wall, not a waiting room');
+});
+
+test('A HEALTHY PRODUCT BODY IS NOT A WALL, WHATEVER SITS BESIDE IT', () => {
+  // The collector scripts load on every healthy Target page. Anything looser
+  // than the blockScript + vendor pair would call every page a wall — the
+  // akamai mistake in a new coat.
+  const product = { modules: [{ module_data: { data: { product: {
+    tcin: '1010892076', price: { current_retail: 69.99 },
+    fulfillment: { shipping_options: { availability_status: 'OUT_OF_STOCK' } },
+  } } } }] };
+  assert.equal(detectApiBlock([product]).challenged, false);
+  assert.equal(detectApiBlock([{ hostUrl: 'https://collector-PXGWPp4wUS.perimeterx.net' }]).challenged, false,
+    'a PerimeterX host with no block script is just the collector talking');
+  assert.equal(detectApiBlock([{ blockScript: 'https://example.com/banner.js' }]).challenged, false);
+  assert.equal(detectApiBlock([]).challenged, false);
+  assert.equal(detectApiBlock([null, 'text', [1, 2]]).challenged, false);
+});
