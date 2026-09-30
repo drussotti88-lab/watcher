@@ -384,7 +384,7 @@ function band(row) {
 }
 
 // src/franchise.ts
-var WANTED = ["pokemon", "mtg"];
+var WANTED = ["pokemon", "mtg", "onepiece"];
 function isWanted(f) {
   return WANTED.includes(String(f ?? ""));
 }
@@ -392,7 +392,6 @@ function fold3(s) {
   return String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/pok\W*(&#)?233;?\W*mon/g, "pokemon").replace(/\bpokmon\b/g, "pokemon").replace(/[^a-z0-9]+/g, " ").trim();
 }
 var RIVALS = [
-  { term: "one piece", brand: "One Piece" },
   { term: "yu gi oh", brand: "Yu-Gi-Oh!" },
   { term: "yugioh", brand: "Yu-Gi-Oh!" },
   { term: "lorcana", brand: "Disney Lorcana" },
@@ -430,7 +429,13 @@ var RIVALS = [
 var WANTED_RIVALS = [
   { term: "magic the gathering", brand: "Magic: The Gathering", key: "mtg" },
   { term: "mtg", brand: "Magic: The Gathering", key: "mtg" },
-  { term: "secret lair", brand: "Magic: The Gathering", key: "mtg" }
+  { term: "secret lair", brand: "Magic: The Gathering", key: "mtg" },
+  // Only as a card game. A bare "one piece" is also an anime figure, a
+  // swimsuit and "(1 piece, colour may vary)" on a fidget toy; a title that
+  // says One Piece without saying cards stays unknown - shown, not announced.
+  { term: "one piece card game", brand: "One Piece Card Game", key: "onepiece" },
+  { term: "one piece tcg", brand: "One Piece Card Game", key: "onepiece" },
+  { term: "one piece trading card", brand: "One Piece Card Game", key: "onepiece" }
 ];
 var POKEMON_MARKERS = [
   "pokemon",
@@ -9627,9 +9632,9 @@ function renderDraws() {
      * filtered. If this appears on something that IS Pok\xE9mon, the tables are
      * wrong and that is worth telling me.
      */
-    // Pok\xE9mon and Magic are announced; the list lives in franchise.ts, and
+    // Pok\xE9mon, Magic and One Piece are announced; the list lives in franchise.ts, and
     // this is its browser-side mirror because the page cannot import it.
-    if (d.franchise && ['pokemon', 'mtg'].indexOf(d.franchise) < 0) {
+    if (d.franchise && ['pokemon', 'mtg', 'onepiece'].indexOf(d.franchise) < 0) {
       const p = el('span', 'pill overmsrp', 'not announced - unrecognised franchise');
       p.title = 'Stored and shown here, kept out of Discord. Nothing in the ' +
         'title said which game this is.';

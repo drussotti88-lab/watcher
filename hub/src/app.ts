@@ -654,7 +654,7 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
        * page, marked, where a person can look at it in their own time - and
        * the page is honest about holding it rather than quietly short.
        */
-      // Pokémon and Magic as of 30 Sep; the list lives in franchise.ts.
+      // Pokémon, Magic and One Piece as of 30 Sep; the list lives in franchise.ts.
       const ours = (o: store.DrawingOutcome): boolean => isWanted(o.row.franchise);
       const held = outcomes.filter((o) => o.isNew && !ours(o)).length;
 

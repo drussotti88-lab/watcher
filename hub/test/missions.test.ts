@@ -1856,33 +1856,33 @@ test('A DRAWING THAT NAMES NO FRANCHISE IS STORED, SHOWN, AND NOT ANNOUNCED', as
 
 test('A STALE PHANTOM THAT SENDS NO FRANCHISE CANNOT FAIL OPEN', async () => {
   // The field is new. An older Phantom omits it entirely, and an absent
-  // franchise defaulting to Pokémon would announce a One Piece window into a
+  // franchise defaulting to Pokémon would announce a Lorcana window into a
   // Pokémon channel. So the Hub re-reads the title itself and takes the
   // stricter of the two answers.
   const db = await TestDb.create();
   const res = await call(db, 'POST', '/api/drawings', {
     retailer: 'Walmart',
     drawings: [
-      { externalId: 'op1', name: 'One Piece Card Game OP-09 Booster Box', phase: 'announced' },
+      { externalId: 'op1', name: 'Disney Lorcana Azurite Sea Booster Box', phase: 'announced' },
       { externalId: 'pk1', name: 'Pokémon TCG: Surging Sparks ETB', phase: 'announced' },
     ],
   });
   assert.equal(res.body.recorded, 2);
-  assert.equal(res.body.announced, 1, 'the One Piece box was not announced');
+  assert.equal(res.body.announced, 1, 'the Lorcana box was not announced');
 
   const live = await store.liveDrawings(db, USER);
   const op = live.find((d) => d.externalId === 'op1');
   assert.equal(op?.franchise, 'other', 'read from the title, not taken on trust');
 });
 
-test('A CLIENT CLAIMING POKEMON ON A ONE PIECE TITLE IS NOT BELIEVED', async () => {
+test('A CLIENT CLAIMING POKEMON ON A YU-GI-OH TITLE IS NOT BELIEVED', async () => {
   // Both halves have to agree. Trusting the wire alone means one bad client
   // can post anything into the channel.
   const db = await TestDb.create();
   await call(db, 'POST', '/api/drawings', {
     retailer: 'Walmart',
     drawings: [{
-      externalId: 'liar', name: 'One Piece Card Game Premium Booster',
+      externalId: 'liar', name: 'Yu-Gi-Oh! 25th Anniversary Rarity Collection',
       phase: 'announced', franchise: 'pokemon',
     }],
   });
@@ -1891,11 +1891,11 @@ test('A CLIENT CLAIMING POKEMON ON A ONE PIECE TITLE IS NOT BELIEVED', async () 
 });
 
 test('THE OPENS-SOON ALERT DOES NOT COUNT DOWN TO SOMEBODY ELSE\'S GAME', async () => {
-  // Was Magic until 30 Sep, when Magic became one of ours. One Piece is still
-  // somebody else's.
+  // Was Magic, then One Piece, until both became ours on 30 Sep. Lorcana is
+  // still somebody else's.
   const db = await TestDb.create();
   await store.recordDrawings(db, USER, 'Walmart', [
-    { externalId: 'op', name: 'One Piece Card Game OP-09 Booster Box', phase: 'announced',
+    { externalId: 'op', name: 'Disney Lorcana Azurite Sea Booster Box', phase: 'announced',
       windowLabel: 'Drawing starts', windowText: 'soon',
       windowAt: new Date(Date.now() + 20 * 60000).toISOString() },
   ]);
@@ -2364,4 +2364,27 @@ test('A BADGE BOUNCING BACK TO AN OLD START TIME DOES NOT REOPEN A DRAWING', asy
   ]);
   assert.equal(row!.isNew, false);
   assert.ok(row!.row.endedAt, 'still ended');
+});
+
+// ── One Piece is one of ours too ─────────────────────────────────────────────
+
+test('A ONE PIECE CARD GAME DRAWING IS ANNOUNCED; A ONE PIECE FIGURE IS NOT', async () => {
+  // Roberto, 30 Sep: "One piece and mtg". Only as a card game — "one piece"
+  // on its own is also a figure, a swimsuit, and "(1 Piece, Color May Vary)" on
+  // the fidget toys that shared that afternoon's carousel.
+  const { franchiseOf } = await import('../src/franchise.ts');
+  assert.equal(franchiseOf('ONE PIECE CARD GAME Emperors in the New World Booster Box [OP-09]').franchise, 'onepiece');
+  assert.equal(franchiseOf('One Piece TCG: Premium Booster').franchise, 'onepiece');
+  assert.equal(franchiseOf('One Piece Luffy Gear 5 Action Figure').franchise, 'unknown', 'shown, not announced');
+  assert.equal(franchiseOf('Nee Doh Fuzz Ball Flower Power, (1 Piece, Color May Vary)').franchise, 'unknown');
+  assert.equal(franchiseOf('Funko Pop! One Piece Card Game Luffy').franchise, 'other', 'two names is refused');
+
+  const db = await TestDb.create();
+  const res = await call(db, 'POST', '/api/drawings', {
+    retailer: 'Walmart',
+    drawings: [{ externalId: 'op09', phase: 'announced',
+      name: 'ONE PIECE CARD GAME Emperors in the New World Booster Box [OP-09]' }],
+  });
+  assert.equal(res.body.announced, 1);
+  assert.equal(res.body.held, 0);
 });
