@@ -2326,3 +2326,42 @@ test('D&D IS NOT MAGIC, AND TOYS ARE STILL NOT CARDS', async () => {
   // A title naming two games is still refused rather than guessed.
   assert.equal(franchiseOf('Pokemon vs Magic The Gathering Collector Bundle').franchise, 'other');
 });
+
+// ── The same item id, a new drawing ──────────────────────────────────────────
+
+test('AN ITEM THAT ENDED LAST WEEK AND IS ANNOUNCED AGAIN IS A NEW DRAWING', async () => {
+  // 30 Sep 2026: the Knock Out bundle's item id ended on 23 Sep and came back
+  // announced for 30 Sep. "Ended" had been made permanent, so today's drawing
+  // was hidden, never announced and never counted down to.
+  const db = await TestDb.create();
+  const id = '21036052088';
+  const name = 'Pokemon TCG: 30th Celebration Knock Out Collection 4-Count Bundle';
+  await store.recordDrawings(db, USER, 'Walmart', [
+    { externalId: id, name, phase: 'ended', windowLabel: 'Drawing ended', windowText: 'Sep 23' },
+  ]);
+  await store.markDrawingEntered(db, USER, (await store.liveDrawings(db, USER))[0]!.id, true);
+
+  const soon = new Date(Date.now() + 20 * 60000).toISOString();
+  const [again] = await store.recordDrawings(db, USER, 'Walmart', [
+    { externalId: id, name, phase: 'announced', windowLabel: 'Drawing starts', windowText: 'Sep 30', windowAt: soon },
+  ]);
+  assert.equal(again!.isNew, true, 'announced like any new drawing');
+  assert.equal(again!.row.endedAt, null, 'last week\'s end does not hide this week\'s window');
+  assert.equal(again!.row.enteredAt, null, '"I entered" was about last week');
+
+  assert.equal((await store.liveDrawings(db, USER, 0)).length, 1, 'on the board');
+  assert.equal((await store.claimOpeningDrawings(db, USER, 30)).length, 1, 'and counted down to');
+});
+
+test('A BADGE BOUNCING BACK TO AN OLD START TIME DOES NOT REOPEN A DRAWING', async () => {
+  // The worry the old rule was built on, still guarded: a new cycle needs a
+  // start LATER than the end it follows.
+  const db = await TestDb.create();
+  await store.recordDrawings(db, USER, 'Walmart', [draw({ phase: 'ended', windowLabel: 'Drawing ended' })]);
+  const past = new Date(Date.now() - 2 * 86400000).toISOString();
+  const [row] = await store.recordDrawings(db, USER, 'Walmart', [
+    draw({ phase: 'announced', windowLabel: 'Drawing starts', windowAt: past }),
+  ]);
+  assert.equal(row!.isNew, false);
+  assert.ok(row!.row.endedAt, 'still ended');
+});

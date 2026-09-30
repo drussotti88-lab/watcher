@@ -2086,11 +2086,13 @@ async function recordDrawings(db2, userId, retailer, items) {
     const externalId = String(item.externalId ?? "").trim();
     if (!externalId) continue;
     const [before] = await db2.query(
-      `SELECT phase, opened_at FROM drawings
+      `SELECT phase, opened_at, ended_at FROM drawings
         WHERE user_id = $1 AND retailer = $2 AND external_id = $3`,
       [userId, retailer, externalId]
     );
-    const isNew = before === void 0;
+    const endedAt = before?.ended_at ? Date.parse(String(before.ended_at)) : null;
+    const reborn = endedAt !== null && (item.phase === "open" || item.phase === "announced" && !!item.windowAt && Date.parse(item.windowAt) > endedAt);
+    const isNew = before === void 0 || reborn;
     const justOpened = item.phase === "open" && (isNew || before.phase !== "open");
     const said = String(item.franchise ?? "").trim();
     const read = franchiseOf(String(item.name ?? "")).franchise;
@@ -2125,19 +2127,28 @@ async function recordDrawings(db2, userId, retailer, items) {
          -- Back on the page is back. A carousel pulled for ten minutes during
          -- an edit must not permanently retire a drawing still to come.
          gone_at = NULL,
-         -- The edge, stamped once and never re-stamped.
+         -- The edge, stamped once per cycle. $14 is "this is a new drawing on
+         -- an old item id" - see the note above the query - and a new cycle
+         -- starts its stamps from nothing.
          opened_at = CASE
+           WHEN $14::boolean THEN CASE WHEN EXCLUDED.phase = 'open' THEN now() END
            WHEN EXCLUDED.phase = 'open' AND drawings.opened_at IS NULL THEN now()
            ELSE drawings.opened_at
          END,
-         -- Terminal, and stamped the same way. Never cleared: a badge that
-         -- flickers back to a start time after saying "ended" is Walmart
-         -- reusing a row, not a window reopening, and un-ending a drawing
-         -- would put a finished lottery back on the board as upcoming.
+         -- Terminal within a cycle. Cleared only by a genuinely new one: a
+         -- start later than this end, or Walmart's live button. A badge that
+         -- flickers back to an old start time is not that, and stays ended.
          ended_at = CASE
+           WHEN $14::boolean THEN NULL
            WHEN EXCLUDED.phase = 'ended' AND drawings.ended_at IS NULL THEN now()
            ELSE drawings.ended_at
-         END
+         END,
+         announced_at     = CASE WHEN $14::boolean THEN now() ELSE drawings.announced_at END,
+         soon_alert_at    = CASE WHEN $14::boolean THEN NULL  ELSE drawings.soon_alert_at END,
+         opened_alert_at  = CASE WHEN $14::boolean THEN NULL  ELSE drawings.opened_alert_at END,
+         closing_alert_at = CASE WHEN $14::boolean THEN NULL  ELSE drawings.closing_alert_at END,
+         -- "I entered" was about last week's drawing, not this one.
+         entered_at       = CASE WHEN $14::boolean THEN NULL  ELSE drawings.entered_at END
        RETURNING *`,
       [
         userId,
@@ -2152,7 +2163,8 @@ async function recordDrawings(db2, userId, retailer, items) {
         String(item.windowLabel ?? "").slice(0, 80),
         String(item.windowText ?? "").slice(0, 120),
         item.windowAt ?? null,
-        franchise
+        franchise,
+        reborn
       ]
     );
     if (rows[0]) out.push({ row: toDrawing(rows[0]), isNew, justOpened });
