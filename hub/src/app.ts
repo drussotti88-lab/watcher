@@ -42,6 +42,7 @@ import {
   type Rooms,
 } from './notify.ts';
 import { applyFilters, dedupe } from './filter.ts';
+import { isWanted } from './franchise.ts';
 import { probeUrl } from './fetcher.ts';
 import {
   hashPassword,
@@ -653,7 +654,8 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
        * page, marked, where a person can look at it in their own time - and
        * the page is honest about holding it rather than quietly short.
        */
-      const ours = (o: store.DrawingOutcome): boolean => o.row.franchise === 'pokemon';
+      // Pokémon and Magic as of 30 Sep; the list lives in franchise.ts.
+      const ours = (o: store.DrawingOutcome): boolean => isWanted(o.row.franchise);
       const held = outcomes.filter((o) => o.isNew && !ours(o)).length;
 
       const opened = outcomes.filter((o) => o.justOpened && ours(o)).map((o) => card(o.row));
@@ -718,7 +720,7 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       // Pokémon only, same as the automatic cards. A repeat button that says
       // more than the thing it is repeating is a trap.
       const live = (await store.liveDrawings(db, userId))
-        .filter((d) => d.goneAt === null && d.endedAt === null && d.franchise === 'pokemon');
+        .filter((d) => d.goneAt === null && d.endedAt === null && isWanted(d.franchise));
       if (live.length === 0) return json({ sent: 0, rooms: 0, note: 'nothing live to say' });
 
       const rooms = roomsFrom(env);

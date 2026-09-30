@@ -39,7 +39,24 @@
  * is handled first and tested by name.
  */
 
-export type Franchise = 'pokemon' | 'other' | 'unknown';
+export type Franchise = 'pokemon' | 'mtg' | 'other' | 'unknown';
+
+/**
+ * The franchises this house wants to hear about.
+ *
+ * Pokémon from the start; Magic: The Gathering added 30 Sep 2026, when a
+ * Walmart drawing that afternoon carried three Reality Fracture products and
+ * this filter would have kept every one of them out of the channel.
+ *
+ * Adding one is a line here and a key in WANTED_RIVALS below. Everything that
+ * decides whether a drawing is announced asks isWanted(), so there is no
+ * second list to forget.
+ */
+export const WANTED: readonly Franchise[] = ['pokemon', 'mtg'];
+
+export function isWanted(f: string | null | undefined): boolean {
+  return (WANTED as readonly string[]).includes(String(f ?? ''));
+}
 
 export interface FranchiseCall {
   franchise: Franchise;
@@ -73,8 +90,6 @@ export function fold(s: string): string {
  */
 const RIVALS: { term: string; brand: string }[] = [
   { term: 'one piece', brand: 'One Piece' },
-  { term: 'magic the gathering', brand: 'Magic: The Gathering' },
-  { term: 'mtg', brand: 'Magic: The Gathering' },
   { term: 'yu gi oh', brand: 'Yu-Gi-Oh!' },
   { term: 'yugioh', brand: 'Yu-Gi-Oh!' },
   { term: 'lorcana', brand: 'Disney Lorcana' },
@@ -111,6 +126,18 @@ const RIVALS: { term: string; brand: string }[] = [
 ];
 
 /**
+ * Other games this house DOES want, each with its own key.
+ *
+ * "wizards of the coast" is deliberately not a term on its own: they publish
+ * Dungeons & Dragons too, and a D&D starter set is not a Magic product.
+ */
+const WANTED_RIVALS: { term: string; brand: string; key: Franchise }[] = [
+  { term: 'magic the gathering', brand: 'Magic: The Gathering', key: 'mtg' },
+  { term: 'mtg', brand: 'Magic: The Gathering', key: 'mtg' },
+  { term: 'secret lair', brand: 'Magic: The Gathering', key: 'mtg' },
+];
+
+/**
  * Words that mean Pokémon without saying Pokémon.
  *
  * Kept short and kept to things no other franchise uses. Set names are safe -
@@ -141,17 +168,37 @@ const POKEMON_MARKERS = [
 export function franchiseOf(title: string): FranchiseCall {
   const hay = ' ' + fold(title) + ' ';
   if (!hay.trim()) return { franchise: 'unknown', brand: '', why: 'no title to read' };
+  const names = (term: string) => hay.includes(' ' + term + ' ') || hay.includes(' ' + term);
+
+  // Every franchise the title names, so a title naming TWO can be refused
+  // rather than resolved by whichever table happened to be read first. A real
+  // product does not name another game in its title; something that does is
+  // not a call this should make quietly.
+  const found: { key: Franchise; brand: string; why: string }[] = [];
 
   for (const r of RIVALS) {
-    if (hay.includes(' ' + r.term + ' ') || hay.includes(' ' + r.term)) {
-      return { franchise: 'other', brand: r.brand, why: 'names ' + r.brand };
+    if (names(r.term)) { found.push({ key: 'other', brand: r.brand, why: 'names ' + r.brand }); break; }
+  }
+  for (const r of WANTED_RIVALS) {
+    if (names(r.term)) { found.push({ key: r.key, brand: r.brand, why: 'names ' + r.brand }); break; }
+  }
+  for (const m of POKEMON_MARKERS) {
+    if (hay.includes(' ' + m)) {
+      found.push({ key: 'pokemon', brand: 'Pokémon', why: 'names "' + m + '"' });
+      break;
     }
   }
 
-  for (const m of POKEMON_MARKERS) {
-    if (hay.includes(' ' + m)) {
-      return { franchise: 'pokemon', brand: 'Pokémon', why: 'names "' + m + '"' };
-    }
+  if (found.length > 1) {
+    return {
+      franchise: 'other',
+      brand: found.map((f) => f.brand).join(' + '),
+      why: 'names more than one franchise: ' + found.map((f) => f.brand).join(', '),
+    };
+  }
+  if (found.length === 1) {
+    const f = found[0]!;
+    return { franchise: f.key, brand: f.brand, why: f.why };
   }
 
   // Named no franchise at all. NOT dropped - see the note at the top. A

@@ -384,13 +384,15 @@ function band(row) {
 }
 
 // src/franchise.ts
+var WANTED = ["pokemon", "mtg"];
+function isWanted(f) {
+  return WANTED.includes(String(f ?? ""));
+}
 function fold3(s) {
   return String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/pok\W*(&#)?233;?\W*mon/g, "pokemon").replace(/\bpokmon\b/g, "pokemon").replace(/[^a-z0-9]+/g, " ").trim();
 }
 var RIVALS = [
   { term: "one piece", brand: "One Piece" },
-  { term: "magic the gathering", brand: "Magic: The Gathering" },
-  { term: "mtg", brand: "Magic: The Gathering" },
   { term: "yu gi oh", brand: "Yu-Gi-Oh!" },
   { term: "yugioh", brand: "Yu-Gi-Oh!" },
   { term: "lorcana", brand: "Disney Lorcana" },
@@ -424,6 +426,11 @@ var RIVALS = [
   { term: "wwe", brand: "WWE" },
   { term: "ufc", brand: "UFC" },
   { term: "formula 1", brand: "Formula 1" }
+];
+var WANTED_RIVALS = [
+  { term: "magic the gathering", brand: "Magic: The Gathering", key: "mtg" },
+  { term: "mtg", brand: "Magic: The Gathering", key: "mtg" },
+  { term: "secret lair", brand: "Magic: The Gathering", key: "mtg" }
 ];
 var POKEMON_MARKERS = [
   "pokemon",
@@ -463,15 +470,36 @@ var POKEMON_MARKERS = [
 function franchiseOf(title) {
   const hay = " " + fold3(title) + " ";
   if (!hay.trim()) return { franchise: "unknown", brand: "", why: "no title to read" };
+  const names = (term) => hay.includes(" " + term + " ") || hay.includes(" " + term);
+  const found = [];
   for (const r of RIVALS) {
-    if (hay.includes(" " + r.term + " ") || hay.includes(" " + r.term)) {
-      return { franchise: "other", brand: r.brand, why: "names " + r.brand };
+    if (names(r.term)) {
+      found.push({ key: "other", brand: r.brand, why: "names " + r.brand });
+      break;
+    }
+  }
+  for (const r of WANTED_RIVALS) {
+    if (names(r.term)) {
+      found.push({ key: r.key, brand: r.brand, why: "names " + r.brand });
+      break;
     }
   }
   for (const m of POKEMON_MARKERS) {
     if (hay.includes(" " + m)) {
-      return { franchise: "pokemon", brand: "Pok\xE9mon", why: 'names "' + m + '"' };
+      found.push({ key: "pokemon", brand: "Pok\xE9mon", why: 'names "' + m + '"' });
+      break;
     }
+  }
+  if (found.length > 1) {
+    return {
+      franchise: "other",
+      brand: found.map((f) => f.brand).join(" + "),
+      why: "names more than one franchise: " + found.map((f) => f.brand).join(", ")
+    };
+  }
+  if (found.length === 1) {
+    const f = found[0];
+    return { franchise: f.key, brand: f.brand, why: f.why };
   }
   return {
     franchise: "unknown",
@@ -2066,7 +2094,7 @@ async function recordDrawings(db2, userId, retailer, items) {
     const justOpened = item.phase === "open" && (isNew || before.phase !== "open");
     const said = String(item.franchise ?? "").trim();
     const read = franchiseOf(String(item.name ?? "")).franchise;
-    const franchise = said === "other" || read === "other" ? "other" : read === "pokemon" && (said === "" || said === "pokemon") ? "pokemon" : "unknown";
+    const franchise = said === "other" || read === "other" ? "other" : isWanted(read) && (said === "" || said === read) ? read : "unknown";
     const rows = await db2.query(
       `INSERT INTO drawings
          (user_id, retailer, external_id, name, url, image_url, price, order_limit,
@@ -2166,7 +2194,7 @@ async function claimOpeningDrawings(db2, userId, withinMinutes = 30) {
            -- The channel this lands in exists to mean Pok\xE9mon. A row whose
            -- title named no franchise is held for a person to look at, not
            -- counted down to.
-           AND franchise = 'pokemon'
+           AND franchise = ANY($3::text[])
            -- A finished window is not counted down to, in either direction.
            AND ended_at IS NULL
            AND opened_at IS NULL
@@ -2178,7 +2206,7 @@ async function claimOpeningDrawings(db2, userId, withinMinutes = 30) {
            AND window_at <= now() + ($2 || ' minutes')::interval
       )
       RETURNING *`,
-    [userId, Math.max(1, Math.round(withinMinutes))]
+    [userId, Math.max(1, Math.round(withinMinutes)), [...WANTED]]
   );
   return rows.map(toDrawing);
 }
@@ -2190,7 +2218,7 @@ async function claimClosingDrawings(db2, userId, withinMinutes = 60) {
          WHERE user_id = $1
            AND gone_at IS NULL
            AND entered_at IS NULL
-           AND franchise = 'pokemon'
+           AND franchise = ANY($3::text[])
            -- A finished window is not counted down to, in either direction.
            AND ended_at IS NULL
            AND opened_at IS NOT NULL
@@ -2200,7 +2228,7 @@ async function claimClosingDrawings(db2, userId, withinMinutes = 60) {
            AND window_at <= now() + ($2 || ' minutes')::interval
       )
       RETURNING *`,
-    [userId, Math.max(1, Math.round(withinMinutes))]
+    [userId, Math.max(1, Math.round(withinMinutes)), [...WANTED]]
   );
   return rows.map(toDrawing);
 }
@@ -9587,7 +9615,9 @@ function renderDraws() {
      * filtered. If this appears on something that IS Pok\xE9mon, the tables are
      * wrong and that is worth telling me.
      */
-    if (d.franchise && d.franchise !== 'pokemon') {
+    // Pok\xE9mon and Magic are announced; the list lives in franchise.ts, and
+    // this is its browser-side mirror because the page cannot import it.
+    if (d.franchise && ['pokemon', 'mtg'].indexOf(d.franchise) < 0) {
       const p = el('span', 'pill overmsrp', 'not announced - unrecognised franchise');
       p.title = 'Stored and shown here, kept out of Discord. Nothing in the ' +
         'title said which game this is.';
@@ -12122,7 +12152,7 @@ function createHandler(db2, env2) {
         windowLabel: r.windowLabel,
         windowAt: r.windowAt
       });
-      const ours = (o) => o.row.franchise === "pokemon";
+      const ours = (o) => isWanted(o.row.franchise);
       const held = outcomes.filter((o) => o.isNew && !ours(o)).length;
       const opened = outcomes.filter((o) => o.justOpened && ours(o)).map((o) => card(o.row));
       const announced = outcomes.filter((o) => o.isNew && ours(o) && !o.justOpened && o.row.phase === "announced").map((o) => card(o.row));
@@ -12151,7 +12181,7 @@ function createHandler(db2, env2) {
       if (!env2.DISCORD_WEBHOOK_URL) {
         return json({ error: "no Discord webhook is configured", sent: 0 }, 400);
       }
-      const live = (await liveDrawings(db2, userId)).filter((d) => d.goneAt === null && d.endedAt === null && d.franchise === "pokemon");
+      const live = (await liveDrawings(db2, userId)).filter((d) => d.goneAt === null && d.endedAt === null && isWanted(d.franchise));
       if (live.length === 0) return json({ sent: 0, rooms: 0, note: "nothing live to say" });
       const rooms = roomsFrom(env2);
       const cards = live.map((r) => ({
