@@ -3246,12 +3246,36 @@ export async function recordDrawings(
     const externalId = String(item.externalId ?? '').trim();
     if (!externalId) continue;
 
-    const [before] = await db.query<{ phase: string; opened_at: unknown }>(
-      `SELECT phase, opened_at FROM drawings
+    const [before] = await db.query<{ phase: string; opened_at: unknown; ended_at: unknown }>(
+      `SELECT phase, opened_at, ended_at FROM drawings
         WHERE user_id = $1 AND retailer = $2 AND external_id = $3`,
       [userId, retailer, externalId],
     );
-    const isNew = before === undefined;
+
+    /*
+     * ── The same item, a NEW drawing ─────────────────────────────────────────
+     *
+     * Walmart reuses an item id for a later drawing. Measured 30 Sep 2026: the
+     * 30th Celebration Knock Out Collection bundle ended on 23 Sep, and the
+     * same item id came back announced for 30 Sep at 2pm PDT. The 25 Sep
+     * version of this function had made "ended" permanent - on the theory that
+     * a start time reappearing after an end was a badge flickering - so the new
+     * drawing was hidden from the board, excluded from the opens-soon alert,
+     * and never announced. That theory was wrong.
+     *
+     * What still guards the flicker it was worried about: a new cycle needs a
+     * start LATER than the old end, or Walmart's own live-button flag. A badge
+     * bouncing back to last week's start time is not later than last week's
+     * end, and stays ended.
+     */
+    const endedAt = before?.ended_at ? Date.parse(String(before.ended_at)) : null;
+    const reborn = endedAt !== null && (
+      item.phase === 'open' ||
+      (item.phase === 'announced' && !!item.windowAt && Date.parse(item.windowAt) > endedAt)
+    );
+
+    // A new cycle is new: it is announced, counted down to and opened afresh.
+    const isNew = before === undefined || reborn;
     const justOpened = item.phase === 'open' && (isNew || before!.phase !== 'open');
 
     /*
@@ -3313,19 +3337,28 @@ export async function recordDrawings(
          -- Back on the page is back. A carousel pulled for ten minutes during
          -- an edit must not permanently retire a drawing still to come.
          gone_at = NULL,
-         -- The edge, stamped once and never re-stamped.
+         -- The edge, stamped once per cycle. $14 is "this is a new drawing on
+         -- an old item id" - see the note above the query - and a new cycle
+         -- starts its stamps from nothing.
          opened_at = CASE
+           WHEN $14::boolean THEN CASE WHEN EXCLUDED.phase = 'open' THEN now() END
            WHEN EXCLUDED.phase = 'open' AND drawings.opened_at IS NULL THEN now()
            ELSE drawings.opened_at
          END,
-         -- Terminal, and stamped the same way. Never cleared: a badge that
-         -- flickers back to a start time after saying "ended" is Walmart
-         -- reusing a row, not a window reopening, and un-ending a drawing
-         -- would put a finished lottery back on the board as upcoming.
+         -- Terminal within a cycle. Cleared only by a genuinely new one: a
+         -- start later than this end, or Walmart's live button. A badge that
+         -- flickers back to an old start time is not that, and stays ended.
          ended_at = CASE
+           WHEN $14::boolean THEN NULL
            WHEN EXCLUDED.phase = 'ended' AND drawings.ended_at IS NULL THEN now()
            ELSE drawings.ended_at
-         END
+         END,
+         announced_at     = CASE WHEN $14::boolean THEN now() ELSE drawings.announced_at END,
+         soon_alert_at    = CASE WHEN $14::boolean THEN NULL  ELSE drawings.soon_alert_at END,
+         opened_alert_at  = CASE WHEN $14::boolean THEN NULL  ELSE drawings.opened_alert_at END,
+         closing_alert_at = CASE WHEN $14::boolean THEN NULL  ELSE drawings.closing_alert_at END,
+         -- "I entered" was about last week's drawing, not this one.
+         entered_at       = CASE WHEN $14::boolean THEN NULL  ELSE drawings.entered_at END
        RETURNING *`,
       [
         userId, retailer, externalId,
@@ -3339,6 +3372,7 @@ export async function recordDrawings(
         String(item.windowText ?? '').slice(0, 120),
         item.windowAt ?? null,
         franchise,
+        reborn,
       ],
     );
     if (rows[0]) out.push({ row: toDrawing(rows[0]), isNew, justOpened });
