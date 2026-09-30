@@ -1891,9 +1891,11 @@ test('A CLIENT CLAIMING POKEMON ON A ONE PIECE TITLE IS NOT BELIEVED', async () 
 });
 
 test('THE OPENS-SOON ALERT DOES NOT COUNT DOWN TO SOMEBODY ELSE\'S GAME', async () => {
+  // Was Magic until 30 Sep, when Magic became one of ours. One Piece is still
+  // somebody else's.
   const db = await TestDb.create();
   await store.recordDrawings(db, USER, 'Walmart', [
-    { externalId: 'mtg', name: 'Magic The Gathering Foundations Box', phase: 'announced',
+    { externalId: 'op', name: 'One Piece Card Game OP-09 Booster Box', phase: 'announced',
       windowLabel: 'Drawing starts', windowText: 'soon',
       windowAt: new Date(Date.now() + 20 * 60000).toISOString() },
   ]);
@@ -2272,4 +2274,55 @@ test('THE BLIND CARD SAYS NOTHING IS WATCHING, AND TO LOOK BY HAND', async () =>
   assert.equal(card.title, 'TARGET: PHANTOM IS BLIND');
   assert.match(card.description, /nothing is watching it/i);
   assert.match(card.description, /check by hand/i);
+});
+
+// ── Magic is one of ours now ─────────────────────────────────────────────────
+
+test('A MAGIC DRAWING IS ANNOUNCED, AND COUNTED DOWN TO, LIKE A POKEMON ONE', async () => {
+  // 30 Sep 2026: that afternoon's Walmart drawing carried three Reality
+  // Fracture products, and the filter would have kept every one of them out of
+  // the channel. Their real titles, as the drawings page wrote them.
+  const { franchiseOf } = await import('../src/franchise.ts');
+  for (const name of [
+    'Magic: The Gathering Reality Fracture Secret Lair Bundle',
+    'Wizards of The Coast - Magic: The Gathering Reality Fracture - Collector Booster',
+    'Wizards of The Coast - Magic: The Gathering Reality Fracture - Collector Booster Box',
+  ]) {
+    assert.equal(franchiseOf(name).franchise, 'mtg', name);
+  }
+
+  const db = await TestDb.create();
+  const res = await call(db, 'POST', '/api/drawings', {
+    retailer: 'Walmart',
+    drawings: [{
+      externalId: 'rf-cbb', phase: 'announced',
+      name: 'Wizards of The Coast - Magic: The Gathering Reality Fracture - Collector Booster Box',
+      windowLabel: 'Drawing starts', windowText: 'soon',
+      windowAt: new Date(Date.now() + 20 * 60000).toISOString(),
+    }],
+  });
+  assert.equal(res.body.announced, 1, 'said out loud');
+  assert.equal(res.body.held, 0, 'not held back');
+  const [row] = await store.liveDrawings(db, USER);
+  assert.equal(row?.franchise, 'mtg');
+  // And the opens-soon alert counts down to it. (The announce above already
+  // claimed nothing: soon is claimed on its own clock.)
+  const db2 = await TestDb.create();
+  await store.recordDrawings(db2, USER, 'Walmart', [{
+    externalId: 'rf-cb', phase: 'announced',
+    name: 'Magic: The Gathering Reality Fracture Collector Booster',
+    windowLabel: 'Drawing starts', windowText: 'soon',
+    windowAt: new Date(Date.now() + 20 * 60000).toISOString(),
+  }]);
+  assert.equal((await store.claimOpeningDrawings(db2, USER, 30)).length, 1);
+});
+
+test('D&D IS NOT MAGIC, AND TOYS ARE STILL NOT CARDS', async () => {
+  const { franchiseOf } = await import('../src/franchise.ts');
+  // Wizards of the Coast publish Dungeons & Dragons too.
+  assert.equal(franchiseOf('Wizards of the Coast Dungeons & Dragons Starter Set').franchise, 'unknown');
+  // The rest of that afternoon's carousel.
+  assert.equal(franchiseOf('NeeDoh Nice Cube Squish Toy, (1 Random Color)').franchise, 'unknown');
+  // A title naming two games is still refused rather than guessed.
+  assert.equal(franchiseOf('Pokemon vs Magic The Gathering Collector Bundle').franchise, 'other');
 });

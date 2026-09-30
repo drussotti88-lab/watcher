@@ -24,7 +24,7 @@ import type { Sql, Statement } from './db.ts';
 import type { Discovered, SourceRow, SourceConfig } from './types.ts';
 import { productKey } from './parsers/identify.ts';
 import { currentCatalogue, eraOf, band, namesRetiredSeries, type Era } from './era.ts';
-import { franchiseOf } from './franchise.ts';
+import { franchiseOf, isWanted, WANTED } from './franchise.ts';
 
 /** Postgres hands NUMERIC back as a string. Never let that leak upwards. */
 function toPrice(v: unknown): number | null {
@@ -3280,7 +3280,7 @@ export async function recordDrawings(
      * trusted to shout.
      */
     const franchise = said === 'other' || read === 'other' ? 'other'
-      : read === 'pokemon' && (said === '' || said === 'pokemon') ? 'pokemon'
+      : isWanted(read) && (said === '' || said === read) ? read
       : 'unknown';
 
     const rows = await db.query(
@@ -3438,7 +3438,7 @@ export async function claimOpeningDrawings(
            -- The channel this lands in exists to mean Pokémon. A row whose
            -- title named no franchise is held for a person to look at, not
            -- counted down to.
-           AND franchise = 'pokemon'
+           AND franchise = ANY($3::text[])
            -- A finished window is not counted down to, in either direction.
            AND ended_at IS NULL
            AND opened_at IS NULL
@@ -3450,7 +3450,7 @@ export async function claimOpeningDrawings(
            AND window_at <= now() + ($2 || ' minutes')::interval
       )
       RETURNING *`,
-    [userId, Math.max(1, Math.round(withinMinutes))],
+    [userId, Math.max(1, Math.round(withinMinutes)), [...WANTED]],
   );
   return rows.map(toDrawing);
 }
@@ -3477,7 +3477,7 @@ export async function claimClosingDrawings(
          WHERE user_id = $1
            AND gone_at IS NULL
            AND entered_at IS NULL
-           AND franchise = 'pokemon'
+           AND franchise = ANY($3::text[])
            -- A finished window is not counted down to, in either direction.
            AND ended_at IS NULL
            AND opened_at IS NOT NULL
@@ -3487,7 +3487,7 @@ export async function claimClosingDrawings(
            AND window_at <= now() + ($2 || ' minutes')::interval
       )
       RETURNING *`,
-    [userId, Math.max(1, Math.round(withinMinutes))],
+    [userId, Math.max(1, Math.round(withinMinutes)), [...WANTED]],
   );
   return rows.map(toDrawing);
 }

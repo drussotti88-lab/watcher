@@ -5718,7 +5718,9 @@ function renderDraws() {
      * filtered. If this appears on something that IS Pokémon, the tables are
      * wrong and that is worth telling me.
      */
-    if (d.franchise && d.franchise !== 'pokemon') {
+    // Pokémon and Magic are announced; the list lives in franchise.ts, and
+    // this is its browser-side mirror because the page cannot import it.
+    if (d.franchise && ['pokemon', 'mtg'].indexOf(d.franchise) < 0) {
       const p = el('span', 'pill overmsrp', 'not announced - unrecognised franchise');
       p.title = 'Stored and shown here, kept out of Discord. Nothing in the ' +
         'title said which game this is.';
