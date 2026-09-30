@@ -89,6 +89,22 @@ test('"Sep 16, 2:00pm PDT" IS AN INSTANT, IN THE ZONE WALMART NAMED', () => {
   assert.equal(parseDrawWhen('Feb 2, 2:00pm PST', january), '2027-02-02T22:00:00.000Z');
 });
 
+test('"today, 3:00pm PDT" IS AN INSTANT TOO - TODAY WHERE WALMART SAID', () => {
+  // 30 Sep 2026: the open badge read "Drawing ends today, 3:00pm PDT", this
+  // returned null, the Hub kept the 2pm start as the window, and the
+  // "closes soon" reminder had nothing to count down to.
+  const afternoon = Date.parse('2026-09-30T21:04:00.000Z'); // 2:04pm in LA
+  assert.equal(parseDrawWhen('today, 3:00pm PDT', afternoon), '2026-09-30T22:00:00.000Z');
+  assert.equal(parseDrawWhen('Today at 3pm PDT', afternoon), '2026-09-30T22:00:00.000Z');
+  assert.equal(parseDrawWhen('tomorrow, 9:00am PDT', afternoon), '2026-10-01T16:00:00.000Z');
+  // 5:30 UTC on 1 Oct is still 30 Sep in Los Angeles. "Today" is theirs.
+  const lateInLA = Date.parse('2026-10-01T05:30:00.000Z');
+  assert.equal(parseDrawWhen('today, 11:00pm PDT', lateInLA), '2026-10-01T06:00:00.000Z');
+  // Same rules as the dated form: no zone, no guess.
+  assert.equal(parseDrawWhen('today, 3:00pm', afternoon), null);
+  assert.equal(parseDrawWhen('today', afternoon), null);
+});
+
 test('AN UNREADABLE TIME IS NULL, NEVER A GUESS', () => {
   // Null means the caller shows Walmart's own words, which are never wrong.
   assert.equal(parseDrawWhen('', BEFORE), null);
@@ -193,8 +209,21 @@ test('THE HOUR BEFORE A START IS THE ONLY PART THAT IS TIME-SENSITIVE', () => {
   // to infer one from the other, so the watcher keeps looking.
   assert.equal(drawInterval([row()], start + 20 * 60_000), 120);
   assert.equal(drawInterval([row()], start + 5 * 3600_000), 1800, 'but not forever');
-  // Open is open, whatever the clock says.
-  assert.equal(drawInterval([row({ phase: 'open', windowAt: null })], BEFORE), 120);
+  // Open is open, whatever the clock says - and once open there is no hurry.
+  // 30 Sep 2026: two-minute reads through an open window got the page a
+  // press-and-hold six minutes in, and the rest of the window went unwatched.
+  assert.equal(drawInterval([row({ phase: 'open', windowAt: null })], BEFORE), 600);
+  const end = Date.parse('2026-09-30T22:00:00.000Z');
+  assert.equal(
+    drawInterval([row({ phase: 'open', windowAt: new Date(end).toISOString() })], end - 20 * 60_000),
+    600,
+    'an open window\'s time is its END - not a start to hurry towards',
+  );
+  // But an open window does not slow down a different one about to start.
+  assert.equal(
+    drawInterval([row({ phase: 'open', windowAt: null }), row()], start - 30 * 60_000),
+    120,
+  );
 });
 
 test('NEWS IS THE EDGE, NOT THE STATE', () => {
