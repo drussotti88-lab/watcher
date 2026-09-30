@@ -211,6 +211,57 @@ export function queueScope(reason: string): 'site' | 'item' {
 }
 
 /**
+ * A wall served on the DATA calls, while the page itself renders fine.
+ *
+ * ── Measured 30 Sep 2026 ────────────────────────────────────────────────────
+ *
+ * From 29 Sep ~10am CT Target reads began failing, reaching 100% by 2pm and
+ * staying there for sixteen hours. The page loaded normally - right title,
+ * right text, nothing any pattern above could see - but the calls that carry
+ * the product came back as this instead:
+ *
+ *   {"appId":"PXGWPp4wUS",
+ *    "blockScript":"https://captcha.px-cdn.net/PXGWPp4wUS/captcha.js?...",
+ *    "hostUrl":"https://collector-PXGWPp4wUS.perimeterx.net", ...}
+ *
+ * PerimeterX, Target's bot scoring, answering with a captcha. The same call in
+ * a fresh browser profile carried the product, price and fulfillment; in
+ * Phantom's profile, the block. So it was a wall, and because nothing looked
+ * at API bodies it was logged as a PARSER failure - "no product node" - which
+ * meant the pacer never stood down and the wall alert never fired. Phantom
+ * kept reading into it every few minutes for sixteen hours, which is exactly
+ * how a bad reputation stays bad.
+ *
+ * ── What counts ─────────────────────────────────────────────────────────────
+ *
+ * Narrow on purpose: a `blockScript` that points at a captcha or at
+ * PerimeterX's own hosts, next to an app id or a PerimeterX host. A product
+ * body never carries that pair. The akamai lesson at the top of this file is
+ * why this is not "any response mentioning perimeterx" - the collector
+ * scripts load on every healthy Target page too.
+ *
+ * Detecting it is the whole job. Nothing here, or anywhere else in this
+ * program, will answer the captcha; that is a person's.
+ */
+export function detectApiBlock(bodies: readonly unknown[]): Challenge {
+  for (const body of bodies) {
+    if (body === null || typeof body !== 'object' || Array.isArray(body)) continue;
+    const b = body as Record<string, unknown>;
+    const script = String(b.blockScript ?? '');
+    if (!script) continue;
+    const scriptIsWall = /captcha|px-cdn\.net|perimeterx/i.test(script);
+    const vendor =
+      /^PX/i.test(String(b.appId ?? '')) ||
+      /perimeterx|px-cloud|px-client/i.test(String(b.hostUrl ?? '')) ||
+      /perimeterx|px-cdn/i.test(String(b.jsClientSrc ?? ''));
+    if (scriptIsWall && vendor) {
+      return { challenged: true, reason: 'Bot check on the product data (PerimeterX)' };
+    }
+  }
+  return { challenged: false, reason: '' };
+}
+
+/**
  * Is this a challenge page rather than a real one?
  *
  * Title and visible text carry every pattern that describes something a person

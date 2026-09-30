@@ -2202,3 +2202,74 @@ test('A POKEMON CENTER CARD LANDS IN THE POKEMON CENTER ROOM', async () => {
   const pkc = groups.find((g) => g.url === 'http://127.0.0.1:1/pkc');
   assert.deepEqual(pkc!.items.map((i) => i.name), ['b', 'd'], 'both spellings, one post');
 });
+
+// ── A shop Phantom cannot see, for a reason nobody recognised ────────────────
+
+const failed = (n: number, retailer = 'Target') =>
+  Array.from({ length: n }, () => ({
+    kind: 'check' as const, level: 'error' as const, retailer, state: 'unknown',
+    message: 'failed: no product node for tcin 1010892076 in 17 captured responses',
+  }));
+
+test('EVERY READ FAILING FOR HALF AN HOUR IS BLINDNESS, WHATEVER THE CAUSE', async () => {
+  // 29-30 Sep: the wall was on the data calls, the detector saw a normal page,
+  // and sixteen hours of failures went out as parser errors to nobody. This
+  // does not need to know why.
+  const db = await TestDb.create();
+  await store.recordActivity(db, USER, failed(10));
+  assert.deepEqual(await store.blindShops(db, USER), [{ retailer: 'Target', checks: 10 }]);
+
+  // One real reading in the window and it is not blind — just having a bad time.
+  const db2 = await TestDb.create();
+  await store.recordActivity(db2, USER, [
+    ...failed(10),
+    { kind: 'check', level: 'info', retailer: 'Target', state: 'out', message: 'out at $69.99' },
+  ]);
+  assert.deepEqual(await store.blindShops(db2, USER), []);
+});
+
+test('TOO FEW CHECKS TO TELL, AND WALLS THE OTHER ALERT OWNS, ARE NOT BLINDNESS', async () => {
+  const db = await TestDb.create();
+  await store.recordActivity(db, USER, failed(3));
+  assert.deepEqual(await store.blindShops(db, USER), [], 'three failures on a resting cadence is one bad minute');
+
+  // A recognised wall already has its own card. Counting it here would say the
+  // same thing twice in two voices.
+  const db2 = await TestDb.create();
+  await store.recordActivity(db2, USER, Array.from({ length: 12 }, () => ({
+    kind: 'check' as const, level: 'warn' as const, retailer: 'Target', state: 'unknown',
+    message: 'blocked: Bot check on the product data (PerimeterX)',
+  })));
+  assert.deepEqual(await store.blindShops(db2, USER), []);
+});
+
+test('BLINDNESS REACHES THE PHONE ONCE AN HOUR, NOT ONCE A PASS', async () => {
+  const db = await TestDb.create();
+  const posted: string[] = [];
+  const real = globalThis.fetch;
+  globalThis.fetch = (async (input: any, init?: any) => {
+    const url = String(typeof input === 'string' ? input : input.url);
+    if (url.startsWith('http://127.0.0.1:1/')) { posted.push(url); return new Response('', { status: 204 }); }
+    return real(input, init);
+  }) as typeof fetch;
+  try {
+    const first = await callWith(db, { DISCORD_WEBHOOK_URL: MAIN_ROOM }, 'POST', '/api/activity',
+      { lines: failed(9) });
+    assert.equal(first.status, 200);
+    assert.equal(posted.length, 1, 'told');
+
+    posted.length = 0;
+    await callWith(db, { DISCORD_WEBHOOK_URL: MAIN_ROOM }, 'POST', '/api/activity', { lines: failed(3) });
+    assert.equal(posted.length, 0, 'and not again ninety seconds later');
+  } finally {
+    globalThis.fetch = real;
+  }
+});
+
+test('THE BLIND CARD SAYS NOTHING IS WATCHING, AND TO LOOK BY HAND', async () => {
+  const { buildBlindEmbed } = await import('../src/notify.ts');
+  const card = buildBlindEmbed({ retailer: 'Target', checks: 61, minutes: 30 }, new Date().toISOString());
+  assert.equal(card.title, 'TARGET: PHANTOM IS BLIND');
+  assert.match(card.description, /nothing is watching it/i);
+  assert.match(card.description, /check by hand/i);
+});

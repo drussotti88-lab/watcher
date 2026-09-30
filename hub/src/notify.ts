@@ -865,6 +865,47 @@ export async function announceWalls(
   await post(webhookUrl, walls.slice(0, 3).map((w) => buildWallEmbed(w, now)));
 }
 
+/**
+ * Phantom cannot see this shop, and does not know why.
+ *
+ * The companion to the wall card, for the walls nobody has taught it to
+ * recognise yet. Said as blindness rather than as an outage, because that is
+ * the part that matters to the reader: whatever is happening at this shop
+ * right now, nothing is watching it.
+ */
+export interface BlindItem {
+  retailer: string;
+  checks: number;
+  minutes: number;
+}
+
+export function buildBlindEmbed(i: BlindItem, now: string): Embed {
+  const home = SHOP_HOME[i.retailer] ?? '';
+  return {
+    title: `${(i.retailer || 'A SHOP').toUpperCase()}: PHANTOM IS BLIND`,
+    ...(home ? { url: home } : {}),
+    description:
+      `**Every read of this shop has failed for the last ${i.minutes} minutes** ` +
+      `(${i.checks} checks), and none of it looked like a wall the detector knows.\n\n` +
+      'Whatever is live there right now, nothing is watching it. **Check by hand** ' +
+      'if you are expecting stock. The usual causes are a new kind of bot check or ' +
+      'the shop changing its pages - either way it needs a person to look.',
+    color: COLOR_WALL,
+    fields: [
+      inline('Shop', i.retailer || '\u2014'),
+      inline('Failed reads', String(i.checks)),
+      inline('For at least', `${i.minutes} min`),
+    ],
+    footer: { text: 'Said once an hour while it lasts, so it cannot be mistaken for a quiet day.' },
+    timestamp: now,
+  };
+}
+
+export async function announceBlind(webhookUrl: string, items: BlindItem[], now: string): Promise<void> {
+  if (items.length === 0) return;
+  await post(webhookUrl, items.slice(0, 3).map((i) => buildBlindEmbed(i, now)));
+}
+
 export async function announceQueues(
   webhookUrl: string,
   sightings: { retailer: string; at: string }[],

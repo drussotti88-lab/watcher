@@ -4185,6 +4185,86 @@ export function isQueueLine(message: unknown): boolean {
   return /waiting room/i.test(m) || m.startsWith('QUEUE:');
 }
 
+/**
+ * A shop Phantom can no longer see, for any reason at all.
+ *
+ * ── Why this exists alongside the wall alert ────────────────────────────────
+ *
+ * The wall alert only fires for walls the detector RECOGNISES. On 29 Sep 2026
+ * Target started answering Phantom's product calls with a PerimeterX captcha
+ * while the page itself rendered normally; the detector could not see it, every
+ * read was logged as a parser failure, and for sixteen hours the channel was
+ * silent - through a morning when Target was popping stock. A silent channel
+ * meant both "nothing is happening" and "your watcher is blind", and those
+ * must never look the same.
+ *
+ * So this does not care WHY. If every check of a shop in the last half hour
+ * failed to produce a real reading, and none of them was a wall the other
+ * alert already covered, the shop is blind and a person should know. The next
+ * wall will not look like this one; this catches it anyway.
+ *
+ * Eight checks minimum, so a shop read twice in half an hour on a resting
+ * cadence cannot trip it on one bad minute.
+ */
+export const BLIND_WINDOW_MIN = 30;
+export const BLIND_MIN_CHECKS = 8;
+export const BLIND_ALERT_COOLDOWN_MIN = 60;
+
+export async function blindShops(
+  db: Sql,
+  userId: number,
+  minutes = BLIND_WINDOW_MIN,
+): Promise<{ retailer: string; checks: number }[]> {
+  const rows = await db.query<{ retailer: string; n: string }>(
+    `SELECT retailer, count(*)::text AS n
+       FROM activity
+      WHERE user_id = $1
+        AND kind = 'check'
+        AND retailer <> ''
+        AND at > now() - ($2 || ' minutes')::interval
+        AND message NOT LIKE 'blocked:%'
+      GROUP BY retailer
+     HAVING count(*) >= $3
+        AND count(*) FILTER (WHERE state NOT IN ('', 'unknown')) = 0`,
+    [userId, String(minutes), BLIND_MIN_CHECKS],
+  );
+  return rows.map((r) => ({ retailer: r.retailer, checks: Number(r.n) }));
+}
+
+/** Shops already reported blind within the cooldown. The Hub's own notes. */
+export async function blindAlertedRecently(
+  db: Sql,
+  userId: number,
+  minutes = BLIND_ALERT_COOLDOWN_MIN,
+): Promise<Set<string>> {
+  const rows = await db.query<{ retailer: string }>(
+    `SELECT DISTINCT retailer FROM activity
+      WHERE user_id = $1 AND kind = 'hub' AND message LIKE 'BLIND:%'
+        AND at > now() - ($2 || ' minutes')::interval`,
+    [userId, String(minutes)],
+  );
+  return new Set(rows.map((r) => r.retailer));
+}
+
+/**
+ * Written down when the alert goes out: it is the cooldown, and it is the
+ * record. Kind 'hub' because it is the Hub speaking, not Phantom.
+ */
+export async function noteBlindAlert(
+  db: Sql,
+  userId: number,
+  retailer: string,
+  checks: number,
+): Promise<void> {
+  await recordActivity(db, userId, [{
+    kind: 'hub',
+    level: 'warn',
+    retailer,
+    message: `BLIND: every ${retailer} read failed for ${BLIND_WINDOW_MIN}+ min ` +
+      `(${checks} checks) - told Discord`,
+  }]);
+}
+
 /** How long a shop gets to be walled before it is mentioned again. */
 export const WALL_ALERT_COOLDOWN_MIN = 20;
 

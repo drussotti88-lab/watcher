@@ -30,6 +30,7 @@ import {
   announceBought,
   announceQueues,
   announceWalls,
+  announceBlind,
   announceReport,
   announceStaged,
   announceStock,
@@ -1596,6 +1597,41 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
             roomsFrom(env),
             (url, group) => announceWalls(url, group, new Date().toISOString()),
           ).catch(() => {});
+        }
+
+        /*
+         * ── And a shop that has gone blind for a reason nobody recognised ──
+         *
+         * Sixteen hours on 29-30 Sep: every Target read failed, the wall
+         * detector saw nothing because the wall was on the data calls, and the
+         * channel said nothing through a morning of stock. See blindShops.
+         *
+         * Asked only when this batch has a failed check in it, for the same
+         * hot-path reason the wall query is gated: most batches are healthy
+         * and should cost nothing extra.
+         */
+        const failedCheck = lines.some((l) =>
+          l.kind === 'check' &&
+          !['in', 'out', 'in_stock', 'staged'].includes(String(l.state ?? '')) &&
+          !store.isWallLine(l.message));
+        if (failedCheck) {
+          try {
+            const blind = await store.blindShops(db, userId);
+            if (blind.length > 0) {
+              const told = await store.blindAlertedRecently(db, userId);
+              const fresh = blind.filter((b) => !told.has(b.retailer));
+              if (fresh.length > 0) {
+                await toRooms(
+                  fresh.map((b) => ({ ...b, minutes: store.BLIND_WINDOW_MIN })),
+                  roomsFrom(env),
+                  (url, group) => announceBlind(url, group, new Date().toISOString()),
+                );
+                for (const b of fresh) await store.noteBlindAlert(db, userId, b.retailer, b.checks);
+              }
+            }
+          } catch {
+            /* an alert that fails must not fail the ingest it rode in on */
+          }
         }
       }
 
