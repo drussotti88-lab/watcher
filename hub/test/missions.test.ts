@@ -1991,6 +1991,60 @@ test('A WAITING ROOM IS NOT A WALL, AND WINS WHEN BOTH ARRIVE', async () => {
   }
 });
 
+test('A WALL IS SAID ONCE PER EPISODE, THEN TWICE A DAY - NOT EVERY PROBE', async () => {
+  // 29 Sep - 1 Oct 2026: Phantom rests a walled shop 20 minutes and the
+  // cooldown was 20 minutes, so every probe re-announced the same PerimeterX
+  // check. Two days of a card every twenty minutes.
+  const db = await TestDb.create();
+  const titles: string[] = [];
+  const real = globalThis.fetch;
+  globalThis.fetch = (async (input: any, init?: any) => {
+    const url = String(typeof input === 'string' ? input : input.url);
+    if (url.startsWith('http://127.0.0.1:1/')) {
+      for (const e of JSON.parse(String(init?.body ?? '{}')).embeds ?? []) titles.push(String(e.title));
+      return new Response('', { status: 204 });
+    }
+    return real(input, init);
+  }) as typeof fetch;
+  const wall = () => callWith(db, { DISCORD_WEBHOOK_URL: MAIN_ROOM }, 'POST', '/api/activity', {
+    lines: [{ kind: 'check', retailer: 'Target', message: 'blocked: Bot check on the product data (PerimeterX), 20m' }],
+  });
+  try {
+    await wall();
+    assert.deepEqual(titles, ['TARGET PUT A HUMAN CHECK UP']);
+
+    // Twenty minutes later, the next probe, same wall: nothing.
+    await db.query(`UPDATE activity SET at = at - interval '20 minutes' WHERE user_id = $1`, [USER]);
+    await wall();
+    assert.equal(titles.length, 1, 'the next probe of the same wall says nothing');
+
+    // Thirteen hours in and still walled: one reminder, and it says STILL.
+    await db.query(
+      `UPDATE activity SET at = now() - interval '13 hours' WHERE user_id = $1 AND message LIKE 'WALL:%'`,
+      [USER],
+    );
+    await wall();
+    assert.deepEqual(titles.slice(1), ['TARGET STILL HAS A HUMAN CHECK UP']);
+    await wall();
+    assert.equal(titles.length, 2, 'and the reminder is not repeated on the next probe');
+
+    // The wall lifted (three quiet hours), then a new one: a new episode.
+    await db.query(`UPDATE activity SET at = now() - interval '3 hours' WHERE user_id = $1`, [USER]);
+    await wall();
+    assert.deepEqual(titles.slice(2), ['TARGET PUT A HUMAN CHECK UP']);
+  } finally {
+    globalThis.fetch = real;
+  }
+});
+
+test('A CARD\'S TIME IS DISCORD\'S OWN TAG, SHOWN IN THE READER\'S ZONE', async () => {
+  // toLocaleTimeString ran on Vercel, in UTC: a wall at 9:29am in Chicago
+  // said "2:29:10 PM".
+  const { discordTime } = await import('../src/notify.ts');
+  assert.equal(discordTime('2026-10-01T14:29:10.000Z'), '<t:1790864950:t>');
+  assert.equal(discordTime(''), 'just now');
+});
+
 test('THE WALL CARD DOES NOT CRY DROP, AND SAYS WHOSE JOB THE CHECK IS', async () => {
   // A wall is not a drop signal: shops raise defences at drop time AND when a
   // browser simply looks wrong, and one page cannot tell those apart. An alert

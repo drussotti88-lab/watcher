@@ -778,7 +778,7 @@ export function buildQueueEmbed(retailer: string, at: string, now: string): Embe
     color: COLOR_QUEUE,
     fields: [
       inline('Shop', retailer || '—'),
-      inline('Seen', at ? new Date(at).toLocaleTimeString('en-US') : 'just now'),
+      inline('Seen', discordTime(at)),
       inline('Product pages', 'will say sold out — ignore that'),
     ],
     footer: {
@@ -825,20 +825,33 @@ export interface WallItem {
   reason?: string;
   /** Minutes this shop is being rested, when the watcher said. */
   restingMinutes?: number | null;
+  /** The twice-a-day reminder for a wall that has not lifted. */
+  still?: boolean;
+}
+
+/**
+ * A time as Discord's own timestamp tag, which every reader's app shows in
+ * THEIR zone. `toLocaleTimeString` ran on Vercel, in UTC, so a wall seen at
+ * 9:29am in Chicago said "2:29:10 PM" on the card.
+ */
+export function discordTime(iso: string | null | undefined): string {
+  const ms = Date.parse(String(iso ?? ''));
+  return Number.isFinite(ms) ? `<t:${Math.floor(ms / 1000)}:t>` : 'just now';
 }
 
 export function buildWallEmbed(i: WallItem, now: string): Embed {
   const home = SHOP_HOME[i.retailer] ?? '';
   const fields = [
     inline('Shop', i.retailer || '—'),
-    inline('Seen', i.at ? new Date(i.at).toLocaleTimeString('en-US') : 'just now'),
+    inline('Seen', discordTime(i.at)),
     inline('Check', i.reason || 'a human check'),
   ];
   if (i.restingMinutes) {
     fields.push(inline('Not reading for', `${i.restingMinutes} min`));
   }
+  const shop = (i.retailer || 'A SHOP').toUpperCase();
   return {
-    title: `${(i.retailer || 'A SHOP').toUpperCase()} PUT A HUMAN CHECK UP`,
+    title: i.still ? `${shop} STILL HAS A HUMAN CHECK UP` : `${shop} PUT A HUMAN CHECK UP`,
     ...(home ? { url: home } : {}),
     description:
       '**Phantom is standing down and will not touch the check.** Reading has ' +
@@ -846,7 +859,8 @@ export function buildWallEmbed(i: WallItem, now: string): Embed {
       'nothing happening.\n\n' +
       'This does not on its own mean a drop is live - shops raise their ' +
       'defences at drop time and also when a browser simply looks wrong. ' +
-      'If you are waiting on one, **look yourself**.',
+      'If you are waiting on one, **look yourself**.\n\n' +
+      '_Said once when a wall goes up, then every 12 hours while it stands._',
     color: COLOR_WALL,
     fields,
     footer: {

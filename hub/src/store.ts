@@ -4299,8 +4299,57 @@ export async function noteBlindAlert(
   }]);
 }
 
-/** How long a shop gets to be walled before it is mentioned again. */
-export const WALL_ALERT_COOLDOWN_MIN = 20;
+/**
+ * One wall card per EPISODE, not per probe.
+ *
+ * This was 20 minutes, which is exactly how long Phantom rests a walled shop
+ * before probing it again - so every probe found the previous wall just
+ * outside the window, and from 29 Sep to 1 Oct Target's PerimeterX check put
+ * the same card in Discord every twenty minutes for two days.
+ *
+ * Now a wall seen within the last 90 minutes means the same episode is still
+ * going and nothing new is said. A shop that has gone 90 minutes without a
+ * wall and then walls again is a new episode and is announced. 90 is the
+ * probe interval with room for a slow pass or two.
+ */
+export const WALL_ALERT_COOLDOWN_MIN = 90;
+
+/**
+ * And while one episode lasts, a reminder this often - so a wall that never
+ * lifts still says so twice a day, rather than going silent forever, which is
+ * the blind-and-quiet shape these cards exist to prevent.
+ */
+export const WALL_REMIND_HOURS = 12;
+
+/** Shops whose wall was told to Discord within WALL_REMIND_HOURS. */
+export async function wallAlertedRecently(
+  db: Sql,
+  userId: number,
+  hours = WALL_REMIND_HOURS,
+): Promise<Set<string>> {
+  const rows = await db.query<{ retailer: string }>(
+    `SELECT DISTINCT retailer FROM activity
+      WHERE user_id = $1 AND kind = 'hub' AND message LIKE 'WALL:%'
+        AND at > now() - ($2 || ' hours')::interval`,
+    [userId, String(hours)],
+  );
+  return new Set(rows.map((r) => r.retailer));
+}
+
+/** Written when a wall card goes out: the reminder clock, and the record. */
+export async function noteWallAlert(
+  db: Sql,
+  userId: number,
+  retailer: string,
+  reminder: boolean,
+): Promise<void> {
+  await recordActivity(db, userId, [{
+    kind: 'hub',
+    level: 'warn',
+    retailer,
+    message: `WALL: ${retailer} ${reminder ? 'still walled - reminded' : 'walled - told'} Discord`,
+  }]);
+}
 
 /**
  * A wall, as the watcher writes it.

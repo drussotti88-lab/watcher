@@ -2609,7 +2609,25 @@ async function noteBlindAlert(db2, userId, retailer, checks) {
     message: `BLIND: every ${retailer} read failed for ${BLIND_WINDOW_MIN}+ min (${checks} checks) - told Discord`
   }]);
 }
-var WALL_ALERT_COOLDOWN_MIN = 20;
+var WALL_ALERT_COOLDOWN_MIN = 90;
+var WALL_REMIND_HOURS = 12;
+async function wallAlertedRecently(db2, userId, hours = WALL_REMIND_HOURS) {
+  const rows = await db2.query(
+    `SELECT DISTINCT retailer FROM activity
+      WHERE user_id = $1 AND kind = 'hub' AND message LIKE 'WALL:%'
+        AND at > now() - ($2 || ' hours')::interval`,
+    [userId, String(hours)]
+  );
+  return new Set(rows.map((r) => r.retailer));
+}
+async function noteWallAlert(db2, userId, retailer, reminder) {
+  await recordActivity(db2, userId, [{
+    kind: "hub",
+    level: "warn",
+    retailer,
+    message: `WALL: ${retailer} ${reminder ? "still walled - reminded" : "walled - told"} Discord`
+  }]);
+}
 function isWallLine(message) {
   const m = String(message ?? "");
   return m.startsWith("blocked:") && !isQueueLine(m);
@@ -3552,7 +3570,7 @@ function buildQueueEmbed(retailer, at, now) {
     color: COLOR_QUEUE,
     fields: [
       inline("Shop", retailer || "\u2014"),
-      inline("Seen", at ? new Date(at).toLocaleTimeString("en-US") : "just now"),
+      inline("Seen", discordTime(at)),
       inline("Product pages", "will say sold out \u2014 ignore that")
     ],
     footer: {
@@ -3561,20 +3579,25 @@ function buildQueueEmbed(retailer, at, now) {
     timestamp: now
   };
 }
+function discordTime(iso) {
+  const ms = Date.parse(String(iso ?? ""));
+  return Number.isFinite(ms) ? `<t:${Math.floor(ms / 1e3)}:t>` : "just now";
+}
 function buildWallEmbed(i, now) {
   const home = SHOP_HOME[i.retailer] ?? "";
   const fields = [
     inline("Shop", i.retailer || "\u2014"),
-    inline("Seen", i.at ? new Date(i.at).toLocaleTimeString("en-US") : "just now"),
+    inline("Seen", discordTime(i.at)),
     inline("Check", i.reason || "a human check")
   ];
   if (i.restingMinutes) {
     fields.push(inline("Not reading for", `${i.restingMinutes} min`));
   }
+  const shop = (i.retailer || "A SHOP").toUpperCase();
   return {
-    title: `${(i.retailer || "A SHOP").toUpperCase()} PUT A HUMAN CHECK UP`,
+    title: i.still ? `${shop} STILL HAS A HUMAN CHECK UP` : `${shop} PUT A HUMAN CHECK UP`,
     ...home ? { url: home } : {},
-    description: "**Phantom is standing down and will not touch the check.** Reading has paused for this shop, so treat the quiet as blindness rather than as nothing happening.\n\nThis does not on its own mean a drop is live - shops raise their defences at drop time and also when a browser simply looks wrong. If you are waiting on one, **look yourself**.",
+    description: "**Phantom is standing down and will not touch the check.** Reading has paused for this shop, so treat the quiet as blindness rather than as nothing happening.\n\nThis does not on its own mean a drop is live - shops raise their defences at drop time and also when a browser simply looks wrong. If you are waiting on one, **look yourself**.\n\n_Said once when a wall goes up, then every 12 hours while it stands._",
     color: COLOR_WALL,
     fields,
     footer: {
@@ -12693,6 +12716,7 @@ function createHandler(db2, env2) {
       const walledBefore = new Set(
         anyWall ? (await wallSightings(db2, userId, WALL_ALERT_COOLDOWN_MIN).catch(() => [])).map((w) => w.retailer) : []
       );
+      const wallToldLately = anyWall && walledBefore.size > 0 ? await wallAlertedRecently(db2, userId).catch(() => /* @__PURE__ */ new Set([...walledBefore])) : /* @__PURE__ */ new Set();
       const result = await recordActivity(db2, userId, lines);
       const pruned = await pruneActivity(db2, userId);
       if (env2.DISCORD_WEBHOOK_URL) {
@@ -12715,21 +12739,28 @@ function createHandler(db2, env2) {
         for (const line of lines) {
           if (!isWallLine(line.message)) continue;
           const retailer = String(line.retailer ?? "");
-          if (!retailer || walledBefore.has(retailer)) continue;
+          if (!retailer) continue;
+          const still = walledBefore.has(retailer);
+          if (still && wallToldLately.has(retailer)) continue;
           if (walls.has(retailer) || fresh.has(retailer)) continue;
           walls.set(retailer, {
             at: String(line.at ?? (/* @__PURE__ */ new Date()).toISOString()),
             // "blocked: Press-and-hold check, 20m" -> the detector's own words.
-            reason: String(line.message ?? "").replace(/^blocked:\s*/, "").replace(/,\s*\d+m\s*$/, "").slice(0, 60)
+            reason: String(line.message ?? "").replace(/^blocked:\s*/, "").replace(/,\s*\d+m\s*$/, "").slice(0, 60),
+            still
           });
         }
         if (walls.size > 0) {
           await toRooms(
-            [...walls].map(([retailer, w]) => ({ retailer, at: w.at, reason: w.reason })),
+            [...walls].map(([retailer, w]) => ({ retailer, at: w.at, reason: w.reason, still: w.still })),
             roomsFrom(env2),
             (url2, group) => announceWalls(url2, group, (/* @__PURE__ */ new Date()).toISOString())
           ).catch(() => {
           });
+          for (const [retailer, w] of walls) {
+            await noteWallAlert(db2, userId, retailer, w.still).catch(() => {
+            });
+          }
         }
         const failedCheck = lines.some((l) => l.kind === "check" && !["in", "out", "in_stock", "staged"].includes(String(l.state ?? "")) && !isWallLine(l.message));
         if (failedCheck) {

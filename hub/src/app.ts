@@ -1543,6 +1543,11 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
               .map((w) => w.retailer)
           : [],
       );
+      // Inside an episode, only a reminder is ever due - and only when the
+      // last card for that shop is older than WALL_REMIND_HOURS.
+      const wallToldLately = anyWall && walledBefore.size > 0
+        ? await store.wallAlertedRecently(db, userId).catch(() => new Set<string>([...walledBefore]))
+        : new Set<string>();
       const result = await store.recordActivity(db, userId, lines);
       const pruned = await store.pruneActivity(db, userId);
 
@@ -1578,11 +1583,14 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
          * queue whose door has a human check on it is one event and should
          * read as one.
          */
-        const walls = new Map<string, { at: string; reason: string }>();
+        const walls = new Map<string, { at: string; reason: string; still: boolean }>();
         for (const line of lines) {
           if (!store.isWallLine(line.message)) continue;
           const retailer = String(line.retailer ?? '');
-          if (!retailer || walledBefore.has(retailer)) continue;
+          if (!retailer) continue;
+          // Same episode, already told within the reminder interval: quiet.
+          const still = walledBefore.has(retailer);
+          if (still && wallToldLately.has(retailer)) continue;
           if (walls.has(retailer) || fresh.has(retailer)) continue;
           walls.set(retailer, {
             at: String(line.at ?? new Date().toISOString()),
@@ -1591,14 +1599,18 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
               .replace(/^blocked:\s*/, '')
               .replace(/,\s*\d+m\s*$/, '')
               .slice(0, 60),
+            still,
           });
         }
         if (walls.size > 0) {
           await toRooms(
-            [...walls].map(([retailer, w]) => ({ retailer, at: w.at, reason: w.reason })),
+            [...walls].map(([retailer, w]) => ({ retailer, at: w.at, reason: w.reason, still: w.still })),
             roomsFrom(env),
             (url, group) => announceWalls(url, group, new Date().toISOString()),
           ).catch(() => {});
+          for (const [retailer, w] of walls) {
+            await store.noteWallAlert(db, userId, retailer, w.still).catch(() => {});
+          }
         }
 
         /*
