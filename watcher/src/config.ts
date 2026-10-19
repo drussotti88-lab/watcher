@@ -102,6 +102,16 @@ export interface Config {
    * never inside the run-up to a drop, never to a `once` run.
    */
   autoUpdate: boolean;
+  /**
+   * While a shop is plainly walling us, look at most this often, in hours.
+   *
+   * Six by default, doubling to twice this; clamped to 1..24 in rate.ts.
+   * Before 19 Oct 2026 the longest stand-down was four hours and a restart
+   * forgot it, so a three-week Target wall cost about 5,800 refused reads in
+   * its last week. One look every six hours is how we notice it has come
+   * down; nothing here gets it to come down sooner, and nothing should try.
+   */
+  wallProbeHours: number;
 }
 
 export const DEFAULTS: Config = {
@@ -121,6 +131,7 @@ export const DEFAULTS: Config = {
   lightenReads: true,
   drawWatch: true,
   neverTouch: [],
+  wallProbeHours: 6,
 };
 
 export const CONFIG_PATH = resolve(process.cwd(), 'watcher.config.json');
@@ -136,6 +147,10 @@ function merge(base: Config, over: Partial<Config>): Config {
     lightenReads: over.lightenReads ?? base.lightenReads,
     drawWatch: over.drawWatch ?? base.drawWatch,
     neverTouch: Array.isArray(over.neverTouch) ? over.neverTouch.map(String) : base.neverTouch,
+    wallProbeHours:
+      typeof over.wallProbeHours === 'number' && Number.isFinite(over.wallProbeHours)
+        ? over.wallProbeHours
+        : base.wallProbeHours,
   };
 }
 

@@ -3543,6 +3543,59 @@ test('the webhook URL never reaches the page', async () => {
   assert.doesNotMatch(h.doc.body.innerHTML, /DISCORD_WEBHOOK_URL=/);
 });
 
+test('PHONE AND EMAIL SAY WHETHER THEY ARE ON, AND THE TOPIC NEVER FILLS THE BOX', async () => {
+  // The app sends the topic masked to its last three letters. The page says
+  // "on" with those three and leaves the box empty, so a screenshot of
+  // Settings never carries the name that lets a stranger read the alerts.
+  const h = await boot({
+    ...DASHBOARD,
+    discord: false,
+    push: true,
+    email: false,
+    emailReady: false,
+    settings: { pushTopic: '\u2022\u2022\u2022x9k', emailTo: '', pushKinds: ['stock'], emailKinds: [] },
+  });
+  assert.match($(h, '#alerts-state').textContent, /Phone: on.*x9k/);
+  assert.match($(h, '#alerts-state').textContent, /RESEND_API_KEY/, 'and says what email is missing');
+  assert.equal($(h, '#alerts-form [name=pushTopic]').value, '', 'the box is never filled');
+  assert.equal(($(h, '#alerts-test') as any).disabled, false, 'push alone is worth testing');
+  assert.equal(($(h, '#push-clear') as any).hidden, false);
+
+  const off = await boot({ ...DASHBOARD, discord: false, push: false, email: false });
+  assert.match($(off, '#alerts-state').textContent, /Phone: off/);
+  assert.equal(($(off, '#alerts-test') as any).disabled, true, 'nowhere to send, nothing to test');
+});
+
+test('SAVING ALERTS WITH THE TOPIC BOX BLANK KEEPS THE SAVED TOPIC', async () => {
+  // Blank is what an untouched box looks like, because it is never filled.
+  // Sending pushTopic: '' there would switch the phone off on every save.
+  const h = await boot({
+    ...DASHBOARD,
+    push: true,
+    settings: { pushTopic: '\u2022\u2022\u2022x9k', emailTo: 'dan@example.com', pushKinds: ['stock'], emailKinds: ['bought'] },
+  });
+  const form = $(h, '#alerts-form');
+  (form.querySelector('input[data-email="stock"]') as any).checked = true;
+  submit(form, h.dom.window);
+  await h.settle();
+  const call = h.calls.find((c) => c.method === 'POST' && c.path === '/api/settings')!;
+  assert.ok(call, 'the save reached the app');
+  assert.equal('pushTopic' in call.body, false, 'no topic sent, so the saved one stays');
+  assert.equal(call.body.emailTo, 'dan@example.com');
+  assert.deepEqual(call.body.pushKinds, ['stock']);
+  assert.deepEqual(call.body.emailKinds.sort(), ['bought', 'stock']);
+});
+
+test('a mission that does not say which sellers shows any seller under the ceiling', async () => {
+  // The default since 19 Oct 2026. A form that showed "retailer only" for a
+  // mission stored as 'any' would flip it back on the next save.
+  const missions = [{ ...DASHBOARD.missions[0], sellerPolicy: undefined }];
+  const h = await boot({ ...DASHBOARD, missions });
+  openMission(h);
+  const form = $(h, 'form[data-mission="1"]');
+  assert.equal(form.querySelector('[name=sellerPolicy]').value, 'any');
+});
+
 // ── Controls on the card itself ──────────────────────────────────────────────
 
 test('A MISSION CAN BE PAUSED FROM THE LIST, WITHOUT OPENING ANYTHING', async () => {

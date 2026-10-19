@@ -172,6 +172,17 @@ export interface CartTotals {
   tax: number | null;
   /** Postage on the whole order. Zero is a real answer; null is not. */
   shipping: number | null;
+  /**
+   * Lines in the cart that are not this product. Null means the cart driver
+   * could not tell which line is this product at all. Left out by a driver
+   * that does not know, which keeps the old meaning.
+   *
+   * The subtotal, tax and shipping above are the WHOLE cart's, and Place
+   * Order buys the whole cart. So until 19 Oct 2026 a person with anything
+   * else in their own Target cart would have had it judged as part of this
+   * item's price and, if it passed, bought along with it.
+   */
+  otherItems?: number | null;
 }
 
 export interface CartLimits {
@@ -212,6 +223,19 @@ export function verifyCart(args: {
     total: number | null;
   } => ({ ok: false, outcome, note, total: null });
 
+  // First, because every number below is the whole cart's: it is only this
+  // item's price when this item is all the cart holds.
+  if (cart.otherItems === null) {
+    return no('failed', 'could not tell which line of the cart is this product, so the cart was not trusted');
+  }
+  if (typeof cart.otherItems === 'number' && cart.otherItems > 0) {
+    const n = cart.otherItems;
+    return no(
+      'failed',
+      `your cart holds ${n} other item${n === 1 ? '' : 's'} as well, and Place Order would buy ` +
+        `${n === 1 ? 'it' : 'them'} too. Phantom only checks out a cart holding just this product`,
+    );
+  }
   if (cart.unitPrice === null) return no('failed', 'could not read the cart price');
   if (cart.quantity === null) return no('failed', 'could not read the cart quantity');
   if (cart.quantity !== wanted) {

@@ -168,7 +168,11 @@ test('a new mission watches and does not buy', async () => {
   const m = await store.getMission(db, USER, missionId);
   assert.equal(m?.enabled, true);
   assert.equal(m?.armed, false, 'arming is never the default');
-  assert.equal(m?.sellerPolicy, 'retailer_only', 'nor is buying from anyone who turns up');
+  // 'any' since 19 Oct 2026 (Dan: third-party sellers count within the
+  // ceiling). Not "anyone who turns up": nothing buys without arming, and an
+  // armed mission still has to have a ceiling, which is the line a reseller
+  // is held to.
+  assert.equal(m?.sellerPolicy, 'any', 'any seller, held to the ceiling');
 });
 
 test('ARMING WITHOUT A CEILING IS REFUSED — an open cheque is not a mandate', async () => {
@@ -400,7 +404,15 @@ test('active missions are what Phantom polls, and carry the mandate', async () =
   assert.equal(m.retailer, 'Target', 'and which reader to use');
   assert.equal(m.armed, true);
   assert.equal(m.ceiling, 49.99, 'a number, not a Postgres string');
-  assert.equal(m.sellerPolicy, 'retailer_only');
+  assert.equal(m.sellerPolicy, 'any', 'the default since 19 Oct 2026');
+});
+
+test('A MISSION SET TO THE RETAILER ONLY STAYS THAT WAY WHEN SAVED AGAIN', async () => {
+  // The default moved to 'any'. An explicit choice must not drift with it.
+  const { db, listingId } = await withMission();
+  await call(db, 'POST', '/api/missions', { listingId, sellerPolicy: 'retailer_only' });
+  const { body } = await call(db, 'GET', '/api/missions/active');
+  assert.equal(body.missions[0].sellerPolicy, 'retailer_only');
 });
 
 // ── Quick add ────────────────────────────────────────────────────────────────

@@ -33,7 +33,9 @@ test('A SHELF THAT IS NOT MOVING IS READ LESS OFTEN, IN STEPS', () => {
   assert.equal(at(2), 180, 'quiet for two hours: every three minutes');
   assert.equal(at(8), 480, 'quiet since this morning: every eight');
   assert.equal(at(30), 900, 'quiet for a day: every fifteen');
-  assert.equal(at(24 * 10), MAX_INTERVAL_S, 'quiet for a week and a half: the ceiling');
+  assert.equal(at(24 * 10), 1800, 'quiet for a week and a half: every half hour');
+  assert.equal(at(24 * 20), 3600, 'quiet for three weeks: every hour');
+  assert.equal(at(24 * 40), MAX_INTERVAL_S, 'quiet for over a month: the ceiling');
 
   // The ceiling binds regardless of what the mission asked for, so a mission
   // set to ten minutes cannot become a five-hour one.
@@ -130,7 +132,7 @@ test('OUT OF STOCK DOES NOT BUY FULL SPEED, IN STOCK DOES', () => {
 
   // The floor is a floor and not a ceiling: a shelf that has been out for a
   // week still walks all the way up to the cap.
-  assert.equal(quietInterval(listing({ state: 'out', lastChangedAt: hoursAgo(24 * 10) }), NOW), MAX_INTERVAL_S);
+  assert.equal(quietInterval(listing({ state: 'out', lastChangedAt: hoursAgo(24 * 40) }), NOW), MAX_INTERVAL_S);
   assert.equal(OUT_FLOOR_TIMES, 3);
 });
 
@@ -206,4 +208,22 @@ test('A PRE-ORDER IS A QUEUE, NOT A RACE', () => {
   assert.equal(
     quietInterval(listing({ ...stale, state: 'staged', isPreOrder: true }), NOW), 60,
   );
+});
+
+test('A SHELF QUIET FOR A MONTH IS READ EVERY TWO HOURS, NOT EVERY HALF HOUR', () => {
+  // 19 Oct 2026: the cap was thirty minutes, so a listing out of stock for a
+  // month still cost forty-eight reads a day, at a shop that had been walling
+  // us for three weeks. Two hours is twelve.
+  assert.equal(MAX_INTERVAL_S, 120 * 60);
+  const month = listing({ state: 'out', lastChangedAt: hoursAgo(24 * 31) });
+  assert.equal(quietInterval(month, NOW), 120 * 60);
+  assert.equal(Math.round(86_400 / quietInterval(month, NOW)), 12);
+
+  // And the ceiling is still a ceiling for a slow mission.
+  assert.equal(quietInterval(listing({ checkEverySeconds: 600, lastChangedAt: hoursAgo(24 * 31) }), NOW), 120 * 60);
+
+  // Nothing urgent is touched by it.
+  assert.equal(quietInterval({ ...month, state: 'in' }, NOW), 60);
+  assert.equal(quietInterval({ ...month, armed: true }, NOW), 60);
+  assert.equal(quietInterval(month, NOW, true), 60, 'a drop window still wakes it');
 });

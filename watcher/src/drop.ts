@@ -74,6 +74,38 @@ export interface DropWindow {
   open: boolean;
   /** Plain words for the log, so a tightened pace always says why. */
   reason: string;
+  /**
+   * The shops the window is for. Null means every shop that is switched on,
+   * which only a person can ask for (drop mode in the app).
+   *
+   * ── Why a window names its shops ────────────────────────────────────────
+   *
+   * Until 19 Oct 2026 a window was one yes-or-no for the whole machine. So
+   * Walmart's Wednesday 8pm slot tightened Target's and Pokémon Center's
+   * spacing to the burst floor and woke every resting listing at both, for
+   * fifty minutes a week, and it did so even while Walmart was switched off.
+   * Evidence of a drop at one shop says nothing about any other.
+   */
+  retailers: string[] | null;
+}
+
+const same = (a: string, b: string): boolean => a.toLowerCase() === String(b).toLowerCase();
+
+function shopsOf(ms: readonly Mission[]): string[] {
+  const out: string[] = [];
+  for (const m of ms) if (!out.some((r) => same(r, m.retailer))) out.push(m.retailer);
+  return out;
+}
+
+/**
+ * Does this window cover this shop? Open, switched on, and named (or a
+ * manual window, which names every shop that is on).
+ */
+export function windowCovers(window: DropWindow, settings: Settings, retailer: string): boolean {
+  if (!window.open) return false;
+  if (!retailerOn(settings, retailer)) return false;
+  if (window.retailers === null) return true;
+  return window.retailers.some((r) => same(r, retailer));
 }
 
 /**
@@ -89,7 +121,7 @@ export function dropWindow(
   missions: readonly Mission[],
   now: number,
 ): DropWindow {
-  const shut = { open: false, reason: '' };
+  const shut: DropWindow = { open: false, reason: '', retailers: [] };
   if (!settings.burstSpacingSeconds || settings.burstSpacingSeconds <= 0) return shut;
 
   const until = String(settings.dropModeUntil ?? '');
@@ -97,7 +129,7 @@ export function dropWindow(
     const t = Date.parse(until);
     if (Number.isFinite(t) && t > now) {
       const mins = Math.ceil((t - now) / 60_000);
-      return { open: true, reason: `drop mode is on for another ${mins}m` };
+      return { open: true, reason: `drop mode is on for another ${mins}m`, retailers: null };
     }
   }
 
@@ -116,12 +148,12 @@ export function dropWindow(
    * that by luck is defensible once you know the time.
    *
    * It opens five minutes early and shuts forty-five minutes later on its own.
-   * The retailer still has to be switched on for any of it to matter — that is
-   * checked per mission further down the pass, and it is exactly what the
-   * readiness warning exists to shout about beforehand.
+   * It opens only for the shop whose slot it is, and not at all when that
+   * shop is switched off: until 19 Oct 2026 it ignored the switch, and a
+   * paused Walmart still tightened everyone else's pace every Wednesday.
    */
   const scheduled = upcomingDrop(new Date(now), LEAD_MINUTES);
-  if (scheduled?.running) {
+  if (scheduled?.running && retailerOn(settings, scheduled.slot.retailer)) {
     const when =
       scheduled.minutesUntil > 0
         ? `in ${scheduled.minutesUntil}m`
@@ -129,21 +161,25 @@ export function dropWindow(
     return {
       open: true,
       reason: `scheduled ${scheduled.slot.retailer} drop, ${when}`,
+      retailers: [scheduled.slot.retailer],
     };
   }
 
-  const loaded = missions.filter((m) => m.enabled && staged(m));
+  // A switched-off shop's missions are not evidence of anything we will act
+  // on, so they open nothing.
+  const on = missions.filter((m) => m.enabled && retailerOn(settings, m.retailer));
+  const loaded = on.filter((m) => staged(m));
   if (loaded.length) {
-    return { open: true, reason: `stock staged: ${naming(loaded)}` };
+    return { open: true, reason: `stock staged: ${naming(loaded)}`, retailers: shopsOf(loaded) };
   }
 
   // A drop that has actually opened, on a mission that means to buy. Narrow on
   // purpose: without it the window would shut at the exact moment the staged
   // stock became sellable, which is the moment speed is worth most. It is
   // self-limiting — a completed buy disarms its mission.
-  const live = missions.filter((m) => m.enabled && m.armed && m.state === 'in');
+  const live = on.filter((m) => m.armed && m.state === 'in');
   if (live.length) {
-    return { open: true, reason: `live and armed: ${naming(live)}` };
+    return { open: true, reason: `live and armed: ${naming(live)}`, retailers: shopsOf(live) };
   }
   return shut;
 }

@@ -223,6 +223,10 @@ export async function identify(
     // The single shared INGEST_TOKEN from the environment. Kept so Phantom
     // already running on a desk does not stop working the moment ownership
     // ships; it answers as the first user.
+    //
+    // Note (19 Oct 2026): it STILL signs in as user 1, the owner, with
+    // everything that account can do. Not retired in this change on purpose;
+    // retiring it means first moving the owner's machine to a per-user token.
     if (env.INGEST_TOKEN && safeEqual(token, env.INGEST_TOKEN)) {
       return { kind: 'watcher', userId: 1 };
     }
