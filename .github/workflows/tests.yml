@@ -1,0 +1,75 @@
+# Runs both test suites on every pull request, on GitHub's machines.
+#
+# Why: the rules say both suites pass before anything merges, and on 19 Oct
+# the cloud sessions doing the work could not install the test packages
+# (PGlite, jsdom) at all, so "Main runs the tests" had nowhere to run.
+# Here they run for every PR, and the result shows on the PR page as a tick
+# or a cross that Dan can read without a terminal. Nothing here reaches a
+# shop, spends money or touches the live database: tests use PGlite.
+name: tests
+
+# On every push to any branch: the result sits on the commit, so a PR shows it,
+# and a branch can be checked before a PR exists.
+on:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  app:
+    name: the app (hub)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hub
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: hub/package-lock.json
+      - run: npm ci
+      - name: npm test
+        shell: bash
+        run: |
+          set -o pipefail
+          npm test 2>&1 | tee test-output.txt || {
+            # Name every failing test on the run page, so the failure can be read
+            # without downloading the whole log.
+            grep -E '^\s*not ok' test-output.txt | head -40 | sed 's/^\s*/::error::/'
+            grep -E -A12 '^\s*not ok' test-output.txt | grep -E "error:|expected|actual|message" | head -40 | sed 's/^\s*/::warning::/'
+            exit 1
+          }
+      - run: npm run typecheck
+
+  phantom:
+    name: Phantom (watcher)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: watcher
+    env:
+      # The tests never open a browser; don't download one.
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: watcher/package-lock.json
+      - run: npm ci
+      - name: npm test
+        shell: bash
+        run: |
+          set -o pipefail
+          npm test 2>&1 | tee test-output.txt || {
+            # Name every failing test on the run page, so the failure can be read
+            # without downloading the whole log.
+            grep -E '^\s*not ok' test-output.txt | head -40 | sed 's/^\s*/::error::/'
+            grep -E -A12 '^\s*not ok' test-output.txt | grep -E "error:|expected|actual|message" | head -40 | sed 's/^\s*/::warning::/'
+            exit 1
+          }
+      - run: npm run typecheck
