@@ -13694,8 +13694,13 @@ var POOL_OPTIONS = {
    * A test counts that width from the source rather than trusting this comment
    * — adding a sixth query to /api/dashboard while max was 5 would have
    * re-created the deadlock within the hour, and did nearly do exactly that.
+   *
+   * 19 Oct 2026: main had already drifted past it. The dashboard's Promise.all
+   * was 11 wide against max 8, and that test failed on main the first time
+   * the suite ran on GitHub. 14 is the widest call plus headroom; the pooler
+   * maps many client connections onto few server ones, so this is cheap.
    */
-  max: 8,
+  max: 14,
   idle_timeout: 20,
   connect_timeout: 10,
   /**
