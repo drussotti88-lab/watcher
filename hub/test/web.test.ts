@@ -734,17 +734,44 @@ test('THE FRONT DOOR HANDS OVER PHANTOM AND A TOKEN, TO AN ACCOUNT THAT MAY BUY'
   assert.equal((await call(db, 'GET', '/api/missions/active', { token: minted.body.token })).status, 401);
   assert.equal((await call(db, 'GET', '/api/missions/active', { token: second.body.token })).status, 200);
 
-  // A Phantom token cannot mint a token or fetch the program.
+  // A Phantom token cannot mint a token.
   assert.equal((await call(db, 'POST', '/api/me/watcher-token', { token: second.body.token })).status, 403);
-  assert.equal((await call(db, 'GET', '/api/phantom.zip', { token: second.body.token })).status, 403);
+  // But it CAN fetch the program: that is how auto-update works. This line
+  // used to assert 403, which is why every tester's six-hourly update failed.
+  const updated = await call(db, 'GET', '/api/phantom.zip', { token: second.body.token });
+  assert.equal(updated.status, 200);
+  assert.equal(updated.headers.get('content-type'), 'application/zip');
   // Nobody at all gets 401, not a redirect.
   assert.equal((await call(db, 'GET', '/api/phantom.zip')).status, 401);
+});
+
+test('A PHANTOM TOKEN ON AN ACCOUNT THAT MAY NOT ARM STILL CANNOT FETCH THE PROGRAM', async () => {
+  // Opening the zip to agent tokens (for auto-update) must not open it to
+  // every token. The front door never mints one for a watch-only member, but
+  // a token could be left over from before can_arm was taken away — so the
+  // can_arm check is what decides, not the kind of credential.
+  const { db } = await setup();
+  const memberId = await store.upsertUser(db, 'watchonly', await hashPassword('temporary'));
+  const token = 'leftover-token-from-before-can-arm-was-removed';
+  assert.ok(await store.setUserTokenById(db, memberId, await hashToken(token)));
+  assert.equal(await store.canArm(db, memberId), false, 'precondition: this account may not arm');
+
+  // The token is real: it is that member's Phantom for everything else...
+  assert.equal((await call(db, 'GET', '/api/missions/active', { token })).status, 200);
+  // ...but not for the program.
+  const zip = await call(db, 'GET', '/api/phantom.zip', { token });
+  assert.equal(zip.status, 403);
+  assert.notEqual(zip.headers.get('content-type'), 'application/zip');
+
+  // And it is the account that decides: grant can_arm and the same token works.
+  await store.setUserCanArm(db, 'watchonly', true);
+  assert.equal((await call(db, 'GET', '/api/phantom.zip', { token })).status, 200);
 });
 
 test('A TESTER’S PHANTOM CAN FILE A REPORT, AND THE OWNER CAN READ IT', async () => {
   // The one thing a Phantom too broken to watch anything must still manage.
   // It is the MACHINE speaking about itself, so an agent token is the right
-  // credential here — the opposite of the zip and the token endpoints.
+  // credential here — the opposite of the token endpoint.
   const { db } = await setup();
   const report = {
     at: '2026-09-03T22:00:00.000Z',

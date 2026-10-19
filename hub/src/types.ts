@@ -166,10 +166,23 @@ export interface Env {
   WEBHOOK_VAR_NAMES?: readonly string[];
   /** Named like a webhook, not holding one: set-to-the-wrong-thing, not unset. */
   NEAR_MISS_VAR_NAMES?: readonly string[];
-  /** Bearer token Phantom presents when posting findings. */
+  /**
+   * Bearer token Phantom presents when posting findings.
+   *
+   * Still answers as user 1 (the owner) — see identify() in auth.ts. Kept
+   * because the owner's own Phantom may still present it; retiring it is a
+   * separate change that has to move that machine to a per-user token first.
+   */
   INGEST_TOKEN?: string;
-  /** Password for the web page, and the key its session cookie is signed with. */
+  /** The owner's password for the web page. */
   APP_PASSWORD?: string;
+  /**
+   * What session cookies are signed with. Falls back to APP_PASSWORD when
+   * unset (auth.ts sessionSecret). It was declared on AuthEnv but never here
+   * and never passed through env() in server.ts, so production always fell
+   * back: every signed-in member held a cookie keyed on the owner's password.
+   */
+  SESSION_SECRET?: string;
   /** The vault link (DNA Card Vault): shared HMAC secret, identical in both apps. */
   PHANTOM_SHARED_SECRET?: string;
   /** Where the vault lives, e.g. https://www.dnacardvault.com — no trailing slash. */
