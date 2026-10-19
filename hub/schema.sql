@@ -197,10 +197,12 @@ CREATE TABLE IF NOT EXISTS missions (
   quantity      INTEGER NOT NULL DEFAULT 1,
   -- 'retailer_only' : refuse marketplace offers however cheap or available
   -- 'any'           : any seller, still subject to the ceiling
-  -- Default is retailer_only, because the whole point of this is buying at
-  -- retail before the resellers do. An IN_STOCK marketplace listing at 1.5x
-  -- MSRP is the thing you are racing, not the thing you want.
-  seller_policy TEXT NOT NULL DEFAULT 'retailer_only',
+  -- Default is 'any' since 19 Oct 2026 (Dan: third-party sellers count when
+  -- the price is within the mission ceiling). It was retailer_only before,
+  -- because an IN_STOCK marketplace listing at 1.5x MSRP is the thing you are
+  -- racing, not the thing you want - and the ceiling is what still keeps that
+  -- one out. See the ALTER below for databases created before the change.
+  seller_policy TEXT NOT NULL DEFAULT 'any',
   check_every_s INTEGER NOT NULL DEFAULT 60,
   notes         TEXT NOT NULL DEFAULT '',
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -221,6 +223,12 @@ CREATE INDEX IF NOT EXISTS missions_active_idx ON missions (enabled, armed);
 -- live database by `npm run db:push`, so every statement in it has to be safe
 -- to run twice.
 ALTER TABLE missions ADD COLUMN IF NOT EXISTS check_now_at TIMESTAMPTZ;
+
+-- New missions default to any seller under the ceiling (19 Oct 2026). Already
+-- run by the owner on the live database that day; repeated here so a fresh or
+-- older database ends up the same. Safe to run twice. Existing rows are not
+-- touched by a default change.
+ALTER TABLE missions ALTER COLUMN seller_policy SET DEFAULT 'any';
 
 -- Was this product's name minted from a URL slug rather than typed?
 --

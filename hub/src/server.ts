@@ -149,6 +149,13 @@ function env(): Env {
     WEBHOOK_VAR_NAMES: webhookVarNames(process.env as Record<string, string | undefined>),
     // Set, named like a webhook, and not holding one. The third state.
     NEAR_MISS_VAR_NAMES: nearMissVarNames(process.env as Record<string, string | undefined>),
+    // ── Phone push and email (alerts-push-email PR) ──
+    // Passed through one by one like everything above: a name declared in
+    // types.ts and missing here is silently undefined in production.
+    NTFY_URL: process.env.NTFY_URL,
+    NTFY_TOKEN: process.env.NTFY_TOKEN,
+    RESEND_API_KEY: process.env.RESEND_API_KEY,
+    ALERT_EMAIL_FROM: process.env.ALERT_EMAIL_FROM,
   };
 }
 

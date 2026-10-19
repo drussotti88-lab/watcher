@@ -179,4 +179,18 @@ export interface Env {
    * no vault link), so his sends need the target account named in config.
    */
   VAULT_OWNER_USER_ID?: string;
+
+  // ── Phone push and email (19 Oct 2026) ──────────────────────────────────────
+  // Optional, all of them. Unset means that channel is simply not offered; it
+  // never stops Discord or the page. Where each alert goes is a per-account
+  // setting (pushTopic, emailTo, pushKinds, emailKinds), not configured here.
+
+  /** The ntfy server phone pushes go to. Blank means the free public https://ntfy.sh. */
+  NTFY_URL?: string;
+  /** An ntfy access token, only for a protected topic or a self-hosted server. */
+  NTFY_TOKEN?: string;
+  /** Resend API key. Email alerts are off until this and ALERT_EMAIL_FROM are set. */
+  RESEND_API_KEY?: string;
+  /** The sender, e.g. "Phantom <alerts@your-domain>", on a domain verified in Resend. */
+  ALERT_EMAIL_FROM?: string;
 }

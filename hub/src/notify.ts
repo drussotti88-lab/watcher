@@ -3,6 +3,9 @@
  *
  * Ops exists so a broken source is visible without you going to look. A monitor
  * that fails silently is worse than no monitor — you keep trusting it.
+ *
+ * Since 19 Oct 2026 the same cards also go to the owner's phone (ntfy) and
+ * inbox (Resend), through deliver() - see "Phone push and email" below.
  */
 import type { Discovered, SweepResult } from './types.ts';
 
@@ -52,7 +55,7 @@ const COLOR_WALL = 0x707986;
 /** Discord caps embeds at 10 per message and 25 fields per embed. */
 const MAX_FIELDS = 20;
 
-interface Embed {
+export interface Embed {
   title?: string;
   /** Makes the title a link. One click from the alert to the buy button. */
   url?: string;
@@ -143,6 +146,81 @@ export function buildOpsEmbed(results: SweepResult[], now: string): Embed | null
 }
 
 /**
+ * How long one send may take, and how long a rate limit may make us wait.
+ *
+ * ── Why these exist ─────────────────────────────────────────────────────────
+ *
+ * Every alert is sent from inside a request the app must answer within 12
+ * seconds (server.ts), and the reading that caused it has already been
+ * written as "changed" by the time we post. Before 19 Oct 2026 a send had no
+ * timeout and no retry: a Discord that was slow ate the whole request, and a
+ * Discord that answered 429 lost the card for good, because the next reading
+ * is no longer a change and nothing fires again. Four seconds, one retry and a
+ * two-second cap on the wait keeps the worst case of one send (4 + 2 + 4) under
+ * the deadline with room for the database.
+ *
+ * Mutable only so the tests can shrink them; nothing in src/ writes to it.
+ */
+export const sendLimits = { timeoutMs: 4_000, retryCapMs: 2_000 };
+
+/**
+ * How long a 429 asks us to wait, in ms, or null when it is longer than we
+ * can afford inside one request.
+ *
+ * Discord says it in the JSON body as `retry_after` (seconds, fractional);
+ * ntfy and Resend use the standard Retry-After header. Either is honoured.
+ * A wait longer than the cap is not worth taking: the request would be over
+ * before the retry landed, so the card is logged as lost instead.
+ */
+async function retryWaitMs(res: Response): Promise<number | null> {
+  let seconds = Number.NaN;
+  const header = res.headers.get('retry-after');
+  if (header !== null && header.trim() !== '') seconds = Number(header);
+  if (!Number.isFinite(seconds)) {
+    const body = (await res.json().catch(() => null)) as { retry_after?: unknown } | null;
+    seconds = Number(body?.retry_after);
+  }
+  // A 429 that does not say how long is given one second, which is what
+  // Discord's own per-webhook bucket usually resets in.
+  const ms = Number.isFinite(seconds) && seconds >= 0 ? Math.ceil(seconds * 1000) : 1_000;
+  return ms <= sendLimits.retryCapMs ? ms : null;
+}
+
+/**
+ * One HTTP send with a timeout and a single retry on 429, swallowing every
+ * failure. Returns whether it landed.
+ *
+ * Shared by Discord, ntfy and Resend because all three fail the same ways:
+ * slow, rate-limited, or down. `label` names the service in the log and is
+ * the only thing about the destination that is ever logged - a webhook URL
+ * and a push topic are both credentials.
+ */
+async function send(label: string, url: string, init: RequestInit): Promise<boolean> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const res = await fetch(url, { ...init, signal: AbortSignal.timeout(sendLimits.timeoutMs) });
+      if (res.ok || res.status === 204) return true;
+      if (res.status === 429 && attempt === 0) {
+        const wait = await retryWaitMs(res);
+        if (wait !== null) {
+          await new Promise((r) => setTimeout(r, wait));
+          continue;
+        }
+        console.warn(`${label} rate-limited for longer than we can wait; this alert is lost`);
+        return false;
+      }
+      const detail = await res.text().catch(() => '');
+      console.warn(`${label} rejected the send`, res.status, detail.slice(0, 300));
+      return false;
+    } catch (err) {
+      console.warn(`${label} unreachable`, err instanceof Error ? err.message : String(err));
+      return false;
+    }
+  }
+  return false;
+}
+
+/**
  * Post to Discord, swallowing every failure.
  *
  * Notification is the least important thing a sweep does — the discovery is
@@ -151,21 +229,296 @@ export function buildOpsEmbed(results: SweepResult[], now: string): Embed | null
  * *thrown* case (bad host, DNS failure, timeout) and not just a non-2xx
  * response, which is the trap this originally fell into.
  */
-async function post(url: string, embeds: Embed[]): Promise<void> {
-  if (!url || embeds.length === 0) return;
-  try {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ embeds: embeds.slice(0, 10) }),
-    });
-    if (!res.ok && res.status !== 204) {
-      const detail = await res.text().catch(() => '');
-      console.warn('discord rejected the post', res.status, detail.slice(0, 300));
-    }
-  } catch (err) {
-    console.warn('discord unreachable', err instanceof Error ? err.message : String(err));
+async function post(url: string, embeds: Embed[]): Promise<boolean> {
+  if (!url || embeds.length === 0) return false;
+  return send('discord', url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ embeds: embeds.slice(0, 10) }),
+  });
+}
+
+// ── Phone push and email ─────────────────────────────────────────────────────
+//
+// Discord is a room for a community. It is not a pager: on 19 Oct 2026 the
+// owner asked for the drop-time alerts to ring his phone even when Discord is
+// muted, and for the slow ones (a drawing announced days ahead, a win, a
+// tester's report) to land in his inbox where they can be found again.
+//
+// Push goes through ntfy (a free app; you subscribe to a private topic name),
+// email through Resend. Both reuse the Discord cards through embedToText, so
+// there is one wording of each alert, not three that drift apart.
+
+/** Every kind of alert the app can send, as the per-channel settings name them. */
+export const ALERT_KINDS = [
+  'stock',
+  'preorder',
+  'stillIn',
+  'staged',
+  'queue',
+  'wall',
+  'blind',
+  'drawOpened',
+  'drawSoon',
+  'drawAnnounced',
+  'drawClosing',
+  'bought',
+  'report',
+] as const;
+export type AlertKind = (typeof ALERT_KINDS)[number];
+
+/** Words for the settings page. */
+export const ALERT_KIND_LABELS: Record<AlertKind, string> = {
+  stock: 'In stock',
+  preorder: 'Pre-order opened',
+  stillIn: 'Still in stock (follow-ups)',
+  staged: 'Stock staged before a drop',
+  queue: 'Waiting room up',
+  wall: 'Human check (wall) up',
+  blind: 'Phantom is blind at a shop',
+  drawOpened: 'Drawing open',
+  drawSoon: 'Drawing opens soon',
+  drawAnnounced: 'Drawing announced',
+  drawClosing: 'Drawing closing',
+  bought: 'Bought',
+  report: 'Tester report',
+};
+
+/**
+ * What rings the phone when nobody has chosen: everything that asks a person
+ * to move within the hour. Follow-ups are left out because the first ring was
+ * the message; a drawing announced days ahead is left out because it is mail.
+ */
+export const DEFAULT_PUSH_KINDS: readonly AlertKind[] = [
+  'stock', 'preorder', 'staged', 'queue', 'wall', 'blind',
+  'drawOpened', 'drawSoon', 'drawClosing', 'bought',
+];
+
+/**
+ * What goes to the inbox when nobody has chosen: the things worth finding
+ * again later. In-stock is off by default because it is over before the mail
+ * is read; the owner can switch it on.
+ */
+export const DEFAULT_EMAIL_KINDS: readonly AlertKind[] = ['drawAnnounced', 'bought', 'report'];
+
+/** ntfy priorities: 5 rings through Do Not Disturb on most phones, 3 is normal. */
+const PUSH_STYLE: Record<AlertKind, { priority: number; tags: string }> = {
+  stock: { priority: 5, tags: 'rotating_light,shopping_cart' },
+  queue: { priority: 5, tags: 'rotating_light,hourglass' },
+  preorder: { priority: 4, tags: 'calendar' },
+  staged: { priority: 4, tags: 'package' },
+  wall: { priority: 4, tags: 'no_entry' },
+  blind: { priority: 4, tags: 'see_no_evil' },
+  drawOpened: { priority: 4, tags: 'ticket' },
+  drawClosing: { priority: 4, tags: 'ticket,alarm_clock' },
+  bought: { priority: 4, tags: 'tada' },
+  drawSoon: { priority: 3, tags: 'ticket' },
+  stillIn: { priority: 3, tags: 'repeat' },
+  drawAnnounced: { priority: 3, tags: 'ticket' },
+  report: { priority: 3, tags: 'memo' },
+};
+
+/**
+ * A string that can travel in an HTTP header.
+ *
+ * Headers are bytes, not text: fetch throws on anything above U+00FF, and the
+ * cards are full of em dashes, middle dots, accents (Pokémon) and emoji. A
+ * title that throws is a push that never sends, so it is folded to plain
+ * ASCII - accents dropped, dashes and dots made into hyphens - and anything
+ * left over is removed.
+ */
+export function asciiHeader(s: string, max = 200): string {
+  return String(s ?? '')
+    .normalize('NFKD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[‒-―·•]/g, '-')
+    .replace(/[‘’]/g, "'")
+    .replace(/[“”]/g, '"')
+    .replace(/[^\x20-\x7e]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, max);
+}
+
+/**
+ * "9:29 PM CT". Times shown to the owner are Central, whatever the server runs in.
+ *
+ * Newer ICU puts a narrow no-break space before "PM", which is invisible on a
+ * screen and not ASCII in a header, so it is made an ordinary space.
+ */
+function centralTime(ms: number): string {
+  return (
+    new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/Chicago',
+      hour: 'numeric',
+      minute: '2-digit',
+    })
+      .format(new Date(ms))
+      .replace(/[\u202f\u00a0]/g, ' ') + ' CT'
+  );
+}
+
+/**
+ * A Discord card as plain words, for a push or an email.
+ *
+ * Discord markdown is taken out rather than translated: bold and italics
+ * become plain text, a [label](link) becomes "label (link)", and Discord's own
+ * <t:...> time tag - which only Discord can render - becomes a Central time.
+ */
+export function embedToText(e: Embed): { title: string; body: string; url: string } {
+  const plain = (s: string | undefined): string =>
+    String(s ?? '')
+      .replace(/<t:(\d+):[a-zA-Z]>/g, (_, sec: string) => centralTime(Number(sec) * 1000))
+      .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '$1 ($2)')
+      .replace(/\*\*([^*]+)\*\*/g, '$1')
+      .replace(/(^|\s)_([^_\n]+)_(?=\s|$|[.,;:!?])/g, '$1$2')
+      .trim();
+  const lines: string[] = [];
+  if (e.description) lines.push(plain(e.description));
+  for (const f of e.fields ?? []) lines.push(`${plain(f.name)}: ${plain(f.value)}`);
+  if (e.footer?.text) lines.push(plain(e.footer.text));
+  return { title: plain(e.title) || 'Phantom', body: lines.join('\n'), url: e.url ?? '' };
+}
+
+export interface PushTarget {
+  /** The ntfy server, no trailing slash. https://ntfy.sh unless NTFY_URL says otherwise. */
+  server: string;
+  /** The private topic the owner subscribed to. Treated as a credential. */
+  topic: string;
+  /** Only for a protected topic or a self-hosted server. */
+  token?: string;
+}
+
+export interface EmailTarget {
+  apiKey: string;
+  from: string;
+  to: string;
+}
+
+/** One phone notification. Returns whether ntfy took it. */
+export async function sendPush(
+  target: PushTarget,
+  kind: AlertKind | 'test',
+  msg: { title: string; body: string; url: string },
+): Promise<boolean> {
+  if (!target.topic) return false;
+  const style = kind === 'test' ? { priority: 3, tags: 'white_check_mark' } : PUSH_STYLE[kind];
+  const headers: Record<string, string> = {
+    Title: asciiHeader(msg.title) || 'Phantom',
+    Priority: String(style.priority),
+    Tags: style.tags,
+  };
+  // Tapping the notification opens the product. Only an ASCII https link can
+  // go in a header; anything else is left off rather than breaking the send.
+  if (/^https?:\/\/[\x21-\x7e]+$/.test(msg.url)) headers.Click = msg.url;
+  if (target.token) headers.Authorization = `Bearer ${target.token}`;
+  const server = String(target.server || 'https://ntfy.sh').replace(/\/+$/, '');
+  return send('ntfy', `${server}/${encodeURIComponent(target.topic)}`, {
+    method: 'POST',
+    headers,
+    body: msg.body.slice(0, 3_500),
+  });
+}
+
+/** One email through Resend. Returns whether Resend accepted it. */
+export async function sendEmail(
+  target: EmailTarget,
+  subject: string,
+  text: string,
+): Promise<boolean> {
+  if (!target.apiKey || !target.from || !target.to) return false;
+  return send('email', 'https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${target.apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      from: target.from,
+      to: [target.to],
+      subject: subject.slice(0, 200),
+      text,
+    }),
+  });
+}
+
+/** Everywhere one account's alerts can go, resolved once per request. */
+export interface Outlets {
+  rooms: Rooms;
+  push: PushTarget | null;
+  email: EmailTarget | null;
+  pushKinds: readonly string[];
+  emailKinds: readonly string[];
+}
+
+/** Is there anywhere at all to send? Asked before doing work to build a card. */
+export function anyOutlet(out: Outlets | null | undefined): boolean {
+  return Boolean(out && (out.rooms.main || out.push || out.email));
+}
+
+/**
+ * Send one batch of cards everywhere it should go, at once.
+ *
+ * ── Why one function for every channel ──────────────────────────────────────
+ *
+ * Every alert in app.ts is decided before it gets here: edge-triggered on a
+ * change, claimed in the database, muted per mission, cooled down per shop.
+ * Putting push and email behind the same call means all of that applies to
+ * them unchanged. A phone that buzzed for something Discord was told to keep
+ * quiet about would be a second set of rules nobody wrote down.
+ *
+ * ── Why in parallel ─────────────────────────────────────────────────────────
+ *
+ * Sent one after another, three rooms, a push and an email could take five
+ * timeouts end to end, inside a request with a 12 second deadline. Sent
+ * together, the whole fan-out costs about as long as its slowest send, and
+ * one channel being down never holds the others back.
+ *
+ * `room` overrides the shop routing for alerts that have their own channel
+ * (wins, reports). An empty `room` means "no Discord for this one".
+ */
+export async function deliver<T extends { retailer?: string | null }>(
+  out: Outlets,
+  kind: AlertKind,
+  items: readonly T[],
+  build: (group: T[]) => Embed[],
+  opts: { room?: string } = {},
+): Promise<{ discord: number; push: number; email: number }> {
+  const sent = { discord: 0, push: 0, email: 0 };
+  if (items.length === 0) return sent;
+  const jobs: Promise<void>[] = [];
+
+  const groups =
+    opts.room !== undefined
+      ? opts.room ? [{ url: opts.room, items: [...items] }] : []
+      : splitByRoom(items, out.rooms);
+  for (const g of groups) {
+    jobs.push(post(g.url, build(g.items)).then((ok) => { if (ok) sent.discord++; }));
   }
+
+  const wantsPush = out.push !== null && out.pushKinds.includes(kind);
+  const wantsEmail = out.email !== null && out.emailKinds.includes(kind);
+  if (wantsPush || wantsEmail) {
+    const texts = build([...items]).map(embedToText);
+    if (wantsPush) {
+      // Three at most: a phone that buzzes ten times in a second is a phone
+      // that gets the app muted. Discord still carries the full batch.
+      for (const t of texts.slice(0, 3)) {
+        jobs.push(sendPush(out.push!, kind, t).then((ok) => { if (ok) sent.push++; }));
+      }
+    }
+    if (wantsEmail && texts.length > 0) {
+      const subject =
+        texts[0]!.title + (texts.length > 1 ? ` (+${texts.length - 1} more)` : '');
+      const text = texts
+        .map((t) => [t.title, t.body, t.url].filter(Boolean).join('\n'))
+        .join('\n\n') + '\n\n- Phantom';
+      jobs.push(sendEmail(out.email!, subject, text).then((ok) => { if (ok) sent.email++; }));
+    }
+  }
+
+  await Promise.allSettled(jobs);
+  return sent;
 }
 
 /**
@@ -440,6 +793,12 @@ export interface StockItem {
   isPreOrder?: boolean;
   /** When it ships, for the field that replaces Stock on a pre-order. */
   releaseDate?: string | null;
+  /**
+   * The mission's ceiling, per unit. Carried so a third-party seller's card
+   * can say why it was let through: Dan, 19 Oct 2026, "third-party sellers
+   * count when the price is within the mission ceiling".
+   */
+  ceiling?: number | null;
 }
 
 /**
@@ -495,8 +854,9 @@ export function buildStockEmbeds(items: StockItem[], now: string, note?: string)
       fields.push(inline('vs MSRP', '—'));
     }
 
-    // The one fact a price cannot tell you. Every mission refuses a reseller by
-    // default, so an alert that does not name one invites a bad click.
+    // The one fact a price cannot tell you. A reseller is only announced when
+    // it is inside the mission's ceiling, and the card still names it, so
+    // nobody clicks through expecting the shop's own stock.
     fields.push(
       inline(
         'Seller',
@@ -506,11 +866,22 @@ export function buildStockEmbeds(items: StockItem[], now: string, note?: string)
       ),
     );
 
+    // Said in a sentence, at the top, because the Seller field is the sixth
+    // thing on the card and a reader racing does not get that far.
+    const thirdParty =
+      i.seller === 'marketplace'
+        ? `Third-party seller${i.sellerName ? ` (${i.sellerName})` : ''}` +
+          (i.ceiling !== null && i.ceiling !== undefined
+            ? `, within your ${dollars(i.ceiling)} ceiling.`
+            : '.')
+        : '';
+
     return {
       // The prefix is the point. Two seconds after the notification lands,
       // the title is all anybody has read.
       title: clip((pre ? 'PRE-ORDER · ' : '') + (i.name || 'a watched listing'), 240),
       ...(i.url ? { url: i.url } : {}),
+      ...(thirdParty ? { description: thirdParty } : {}),
       color: pre ? COLOR_PRE : COLOR_IN,
       ...(i.imageUrl ? { thumbnail: { url: i.imageUrl } } : {}),
       fields,
