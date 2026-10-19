@@ -135,18 +135,29 @@ test('ANNOUNCED IS NOT OPEN, AND THE FLAG IS WHAT DECIDES', () => {
   assert.equal(open!.phase, 'open');
 });
 
-test('THE CLOCK PASSING A START TIME DOES NOT OPEN A DRAWING', () => {
-  // The mistake worth naming. It is 2:01pm, the page still says
-  // showDrawCTA: false, and inferring "open" from the time sends somebody to a
-  // page with no button. They learn to ignore the alert, and the alert they
-  // ignore is the next one.
-  const after = Date.parse('2026-09-16T22:00:00.000Z');
+test('A STATED START THAT HAS PASSED, WITH NOTHING SAYING IT ENDED, IS OPEN', () => {
+  // This test used to say the opposite ("the clock passing a start time does
+  // not open a drawing"), and that rule is why "drawing open" never fired in
+  // 34 drawings: showDrawCTA was never seen true while an October window ran,
+  // so every one went announced -> ended with nothing in between. Staying
+  // quiet through the window costs the drawing; a card a few minutes ahead of
+  // the button costs a refresh.
+  const after = Date.parse('2026-09-16T22:00:00.000Z'); // an hour after 2pm PDT
   for (const row of readWalmartDraw(fixture, after)) {
-    assert.notEqual(row.phase, 'open');
+    assert.equal(row.phase, 'open');
+    assert.equal(row.openedBy, 'clock', 'and it says which signal it was');
     assert.equal(row.showDrawCTA, false);
     // And Walmart's own words survive intact, whatever we concluded.
     assert.equal(row.windowText, 'Sep 16, 2:00pm PDT');
     assert.equal(row.windowLabel, 'Drawing starts');
+  }
+});
+
+test('A START BADGE A DAY STALE IS NOT AN OPEN WINDOW', () => {
+  // Content nobody updated. Calling it open sends people to an empty shelf.
+  const twoDaysOn = Date.parse('2026-09-18T22:00:00.000Z');
+  for (const row of readWalmartDraw(fixture, twoDaysOn)) {
+    assert.notEqual(row.phase, 'open');
   }
 });
 
@@ -312,7 +323,7 @@ test('"DRAWING ENDS" IN THE FUTURE IS A LIVE WINDOW, NOT AN ENDED ONE', () => {
   // only an ending once its stated time has actually gone by.
   const soon = Date.parse('2026-09-16T20:00:00.000Z'); // an hour before 5pm PDT
   const [live] = readWalmartDraw(withBadge('Drawing ends ', 'Sep 16, 5:00pm PDT'), soon);
-  assert.notEqual(live!.phase, 'ended');
+  assert.equal(live!.phase, 'open');
 
   const [over] = readWalmartDraw(withBadge('Drawing ends ', 'Sep 16, 5:00pm PDT'), AFTER);
   assert.equal(over!.phase, 'ended', 'and once the clock has answered, it is over');
@@ -330,6 +341,7 @@ test('A START TIME IN THE PAST IS NOT AN ENDING', () => {
   // how you retire a drawing on its busiest hour.
   const [row] = readWalmartDraw(withBadge('Drawing starts ', 'Sep 16, 2:00pm PDT'), AFTER);
   assert.notEqual(row!.phase, 'ended');
+  assert.equal(row!.phase, 'open', 'it is the window, running');
 });
 
 test('AN ENDED DRAWING DOES NOT PULL THE PAGE ONTO THE FAST CLOCK', async () => {
@@ -371,4 +383,15 @@ test('A WINDOW THAT CLOSED BEFORE WE LOOKED IS NOT "ANNOUNCED"', async () => {
   // And an announced one arriving cold is still a diary entry.
   const soon = readWalmartDraw(withBadge('Drawing starts ', 'Sep 30, 2:00pm PDT'), AFTER);
   assert.equal(drawChanges([], soon)[0]!.kind, 'announced');
+});
+
+test('"DRAWING ENDS <LATER TODAY>" IS AN OPEN WINDOW EVEN WITH THE FLAG FALSE', () => {
+  // The badge Walmart actually showed during the 30 Sep window. Before 19 Oct
+  // it read `unknown`, which is neither open for the opened alert nor opened
+  // for the closing reminder.
+  const afternoon = Date.parse('2026-09-30T21:04:00.000Z'); // 2:04pm in LA
+  const [row] = readWalmartDraw(withBadge('Drawing ends ', 'today, 3:00pm PDT'), afternoon);
+  assert.equal(row!.phase, 'open');
+  assert.equal(row!.openedBy, 'badge');
+  assert.equal(row!.windowAt, '2026-09-30T22:00:00.000Z', 'and the time is its END');
 });

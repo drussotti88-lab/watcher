@@ -1061,7 +1061,10 @@ async function runPasses(once: boolean): Promise<void> {
           for (const change of drawChanges(lastDraws, scan.rows)) {
             const line =
               change.kind === 'opened'
-                ? `DRAWING OPEN: ${change.row.name} — enter at ${change.row.url}`
+                ? `DRAWING OPEN: ${change.row.name} — enter at ${change.row.url}` +
+                  // Which signal said so. 'clock' and 'badge' are the page's
+                  // own words read against the time; 'flag' is Walmart's button.
+                  (change.row.openedBy ? ` (by ${change.row.openedBy})` : '')
                 : change.kind === 'announced'
                   ? `drawing announced: ${change.row.name} — ${change.row.windowLabel} ${change.row.windowText}`
                   : change.kind === 'ended'

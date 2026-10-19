@@ -17,6 +17,15 @@ const PC_PRODUCT = /\/product\/([^/?#]+)/i;
 /** Walmart: /ip/<slug>/<itemId> — or /ip/<itemId> with no slug. */
 const WALMART_IP = /\/ip\/(?:([^/?#]+)\/)?(\d{5,})/i;
 
+/**
+ * Best Buy: /site/<slug>/<sku>.p?skuId=<sku>. The SKU is the stable id, and
+ * the `.p` suffix is what makes it a product rather than a category (those
+ * end in `.c`). Since 2025 some links are /product/<slug>/<code> instead;
+ * the last segment is that page's id.
+ */
+const BESTBUY_SITE = /\/site\/(?:([^/?#]+)\/)?(\d{6,8})\.p\b/i;
+const BESTBUY_PRODUCT = /\/product\/([^/?#]+)\/([A-Za-z0-9]{6,})\/?$/i;
+
 function titleise(slug: string): string {
   const cleaned = slug
     .replace(/[-_+]+/g, ' ')
@@ -47,6 +56,24 @@ export function fromUrl(rawUrl: string, retailer: string): Discovered | null {
     return null;
   }
   const path = u.pathname;
+
+  // Before the Pokémon Center rule, which would read Best Buy's newer
+  // /product/<slug>/<code> links as a Pokémon Center SKU called "<slug>".
+  if (/(^|\.)bestbuy\.com$/i.test(u.hostname) || retailer === 'Best Buy') {
+    const site = BESTBUY_SITE.exec(path);
+    if (site) {
+      return {
+        externalId: site[2]!,
+        name: titleise(site[1] ?? '') || site[2]!,
+        url: `${u.origin}${path}?skuId=${site[2]!}`,
+      };
+    }
+    const prod = BESTBUY_PRODUCT.exec(path);
+    if (prod) {
+      return { externalId: prod[2]!, name: titleise(prod[1]!) || prod[2]!, url: `${u.origin}${path}` };
+    }
+    return null;
+  }
 
   const tcin = TARGET_TCIN.exec(path);
   if (tcin) {
@@ -142,6 +169,11 @@ const HOSTS: { match: RegExp; product: RegExp; retailer: string }[] = [
     retailer: 'Pokemon Center',
   },
   { match: /(^|\.)walmart\.com$/i, product: /\/ip\/(?:[^/?#]+\/)?\d{5,}/i, retailer: 'Walmart' },
+  {
+    match: /(^|\.)bestbuy\.com$/i,
+    product: /\/site\/(?:[^/?#]+\/)?\d{6,8}\.p\b|\/product\/[^/?#]+\/[A-Za-z0-9]{6,}\/?$/i,
+    retailer: 'Best Buy',
+  },
 ];
 
 export function identifyListing(rawUrl: string): IdentifiedListing | null {

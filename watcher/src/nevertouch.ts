@@ -70,6 +70,8 @@ const RETAILER_HOSTS: Record<string, string> = {
   pokemoncenter: 'pokemoncenter.com',
   target: 'target.com',
   walmart: 'walmart.com',
+  'best buy': 'bestbuy.com',
+  bestbuy: 'bestbuy.com',
 };
 
 /** Normalise whatever the config said into hostnames. */

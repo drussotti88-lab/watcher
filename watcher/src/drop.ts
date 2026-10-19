@@ -203,9 +203,17 @@ export function burstMsFor(
  * settings catch up — keeps working rather than silently going dark.
  */
 export function retailerOn(settings: Settings, retailer: string): boolean {
-  const off = settings.pausedRetailers ?? [];
-  return !off.some((r) => r.toLowerCase() === String(retailer).toLowerCase());
+  const same = (r: string) => r.toLowerCase() === String(retailer).toLowerCase();
+  if ((settings.pausedRetailers ?? []).some(same)) return false;
+  // The exception to "unknown shops are on": a shop that ships OFF until the
+  // owner switches it on. Best Buy (19 Oct 2026) is read from this house's
+  // address only once he has said so.
+  if (OPT_IN_RETAILERS.some(same)) return (settings.enabledRetailers ?? []).some(same);
+  return true;
 }
+
+/** Shops that are off until switched on. Mirrors store.OPT_IN_RETAILERS in the app. */
+export const OPT_IN_RETAILERS: readonly string[] = ['Best Buy'];
 
 /** The shops that are off, for one honest line in the startup log. */
 export function pausedList(settings: Settings): string {

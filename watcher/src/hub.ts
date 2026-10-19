@@ -107,6 +107,12 @@ export interface Settings {
    * a toggle that stopped one but not the other would be a toggle that lies.
    */
   pausedRetailers?: string[];
+  /**
+   * Shops that are off unless named here (Best Buy, from 19 Oct 2026). The
+   * app also leaves their missions out of the list while they are off; this
+   * is the machine's own half of the same switch.
+   */
+  enabledRetailers?: string[];
   /** The tight per-shop floor used only inside a drop window. 0 means off. */
   burstSpacingSeconds?: number;
   /** ISO timestamp the manual drop window closes at. Blank means none open. */
@@ -122,6 +128,7 @@ export const DEFAULT_SETTINGS: Settings = {
   paused: false,
   sweepEveryHours: 24,
   pausedRetailers: [],
+  enabledRetailers: [],
   burstSpacingSeconds: 0,
   dropModeUntil: '',
 };
@@ -152,6 +159,12 @@ export interface ObservationOut {
    * Pokémon Center always send.
    */
   addToCart?: boolean | null;
+  /**
+   * Best Buy's invite button: 'open', 'requested', or null for "said
+   * neither". Sent only for a reading that has an opinion (Best Buy's), so an
+   * older app and every other shop see the shape they always did.
+   */
+  invite?: 'open' | 'requested' | null;
   isPreOrder: boolean;
   releaseDate: string | null;
   imageUrl: string;
@@ -365,6 +378,11 @@ export class Hub {
         // it can no longer tell us about.
         pausedRetailers: Array.isArray(incoming.pausedRetailers)
           ? incoming.pausedRetailers.filter((r: unknown) => typeof r === 'string')
+          : [],
+        // Absent means none switched on, so an opt-in shop stays OFF when the
+        // app cannot say - the safe reading for a shop nobody chose to watch.
+        enabledRetailers: Array.isArray(incoming.enabledRetailers)
+          ? incoming.enabledRetailers.filter((r: unknown) => typeof r === 'string')
           : [],
         burstSpacingSeconds: Number.isFinite(incoming.burstSpacingSeconds)
           ? Math.max(0, Number(incoming.burstSpacingSeconds))

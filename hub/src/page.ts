@@ -1623,7 +1623,7 @@ ${FONTS}<style>${STYLE}</style></head>
         <div class="wizhead">
           <div>
             <div class="name">Walmart drawings</div>
-            <div class="sub">Free to enter, one per account, drawn at random after the window shuts.</div>
+            <div class="sub">Free to enter, one per account, drawn at random after the window shuts. Reminders (a day before, opening, closing, ended) arrive while Phantom is running.</div>
           </div>
         </div>
         <div id="draw-list"></div>
@@ -2788,6 +2788,36 @@ function missionCard(m, redraw) {
       if (ok) { e.target.textContent = 'checking…'; e.target.disabled = true; load(); }
     });
     actions.appendChild(now);
+  }
+
+  /*
+   * Best Buy's invite: the one thing on this card a person tells Phantom
+   * rather than the other way round. Best Buy emails the invite to the
+   * account; nothing here can see that, so the button is how the 24-hour
+   * countdown starts. The reminders ride on Phantom's check-ins (the app has
+   * no clock of its own on this plan), and the line under the button says so.
+   */
+  if (m.retailer === 'Best Buy') {
+    const until = m.inviteAt ? Date.parse(m.inviteAt) + 24 * 3600 * 1000 : NaN;
+    const live = Number.isFinite(until) && until > Date.now();
+    const inv = el('button', 'small', live ? 'Invite used or gone' : 'I got the invite');
+    inv.addEventListener('click', async (e) => {
+      await withButton(e.target, '…', null, async () => {
+        await api('POST', '/api/missions/' + m.id + '/invite', { received: !live });
+        await load();
+        return live ? 'countdown stopped' : 'countdown started';
+      });
+    });
+    actions.appendChild(inv);
+    if (live) {
+      const mins = Math.max(0, Math.round((until - Date.now()) / 60000));
+      const leftTxt = mins >= 90 ? Math.round(mins / 60) + ' hours' : mins + ' minutes';
+      flags.appendChild(el('span', 'pill flag', 'INVITE · ' + leftTxt + ' left to buy'));
+      const how = el('div', 'meta',
+        'Reminders at 12 hours, 2 hours and 30 minutes left arrive while Phantom is running.');
+      how.style.marginTop = '6px';
+      left.appendChild(how);
+    }
   }
 
   if (actions.childNodes.length) left.appendChild(actions);
@@ -4524,14 +4554,43 @@ function render() {
  * of the same thing — so the second time is one click.
  */
 /** The shop switches, the burst field, and whether a window is open. */
-const SHOPS = ['Target', 'Walmart', 'Pokemon Center'];
+const SHOPS = ['Target', 'Walmart', 'Pokemon Center', 'Best Buy'];
+// Off until switched on (store.OPT_IN_RETAILERS). Best Buy is alert-only and
+// new, so starting to read it is the owner's decision, not a default.
+const OPT_IN_SHOPS = ['Best Buy'];
 
 function renderShops(st) {
   const box = document.getElementById('shop-toggles');
   if (!box) return;
   const off = st.pausedRetailers || [];
+  const enabled = st.enabledRetailers || [];
+  const same = (a, b) => String(a).toLowerCase() === String(b).toLowerCase();
   box.textContent = '';
   for (const shop of SHOPS) {
+    if (OPT_IN_SHOPS.includes(shop)) {
+      const onOpt = enabled.some((r) => same(r, shop)) && !off.some((r) => same(r, shop));
+      const chipOpt = el('button', 'chip' + (onOpt ? ' on' : ''),
+        shop + (onOpt ? ' · on (alerts only)' : ' · off'));
+      chipOpt.type = 'button';
+      chipOpt.setAttribute('aria-pressed', onOpt ? 'true' : 'false');
+      chipOpt.title = 'Alerts only: in stock, under your ceiling, and invite windows. Phantom never asks for an invite or buys here.';
+      chipOpt.addEventListener('click', async () => {
+        const nextOn = onOpt
+          ? enabled.filter((r) => !same(r, shop))
+          : [...enabled.filter((r) => !same(r, shop)), shop];
+        const msg = document.getElementById('shops-msg');
+        await withButton(chipOpt, '…', msg, async () => {
+          await api('POST', '/api/settings', {
+            enabledRetailers: nextOn,
+            pausedRetailers: off.filter((r) => !same(r, shop)),
+          });
+          await load();
+          return shop + (onOpt ? ' is off' : ' is on, for alerts only');
+        });
+      });
+      box.appendChild(chipOpt);
+      continue;
+    }
     const on = !off.some((r) => String(r).toLowerCase() === shop.toLowerCase());
     // The chip says the STATE, and pressing it flips that state. A control
     // labelled with what it will do next reads as a description of now.

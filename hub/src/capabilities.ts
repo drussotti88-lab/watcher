@@ -103,6 +103,12 @@ export const ABILITIES: readonly Ability[] = [
     audience: 'member',
   },
   {
+    key: 'inviteAlarm',
+    label: 'Invite-window alarm',
+    blurb: 'Shouts when a shop that sells by invitation opens its request list, and counts down an invite you received.',
+    audience: 'member',
+  },
+  {
     key: 'autoCheckout',
     label: 'Automatic checkout',
     blurb: 'Adds to cart and completes an order unattended, under a price ceiling and a daily spend cap.',
@@ -175,6 +181,24 @@ export const RETAILERS: readonly RetailerCaps[] = [
       'First-party only, so there is no reseller to detect. Availability is a yes/no — no quantity ' +
       'exists to warn on. Went behind a bot wall for three hours on 1 Sep 2026 and recovered on its ' +
       'own; Phantom names a wall and stands down rather than knocking, and never tries to get past one.',
+  },
+  {
+    key: 'best-buy',
+    name: 'Best Buy',
+    abilities: {
+      // 'partial', not 'live': added 19 Oct 2026, OFF until the owner turns it
+      // on, and the reader was written from Best Buy's button wording rather
+      // than verified against a live invite window. It says unknown rather
+      // than guessing when the button is anything it does not recognise.
+      watch: 'partial',
+      inviteAlarm: 'partial',
+      // Alert-only, by decision. Phantom never asks for an invite and never
+      // buys here; there is no driver, and the tests hold that.
+      autoCheckout: 'none',
+    },
+    note:
+      'Alerts only, and off until switched on: in stock, under your ceiling, and when the invite list ' +
+      'opens. Asking for an invite and buying are always done by a person.',
   },
 ];
 
