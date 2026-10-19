@@ -43,6 +43,7 @@ function esc(s: string): string {
  * design nobody asked for and nothing to check it against.
  */
 import { TYPICAL_PRICE, FLAG_ABOVE } from './msrp.ts';
+import { ALERT_KINDS, ALERT_KIND_LABELS } from './notify.ts';
 
 const FONTS =
   '<link rel="preconnect" href="https://fonts.googleapis.com">' +
@@ -1889,6 +1890,38 @@ ${FONTS}<style>${STYLE}</style></head>
       </div>
       <div class="meta" id="discord-result" style="margin-top:8px" hidden></div>
     </div>
+    <!-- Phone and email, per account. Discord is a room for everybody; these
+         are yours. The push topic is a credential (anyone who knows it can
+         read your alerts), so the page is only ever told that one is saved
+         and its last three letters, never the whole name. -->
+    <div class="card" style="margin-top:10px">
+      <form class="stack" id="alerts-form">
+        <div class="row">
+          <div class="grow">
+            <div class="name">Phone and email</div>
+            <div class="meta" id="alerts-state">Checking…</div>
+          </div>
+          <button id="alerts-test" type="button">Send a test to every channel</button>
+        </div>
+        <div class="grid2">
+          <label class="f">Phone push topic
+            <span class="hint">install the free ntfy app, subscribe to a long private name, paste the same name here</span>
+            <input type="text" name="pushTopic" autocomplete="off" spellcheck="false" maxlength="64">
+          </label>
+          <label class="f">Email alerts to
+            <span class="hint">one address — blank turns email off</span>
+            <input type="email" name="emailTo" autocomplete="off" spellcheck="false" maxlength="200">
+          </label>
+        </div>
+        <div class="meta">Which alerts go where. Discord gets every one regardless.</div>
+        <div class="stack" id="alert-kinds" style="gap:4px"></div>
+        <div class="actions">
+          <button type="submit" class="primary">Save alerts</button>
+          <button type="button" id="push-clear" hidden>Stop phone alerts</button>
+          <span class="msg" id="alerts-msg"></span>
+        </div>
+      </form>
+    </div>
 
     <h2>What is true of every mission</h2>
     <p class="sub" style="margin:-6px 0 14px">
@@ -2954,8 +2987,8 @@ function missionPanel(m) {
       </label>
       <label class="f">Sellers
         <select name="sellerPolicy">
+          <option value="any" selected>Any seller, under the ceiling</option>
           <option value="retailer_only">The retailer only</option>
-          <option value="any">Any seller, under the ceiling</option>
         </select>
       </label>
       <label class="f">Pre-orders
@@ -2996,7 +3029,9 @@ function missionPanel(m) {
   }
   q('quantity').value = m.quantity;
   q('checkEverySeconds').value = String(m.checkEverySeconds);
-  q('sellerPolicy').value = m.sellerPolicy;
+  // 'any' when the mission does not say: the default since 19 Oct 2026, and
+  // what the app stores for a mission created without one.
+  q('sellerPolicy').value = m.sellerPolicy || 'any';
   q('preOrderPolicy').value = m.preOrderPolicy || 'skip';
   q('enabled').checked = m.enabled;
   q('armed').checked = m.armed;
@@ -4528,6 +4563,7 @@ function renderShops(st) {
   if (inRep && document.activeElement !== inRep) {
     inRep.value = (st.inStockRepeatAfter || []).join(', ');
   }
+  renderAlertChannels(st);
 
   // Is a window open, and how long is left? Said in words, because "true" is
   // not an answer to "am I about to be checking Target every 8 seconds".
@@ -4743,6 +4779,8 @@ function isFresh(d) {
  * and a price sanity check that arrives late is no use next to a price.
  */
 const TYPICAL_PRICE = ${JSON.stringify(TYPICAL_PRICE)};
+/** Every alert kind and its words, for the phone/email choices. From notify.ts. */
+const ALERT_KIND_LIST = ${JSON.stringify(ALERT_KINDS.map((k) => [k, ALERT_KIND_LABELS[k]]))};
 const FLAG_ABOVE = ${FLAG_ABOVE};
 
 /** How far above the usual price this sits. Null when there is no comparison. */
@@ -7070,6 +7108,131 @@ document.getElementById('discord-redraw').addEventListener('click', async () => 
 });
 
 document.getElementById('discord-test').addEventListener('click', () => sendTest('hello'));
+
+/*
+ * Phone and email: what is on, and which alerts go to each.
+ *
+ * Re-rendered on every load like the rest of Settings, except while the form
+ * has unsaved changes - the page refreshes itself, and a refresh that unticked
+ * the boxes somebody was halfway through ticking would be a form that lies.
+ */
+function renderAlertChannels(st) {
+  const form = document.getElementById('alerts-form');
+  if (!form) return;
+  const pushOn = DATA.push === true;
+  const mailOn = DATA.email === true;
+  const state = document.getElementById('alerts-state');
+  state.textContent =
+    'Phone: ' + (pushOn ? 'on (topic ending ' + String(st.pushTopic || '').slice(-3) + ')' : 'off') + '. ' +
+    'Email: ' + (mailOn
+      ? 'on, to ' + (st.emailTo || '')
+      : DATA.emailReady
+        ? 'off. Add an address below.'
+        : 'not set up on the app yet. Add RESEND_API_KEY and ALERT_EMAIL_FROM in Vercel and redeploy.') +
+    (mailOn ? '.' : '');
+  document.getElementById('alerts-test').disabled = !(DATA.discord === true || pushOn || mailOn);
+  document.getElementById('push-clear').hidden = !pushOn;
+  if (form.dataset.dirty === '1') return;
+
+  // Never filled with the topic: the page is only told it is set.
+  const topic = form.querySelector('[name=pushTopic]');
+  topic.value = '';
+  topic.placeholder = pushOn
+    ? 'saved. Type a new name only to replace it'
+    : 'a long private name, e.g. phantom-dan-7q2x9k4m';
+  const mail = form.querySelector('[name=emailTo]');
+  mail.value = st.emailTo || '';
+
+  const pushK = Array.isArray(st.pushKinds) ? st.pushKinds : [];
+  const mailK = Array.isArray(st.emailKinds) ? st.emailKinds : [];
+  const box = document.getElementById('alert-kinds');
+  box.textContent = '';
+  for (const pair of ALERT_KIND_LIST) {
+    const kind = pair[0];
+    const row = el('div', 'row');
+    row.append(el('span', 'grow', pair[1]));
+    const p = document.createElement('input');
+    p.type = 'checkbox';
+    p.dataset.push = kind;
+    p.checked = pushK.includes(kind);
+    const pl = el('label', 'check');
+    pl.append(p, ' phone');
+    const m = document.createElement('input');
+    m.type = 'checkbox';
+    m.dataset.email = kind;
+    m.checked = mailK.includes(kind);
+    const ml = el('label', 'check');
+    ml.append(m, ' email');
+    row.append(pl, ml);
+    box.append(row);
+  }
+}
+
+document.getElementById('alerts-form').addEventListener('input', (e) => {
+  e.currentTarget.dataset.dirty = '1';
+});
+
+document.getElementById('alerts-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const form = e.target;
+  const msg = document.getElementById('alerts-msg');
+  const topic = String(form.querySelector('[name=pushTopic]').value || '').trim();
+  const patch = {
+    emailTo: String(form.querySelector('[name=emailTo]').value || '').trim(),
+    pushKinds: [...form.querySelectorAll('input[data-push]')].filter((i) => i.checked).map((i) => i.dataset.push),
+    emailKinds: [...form.querySelectorAll('input[data-email]')].filter((i) => i.checked).map((i) => i.dataset.email),
+  };
+  // Blank keeps the saved topic: the box is never filled with it, so blank
+  // is what an untouched box looks like. "Stop phone alerts" is how to clear.
+  if (topic) patch.pushTopic = topic;
+  const ok = await withButton(form.querySelector('button[type=submit]'), 'Saving…', msg, async () => {
+    await api('POST', '/api/settings', patch);
+    return 'saved';
+  });
+  if (ok) {
+    form.dataset.dirty = '';
+    load();
+  }
+});
+
+document.getElementById('push-clear').addEventListener('click', async (e) => {
+  const form = document.getElementById('alerts-form');
+  const msg = document.getElementById('alerts-msg');
+  const ok = await withButton(e.target, 'Stopping…', msg, async () => {
+    await api('POST', '/api/settings', { pushTopic: '' });
+    return 'phone alerts stopped';
+  });
+  if (ok) {
+    form.dataset.dirty = '';
+    load();
+  }
+});
+
+/*
+ * One button, every channel, each answering for itself. "Discord yes, phone
+ * no" is one fix; "nothing arrived" is four guesses.
+ */
+document.getElementById('alerts-test').addEventListener('click', async (e) => {
+  const btn = e.target;
+  const msg = document.getElementById('alerts-msg');
+  btn.disabled = true;
+  try {
+    const res = await fetch('/api/notify/test?kind=hello', { method: 'POST' });
+    const body = await res.json();
+    if (!body.configured) {
+      say(msg, 'Nothing is set up to send to yet.', false);
+    } else {
+      const word = (v) => (v === true ? 'sent' : v === false ? 'FAILED' : 'not set up');
+      const all = body.push !== false && body.email !== false;
+      say(msg,
+        'Discord: ' + (body.rooms ? 'sent to ' + body.rooms + ' channel' + (body.rooms === 1 ? '' : 's') : 'not set up') +
+        '. Phone: ' + word(body.push) + '. Email: ' + word(body.email) + '.', all);
+    }
+  } catch (err) {
+    say(msg, 'Could not reach the app: ' + err.message, false);
+  }
+  btn.disabled = false;
+});
 // The real alert, with real data, footered as a rehearsal. See the endpoint for
 // why waiting cannot show you this when the thing is already in stock.
 document.getElementById('discord-preview').addEventListener('click', () => sendTest('stock'));

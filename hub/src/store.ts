@@ -25,6 +25,7 @@ import type { Discovered, SourceRow, SourceConfig } from './types.ts';
 import { productKey } from './parsers/identify.ts';
 import { currentCatalogue, eraOf, band, namesRetiredSeries, type Era } from './era.ts';
 import { franchiseOf, isWanted, WANTED } from './franchise.ts';
+import { ALERT_KINDS, DEFAULT_PUSH_KINDS, DEFAULT_EMAIL_KINDS } from './notify.ts';
 
 /** Postgres hands NUMERIC back as a string. Never let that leak upwards. */
 function toPrice(v: unknown): number | null {
@@ -1334,6 +1335,24 @@ export interface Settings {
    * new normal pace at three in the morning.
    */
   dropModeUntil: string;
+  /**
+   * The ntfy topic this account's phone is subscribed to. Blank means no push.
+   *
+   * A topic on the public ntfy server is a shared secret: anybody who knows
+   * the name can read what is sent to it and send to it. So it is checked for
+   * length here, and it never goes back to a page or to Phantom in full -
+   * see maskSettings.
+   */
+  pushTopic: string;
+  /** Where email alerts go. Blank means no email. */
+  emailTo: string;
+  /**
+   * Which alert kinds ring the phone, and which go to email (ALERT_KINDS in
+   * notify.ts). Unset means the defaults there; an empty list is a person
+   * having switched every one off, and is kept as that.
+   */
+  pushKinds: string[];
+  emailKinds: string[];
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -1352,7 +1371,29 @@ export const DEFAULT_SETTINGS: Settings = {
   pausedRetailers: [],
   burstSpacingSeconds: 0,
   dropModeUntil: '',
+  pushTopic: '',
+  emailTo: '',
+  pushKinds: [...DEFAULT_PUSH_KINDS],
+  emailKinds: [...DEFAULT_EMAIL_KINDS],
 };
+
+/**
+ * Settings as they may leave the app: the push topic cut to its last three
+ * characters.
+ *
+ * The topic is the whole credential for an ntfy channel, and the settings go
+ * to the page (which people screenshot) and to every Phantom that reads its
+ * missions (which writes logs). Neither needs the name to do its job; the page
+ * only needs to say whether one is set. The masked form cannot be saved back:
+ * validateSettings refuses the bullet characters, so a page that echoes it
+ * fails loudly instead of overwriting the real topic.
+ */
+export function maskSettings(s: Settings): Settings {
+  return {
+    ...s,
+    pushTopic: s.pushTopic ? `\u2022\u2022\u2022${s.pushTopic.slice(-3)}` : '',
+  };
+}
 
 /** The shops this system knows. A toggle for a shop we cannot read is a lie. */
 export const KNOWN_RETAILERS = ['Target', 'Walmart', 'Pokemon Center'] as const;
@@ -1417,6 +1458,33 @@ export function validateSettings(s: Partial<Settings>): string | null {
     // Twelve hours is already generous for something that exists to be brief.
     if (t > Date.now() + 12 * 3600_000) {
       return 'a drop window cannot be opened more than 12 hours ahead';
+    }
+  }
+  if (s.pushTopic !== undefined && s.pushTopic !== '') {
+    const v = String(s.pushTopic).trim();
+    // ntfy's own topic alphabet. Twelve characters at least, because on the
+    // public server the name IS the password: "phantom" or "dan" would be
+    // somebody else's topic too.
+    if (!/^[A-Za-z0-9_-]+$/.test(v)) {
+      return 'a push topic is letters, numbers, - and _ only (no spaces or links)';
+    }
+    if (v.length < 12) return 'make the push topic at least 12 characters, so nobody can guess it';
+    if (v.length > 64) return 'a push topic is at most 64 characters';
+  }
+  if (s.emailTo !== undefined && s.emailTo !== '') {
+    const v = String(s.emailTo).trim();
+    if (v.length > 200 || !/^[^\s@<>,;]+@[^\s@<>,;]+\.[A-Za-z]{2,}$/.test(v)) {
+      return 'that does not look like one email address';
+    }
+  }
+  for (const key of ['pushKinds', 'emailKinds'] as const) {
+    const list = s[key];
+    if (list === undefined) continue;
+    if (!Array.isArray(list)) return `${key} must be a list of alert kinds`;
+    for (const k of list) {
+      if (!(ALERT_KINDS as readonly string[]).includes(String(k))) {
+        return `"${k}" is not an alert this app sends`;
+      }
     }
   }
   for (const key of ['activeFrom', 'activeUntil'] as const) {
@@ -1536,7 +1604,21 @@ export async function getSettings(db: Sql, userId: number): Promise<Settings> {
       .filter((r) => (KNOWN_RETAILERS as readonly string[]).includes(r)),
     burstSpacingSeconds: num('burstSpacingSeconds', DEFAULT_SETTINGS.burstSpacingSeconds),
     dropModeUntil: text('dropModeUntil', ''),
+    pushTopic: text('pushTopic', ''),
+    emailTo: text('emailTo', ''),
+    // Absent key: the defaults. Present and blank: every one switched off.
+    // Unknown names are dropped, so a kind retired later cannot break a read.
+    pushKinds: kindList(map.get('pushKinds'), DEFAULT_PUSH_KINDS),
+    emailKinds: kindList(map.get('emailKinds'), DEFAULT_EMAIL_KINDS),
   };
+}
+
+function kindList(raw: string | undefined, fallback: readonly string[]): string[] {
+  if (raw === undefined) return [...fallback];
+  return raw
+    .split(',')
+    .map((k) => k.trim())
+    .filter((k) => (ALERT_KINDS as readonly string[]).includes(k));
 }
 
 export async function setSettings(
@@ -1564,8 +1646,17 @@ export async function setSettings(
     'pausedRetailers',
     'burstSpacingSeconds',
     'dropModeUntil',
+    'pushTopic',
+    'emailTo',
+    'pushKinds',
+    'emailKinds',
   ] as const) {
-    const value = patch[key];
+    const raw = patch[key];
+    // Addresses are stored trimmed: a stray space pasted from a phone would
+    // otherwise be a topic nobody is subscribed to.
+    const value = (key === 'pushTopic' || key === 'emailTo') && typeof raw === 'string'
+      ? raw.trim()
+      : raw;
     if (value === undefined) continue;
     statements.push({
       text: `INSERT INTO settings (user_id, key, value) VALUES ($1, $2, $3)
@@ -1656,7 +1747,9 @@ function toMission(r: Record<string, unknown>): MissionRow {
     alerts: r.alerts === undefined || r.alerts === null ? true : r.alerts === true,
     ceiling: toPrice(r.ceiling),
     quantity: Number(r.quantity ?? 1),
-    sellerPolicy: (String(r.seller_policy ?? 'retailer_only') as SellerPolicy),
+    // 'any' since 19 Oct 2026 (Dan: third-party sellers count when the price
+    // is within the ceiling). Still checked against the ceiling on every buy.
+    sellerPolicy: (String(r.seller_policy ?? 'any') as SellerPolicy),
     preOrderPolicy: (String(r.preorder_policy ?? 'skip') as PreOrderPolicy),
     checkEverySeconds: Number(r.check_every_s ?? 60),
     checkNow: r.check_now_at !== null && r.check_now_at !== undefined,
@@ -1948,7 +2041,7 @@ export async function upsertMission(
       m.armed ?? false,
       m.ceiling ?? null,
       m.quantity ?? 1,
-      m.sellerPolicy ?? 'retailer_only',
+      m.sellerPolicy ?? 'any',
       m.preOrderPolicy ?? 'skip',
       m.checkEverySeconds ?? 60,
       m.notes ?? '',
@@ -4748,9 +4841,11 @@ export interface Funnel {
    * The first version counted any in-stock reading and reported fifteen
    * listings, which read as fifteen missed chances. Two of them were. The
    * other thirteen were Walmart marketplace resellers, which are permanently
-   * in stock at two to four times MSRP — and every mission refuses them on
-   * purpose, because `retailer_only` is the default and a reseller listing is
-   * the thing you are racing, not the thing you want.
+   * in stock at two to four times MSRP — and at the time every mission
+   * refused them, because `retailer_only` was the default and a reseller
+   * listing is the thing you are racing, not the thing you want. (Since 19 Oct
+   * 2026 the default is `any`, held to the ceiling; this count still separates
+   * the shop's own stock, which is the question it answers.)
    *
    * Counting those as opportunities made the funnel say we were losing
    * thirteen chances a week that never existed, and pointed the next day's

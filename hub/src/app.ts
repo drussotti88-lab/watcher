@@ -27,19 +27,28 @@ import * as store from './store.ts';
 import { dropReadiness } from './readiness.ts';
 import {
   announce,
-  announceBought,
-  announceQueues,
-  announceWalls,
-  announceBlind,
-  announceReport,
-  announceStaged,
   announceStock,
   announceDraw,
   announceTest,
   reportOps,
   splitByRoom,
   roomKey,
+  deliver,
+  anyOutlet,
+  sendPush,
+  sendEmail,
+  buildStockEmbeds,
+  buildDrawEmbeds,
+  buildQueueEmbed,
+  buildWallEmbed,
+  buildBlindEmbed,
+  buildBoughtEmbed,
+  buildReportEmbed,
+  buildStagedEmbeds,
+  DEFAULT_PUSH_KINDS,
+  DEFAULT_EMAIL_KINDS,
   type Rooms,
+  type Outlets,
 } from './notify.ts';
 import { applyFilters, dedupe } from './filter.ts';
 import { isWanted } from './franchise.ts';
@@ -78,6 +87,13 @@ import { PHANTOM_ZIP_BASE64, PHANTOM_ZIP_META } from './generated/phantom-zip.ts
  */
 const SWEEP_SOURCE = 'target-tcg';
 
+/**
+ * The owner's account. User 1 by construction - see auth.ts, where an
+ * old-format session is read as user 1 because he was the only user there was.
+ * Used for alerts that are for the owner whoever raised them (tester reports).
+ */
+const OWNER_ID = 1;
+
 function json(body: unknown, status = 200, headers: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(body, null, 2), {
     status,
@@ -106,15 +122,35 @@ function roomsFrom(env: Env): Rooms {
   return { main: env.DISCORD_WEBHOOK_URL, byRetailer };
 }
 
-/** Post one batch of cards, each card to the room its shop belongs in. */
-async function toRooms<T extends { retailer?: string | null }>(
-  items: readonly T[],
-  rooms: Rooms,
-  send: (url: string, group: T[]) => Promise<void>,
-): Promise<void> {
-  for (const group of splitByRoom(items, rooms)) {
-    await send(group.url, group.items);
-  }
+/**
+ * Everywhere this account's alerts can go: the Discord rooms (shared, from
+ * the environment) plus this account's own phone and inbox (its settings).
+ *
+ * Push needs only a topic, because ntfy.sh is free and open. Email needs the
+ * app to have a Resend key and a sender AND the account to have an address;
+ * any one missing means no email, never an error. Settings that failed to
+ * load mean Discord only - an alert is never held back by its extras.
+ *
+ * Whose settings: the account whose request raised the alert, which for
+ * readings is the account whose Phantom did the reading.
+ */
+function outletsFor(env: Env, s: store.Settings | null): Outlets {
+  const mailReady = Boolean(env.RESEND_API_KEY && env.ALERT_EMAIL_FROM);
+  return {
+    rooms: roomsFrom(env),
+    push: s?.pushTopic
+      ? { server: env.NTFY_URL || 'https://ntfy.sh', topic: s.pushTopic, token: env.NTFY_TOKEN }
+      : null,
+    email: mailReady && s?.emailTo
+      ? { apiKey: env.RESEND_API_KEY ?? '', from: env.ALERT_EMAIL_FROM ?? '', to: s.emailTo }
+      : null,
+    pushKinds: s?.pushKinds ?? DEFAULT_PUSH_KINDS,
+    emailKinds: s?.emailKinds ?? DEFAULT_EMAIL_KINDS,
+  };
+}
+
+async function outletsOf(db: Sql, userId: number, env: Env): Promise<Outlets> {
+  return outletsFor(env, await store.getSettings(db, userId).catch(() => null));
 }
 
 /** Post everything a set of sweeps found, then mark it announced. */
@@ -475,7 +511,9 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
         blocked: r.blocked ?? null,
       }));
       return json({
-        missions, runs, changes, products, listings, settings, discoveries, sweep, now, you,
+        missions, runs, changes, products, listings, discoveries, sweep, now, you,
+        // The push topic is a credential; the page is told it is set, not what.
+        settings: store.maskSettings(settings),
         // What was decided against, and by whom. Small, and a review list you
         // cannot see the other side of is half a review list.
         forgotten,
@@ -501,6 +539,12 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
           env.DISCORD_WALMART_WEBHOOK_URL || env.DISCORD_DRAWS_WEBHOOK_URL,
         ),
         discordPkc: Boolean(env.DISCORD_POKEMON_CENTER_WEBHOOK_URL),
+        // This account's phone and inbox, beside Discord. Booleans again:
+        // push is on when a topic is saved; email needs the app's Resend key
+        // and sender (emailReady) AND an address on this account.
+        push: Boolean(settings.pushTopic),
+        emailReady: Boolean(env.RESEND_API_KEY && env.ALERT_EMAIL_FROM),
+        email: Boolean(env.RESEND_API_KEY && env.ALERT_EMAIL_FROM && settings.emailTo),
         // Names of the webhook variables this deployment received, so
         // "I set it and it still says no" is a question with an answer.
         // Names only - the value is the credential.
@@ -694,12 +738,18 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       // rather than per endpoint. Drawings are Walmart's today and the routing
       // does not assume that: the day another shop runs a lottery, its cards
       // go to its own room without a line changing here.
-      const rooms = roomsFrom(env);
-      if (env.DISCORD_WEBHOOK_URL) {
-        await toRooms(opened, rooms, (url, g) => announceDraw(url, g, now, 'opened'));
-        await toRooms(soon, rooms, (url, g) => announceDraw(url, g, now, 'soon'));
-        await toRooms(announced, rooms, (url, g) => announceDraw(url, g, now, 'announced'));
-        await toRooms(closing, rooms, (url, g) => announceDraw(url, g, now, 'closing'));
+      // Settings are only read when there is something to say: this runs on
+      // every Walmart pass and almost every pass has nothing new.
+      if (opened.length + soon.length + announced.length + closing.length > 0) {
+        const out = await outletsOf(db, userId, env);
+        if (anyOutlet(out)) {
+          await Promise.allSettled([
+            deliver(out, 'drawOpened', opened, (g) => buildDrawEmbeds(g, now, 'opened')),
+            deliver(out, 'drawSoon', soon, (g) => buildDrawEmbeds(g, now, 'soon')),
+            deliver(out, 'drawAnnounced', announced, (g) => buildDrawEmbeds(g, now, 'announced')),
+            deliver(out, 'drawClosing', closing, (g) => buildDrawEmbeds(g, now, 'closing')),
+          ]);
+        }
       }
 
       return json({
@@ -1289,14 +1339,30 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       // Tell the owner in the room they are already watching. The report
       // itself stays in the database: a console dump does not belong in a
       // chat window, and the ops room is not where secrets should be tested.
-      const room = env.DISCORD_OPS_WEBHOOK_URL || env.DISCORD_WEBHOOK_URL;
-      if (room && id) {
-        await announceReport(room, {
-          id,
-          handle: (await store.profile(db, userId)).handle,
-          note: String(report.note ?? ''),
-          summary: String(report.summary ?? ''),
-        }).catch(() => {});
+      const room = env.DISCORD_OPS_WEBHOOK_URL || env.DISCORD_WEBHOOK_URL || '';
+      if (id) {
+        try {
+          // The OWNER'S phone and inbox, not the tester's: a report is filed
+          // by a tester's machine and is for the person who reads reports.
+          const out = await outletsOf(db, OWNER_ID, env);
+          await deliver(
+            out,
+            'report',
+            [{
+              // No shop: a report is about a machine. Said explicitly so the
+              // card type still has the field every alert is routed by.
+              retailer: '',
+              id,
+              handle: (await store.profile(db, userId)).handle,
+              note: String(report.note ?? ''),
+              summary: String(report.summary ?? ''),
+            }],
+            (g) => g.map((r) => buildReportEmbed(r)),
+            { room },
+          );
+        } catch {
+          /* a report is filed whether or not anybody was told */
+        }
       }
       return json({ id });
     }
@@ -1340,14 +1406,14 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
     }
 
     if (request.method === 'GET' && path === '/api/settings') {
-      return json({ settings: await store.getSettings(db, userId) });
+      return json({ settings: store.maskSettings(await store.getSettings(db, userId)) });
     }
 
     if (request.method === 'POST' && path === '/api/settings') {
       const b = await body<Partial<store.Settings>>();
       if (!b) return json({ error: 'body must be JSON' }, 400);
       try {
-        return json({ settings: await store.setSettings(db, userId, b) });
+        return json({ settings: store.maskSettings(await store.setSettings(db, userId, b)) });
       } catch (err) {
         return json({ error: (err as Error).message }, 400);
       }
@@ -1446,10 +1512,12 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
      * and a page that can be screenshotted is not where it belongs.
      */
     if (request.method === 'POST' && path === '/api/notify/test') {
-      if (!env.DISCORD_WEBHOOK_URL) {
+      const kind = url.searchParams.get('kind') ?? 'hello';
+      const out = await outletsOf(db, userId, env);
+      // The preview is a Discord card by definition; the hello goes anywhere.
+      if (kind === 'stock' ? !env.DISCORD_WEBHOOK_URL : !anyOutlet(out)) {
         return json({ sent: false, configured: false }, 200);
       }
-      const kind = url.searchParams.get('kind') ?? 'hello';
 
       /*
        * A rehearsal of the real alert, with real data.
@@ -1502,11 +1570,40 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
        * once. So this posts into each distinct room this Hub would ever use,
        * and reports how many got one.
        */
+      /*
+       * And the phone and the inbox, from the same button.
+       *
+       * Sent whatever the per-alert choices say: this proves the WIRING, and
+       * a test that stayed quiet because "Tester report" was not ticked for
+       * push would be exactly the ambiguous silence this endpoint exists to
+       * remove. Each channel answers for itself, so "Discord yes, phone no"
+       * reads as one fix rather than a guess.
+       */
       const testRooms = roomsFrom(env);
       const urls = [...new Set([testRooms.main, ...Object.values(testRooms.byRetailer)])]
         .filter(Boolean);
-      for (const url of urls) await announceTest(url, now);
-      return json({ sent: true, configured: true, rooms: urls.length });
+      const words = {
+        title: 'Phantom is connected',
+        body:
+          'This is a test from Settings. Real alerts say what dropped, the price, ' +
+          'and open the product when you tap them.',
+        url: url.origin,
+      };
+      const [, push, email] = await Promise.all([
+        Promise.allSettled(urls.map((u) => announceTest(u, now))),
+        out.push ? sendPush(out.push, 'test', words) : Promise.resolve(null),
+        out.email
+          ? sendEmail(out.email, 'Phantom test: email alerts are connected', words.body)
+          : Promise.resolve(null),
+      ]);
+      return json({
+        sent: urls.length > 0 || push === true || email === true,
+        configured: true,
+        rooms: urls.length,
+        // true sent, false tried and failed, null not set up.
+        push,
+        email,
+      });
     }
 
     if (request.method === 'POST' && path === '/api/activity') {
@@ -1576,7 +1673,17 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       const result = await store.recordActivity(db, userId, lines);
       const pruned = await store.pruneActivity(db, userId);
 
-      if (env.DISCORD_WEBHOOK_URL) {
+      // A failed check is what can make a shop "blind". Worked out before the
+      // alerts so the settings read below is only paid on a batch that might
+      // say something: this is the hottest endpoint in the app.
+      const failedCheck = lines.some((l) =>
+        l.kind === 'check' &&
+        !['in', 'out', 'in_stock', 'staged'].includes(String(l.state ?? '')) &&
+        !store.isWallLine(l.message));
+      const mightSay = anyWall || failedCheck || lines.some((l) => store.isQueueLine(l.message));
+      const out = mightSay ? await outletsOf(db, userId, env) : null;
+
+      if (out && anyOutlet(out)) {
         const fresh = new Map<string, string>();
         for (const line of lines) {
           if (!store.isQueueLine(line.message)) continue;
@@ -1588,10 +1695,12 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
           // A waiting room is the most shop-specific thing this sends: it is
           // an instruction to go and stand in one particular queue. It belongs
           // in that shop's room more than anything else here does.
-          await toRooms(
-            [...fresh].map(([retailer, at]) => ({ retailer, at })),
-            roomsFrom(env),
-            (url, group) => announceQueues(url, group, new Date().toISOString()),
+          const at = new Date().toISOString();
+          await deliver(
+            out,
+            'queue',
+            [...fresh].map(([retailer, seen]) => ({ retailer, at: seen })),
+            (g) => g.slice(0, 3).map((q) => buildQueueEmbed(q.retailer, q.at, at)),
           ).catch(() => {});
         }
 
@@ -1628,10 +1737,12 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
           });
         }
         if (walls.size > 0) {
-          await toRooms(
+          const at = new Date().toISOString();
+          await deliver(
+            out,
+            'wall',
             [...walls].map(([retailer, w]) => ({ retailer, at: w.at, reason: w.reason, still: w.still })),
-            roomsFrom(env),
-            (url, group) => announceWalls(url, group, new Date().toISOString()),
+            (g) => g.slice(0, 3).map((w) => buildWallEmbed(w, at)),
           ).catch(() => {});
           for (const [retailer, w] of walls) {
             await store.noteWallAlert(db, userId, retailer, w.still).catch(() => {});
@@ -1649,10 +1760,6 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
          * hot-path reason the wall query is gated: most batches are healthy
          * and should cost nothing extra.
          */
-        const failedCheck = lines.some((l) =>
-          l.kind === 'check' &&
-          !['in', 'out', 'in_stock', 'staged'].includes(String(l.state ?? '')) &&
-          !store.isWallLine(l.message));
         if (failedCheck) {
           try {
             const blind = await store.blindShops(db, userId);
@@ -1660,10 +1767,12 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
               const told = await store.blindAlertedRecently(db, userId);
               const fresh = blind.filter((b) => !told.has(b.retailer));
               if (fresh.length > 0) {
-                await toRooms(
+                const at = new Date().toISOString();
+                await deliver(
+                  out,
+                  'blind',
                   fresh.map((b) => ({ ...b, minutes: store.BLIND_WINDOW_MIN })),
-                  roomsFrom(env),
-                  (url, group) => announceBlind(url, group, new Date().toISOString()),
+                  (g) => g.slice(0, 3).map((b) => buildBlindEmbed(b, at)),
                 );
                 for (const b of fresh) await store.noteBlindAlert(db, userId, b.retailer, b.checks);
               }
@@ -1813,7 +1922,8 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
         manual: state.queued,
         sourceId: SWEEP_SOURCE,
       };
-      return json({ missions, settings, sweep });
+      // Phantom needs the money settings, never the push topic.
+      return json({ missions, settings: store.maskSettings(settings), sweep });
     }
 
     /** Phantom reporting a run it has already finished. */
@@ -1859,25 +1969,32 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
        */
       // Its own channel when there is one — the Wins page, mirrored — and the
       // main one otherwise. A win must never be lost to a missing setting.
-      const winsUrl = env.DISCORD_WINS_WEBHOOK_URL || env.DISCORD_WEBHOOK_URL;
-      if (b.outcome === 'bought' && winsUrl) {
-        const m = (await store.listMissions(db, userId).catch(() => [])).find(
-          (x) => x.id === b.missionId,
-        );
-        await announceBought(
-          winsUrl,
-          {
-            name: m?.productName ?? `mission ${b.missionId}`,
-            retailer: m?.retailer ?? '',
-            price: b.price ?? null,
-            total: b.total ?? null,
-            quantity: b.quantity ?? null,
-            msrp: m?.msrp ?? null,
-            url: m?.url ?? '',
-            imageUrl: m?.imageUrl ?? '',
-          },
-          now,
-        ).catch(() => {});
+      const winsUrl = env.DISCORD_WINS_WEBHOOK_URL || env.DISCORD_WEBHOOK_URL || '';
+      if (b.outcome === 'bought') {
+        const out = await outletsOf(db, userId, env);
+        if (winsUrl || out.push || out.email) {
+          const m = (await store.listMissions(db, userId).catch(() => [])).find(
+            (x) => x.id === b.missionId,
+          );
+          await deliver(
+            out,
+            'bought',
+            [{
+              name: m?.productName ?? `mission ${b.missionId}`,
+              retailer: m?.retailer ?? '',
+              price: b.price ?? null,
+              total: b.total ?? null,
+              quantity: b.quantity ?? null,
+              msrp: m?.msrp ?? null,
+              url: m?.url ?? '',
+              imageUrl: m?.imageUrl ?? '',
+            }],
+            (g) => g.slice(0, 1).map((i) => buildBoughtEmbed(i, now)),
+            // The wins room, never the shop's room: a win is the record of
+            // what this did, not an alert for people racing.
+            { room: winsUrl },
+          ).catch(() => {});
+        }
       }
       return json({ run: id });
     }
@@ -2038,10 +2155,13 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       // whether the mission is armed actually live.
       //
       // One lookup serves both alerts, and only when at least one will be sent.
-      const willAlert =
-        env.DISCORD_WEBHOOK_URL &&
-        (cameIntoStock.length > 0 || preOrdersOpened.length > 0 || loaded.length > 0 ||
-          stillIn.length > 0);
+      const candidates =
+        cameIntoStock.length > 0 || preOrdersOpened.length > 0 || loaded.length > 0 ||
+        stillIn.length > 0;
+      // Discord rooms from the environment, phone and inbox from this
+      // account's settings (already read above as `cfg`, so this costs nothing).
+      const out = candidates ? outletsFor(env, cfg) : null;
+      const willAlert = anyOutlet(out);
       const byListing = willAlert
         ? new Map((await store.listMissions(db, userId).catch(() => [])).map((m) => [m.listingId, m]))
         : new Map();
@@ -2066,40 +2186,66 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       };
 
       /*
-       * ── Only the retailer's own stock is news ───────────────────────────
+       * ── Which sellers are news ──────────────────────────────────────────
        *
        * At 11:16pm on 2 Sep 2026 two alerts went to the room for a Pitch
        * Black Booster Bundle at $42.00 from "Squeaks Game World LLC" — a
-       * Walmart marketplace reseller, over MSRP, with "0 available". The card
-       * carried a warning icon beside the seller, and the reader still had to
-       * read to the bottom of a green in-stock card to find out it was the
-       * thing they are racing rather than the thing they want.
+       * Walmart marketplace reseller, over MSRP, with "0 available". From then
+       * until 19 Oct 2026 only the retailer's own stock left the building: a
+       * reseller coming into stock was the background state of every
+       * marketplace, not an event.
        *
-       * The people in that room are there for retail drops. A reseller
-       * listing coming into stock is not an event for them; it is the
-       * background state of every marketplace all day long. So it does not
-       * leave the building. `judge()` already refuses to buy from anyone but
-       * the retailer, and the alert now holds the same line the buy does —
-       * anything else is a channel that says one thing and a machine that
-       * does another.
+       * Dan, 19 Oct 2026: third-party sellers count when the price is within
+       * the mission ceiling. The ceiling is the owner's own statement of what
+       * the thing is worth to him; a reseller under it is a deal he asked to
+       * hear about, and the same number is what the buy is held to. So:
        *
-       * The page still shows these, with the NOT-the-shop pill: the watchlist
-       * is the owner's record and should be complete. The room is a broadcast
-       * and should be true.
+       *   · the retailer itself          -> news
+       *   · a marketplace seller         -> news only with a ceiling set AND a
+       *                                     price read AND price <= ceiling
+       *   · a seller nobody could name   -> never; silence is not a retailer
+       *
+       * The card still names the seller and says "within your $X ceiling",
+       * so nobody clicks through expecting the shop's own stock. The page
+       * shows all of them regardless, with the NOT-the-shop pill: the
+       * watchlist is the owner's record and should be complete.
+       *
+       * TODO(separate PR): a marketplace price DROPPING under the ceiling
+       * while the listing was already in stock is not a state change, so
+       * nothing fires for it yet.
        */
+      const alertable = (
+        o: { sellerKind?: string | null; price?: number | null },
+        m: store.MissionRow | undefined,
+      ): boolean => {
+        if (o.sellerKind === 'retailer') return true;
+        if (o.sellerKind !== 'marketplace') return false;
+        if (!m || m.ceiling == null || o.price == null) return false;
+        const price = Number(o.price);
+        return Number.isFinite(price) && price <= Number(m.ceiling);
+      };
+      // The follow-up reminders stay retailer-only. Seventeen of this
+      // account's watched listings are Walmart resellers that sit in stock
+      // permanently; one alert when one is under the ceiling is the deal, and
+      // a reminder every half hour about the same reseller is how a channel
+      // gets muted. The gate in the loop above already skips marketplace;
+      // this also holds back a seller nobody could name.
       const fromTheShop = (sellerKind: string | null | undefined): boolean =>
         sellerKind === 'retailer';
 
       // Every card below already carries the shop it came from, so routing is
-      // per card and a mixed batch does not all land in one place. Built once
-      // here rather than four times below.
-      const alertRooms = roomsFrom(env);
+      // per card and a mixed batch does not all land in one place. The four
+      // kinds go out together rather than one after another, so a slow
+      // Discord costs the request one timeout and not four.
+      const sends: Promise<unknown>[] = [];
 
       const freshAlerts = cameIntoStock.filter(
-        (c) => speaks(c.obs.listingId) && fromTheShop(c.obs.sellerKind),
+        (c) => speaks(c.obs.listingId) && alertable(c.obs, byListing.get(c.obs.listingId)),
       );
-      if (freshAlerts.length > 0 && env.DISCORD_WEBHOOK_URL) {
-        await toRooms(
+      if (freshAlerts.length > 0 && out && willAlert) {
+        sends.push(deliver(
+          out,
+          'stock',
           freshAlerts.map((c) => {
             const m = byListing.get(c.obs.listingId);
             // The reading is fresher than the watchlist for price, count and
@@ -2116,21 +2262,23 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
               sellerName: c.obs.sellerName ?? (m ? m.sellerName : '') ?? '',
               quantity: c.obs.availableQuantity ?? null,
               orderLimit: c.obs.orderLimit ?? (m ? m.orderLimit : null),
+              ceiling: m ? m.ceiling : null,
             };
           }),
-          alertRooms,
-          (url, group) => announceStock(url, group, now),
-        );
+          (g) => buildStockEmbeds(g, now),
+        ));
       }
 
       // A pre-order opening, said as what it is. One card, once — it does not
       // join the reminders below, because "you can still pre-order it" is not
       // worth saying twice, let alone every few minutes until November.
       const preOrderAlerts = preOrdersOpened.filter(
-        (c) => speaks(c.obs.listingId) && fromTheShop(c.obs.sellerKind),
+        (c) => speaks(c.obs.listingId) && alertable(c.obs, byListing.get(c.obs.listingId)),
       );
-      if (preOrderAlerts.length > 0 && env.DISCORD_WEBHOOK_URL) {
-        await toRooms(
+      if (preOrderAlerts.length > 0 && out && willAlert) {
+        sends.push(deliver(
+          out,
+          'preorder',
           preOrderAlerts.map((c) => {
             const m = byListing.get(c.obs.listingId);
             return {
@@ -2146,15 +2294,11 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
               orderLimit: c.obs.orderLimit ?? (m ? m.orderLimit : null),
               isPreOrder: true,
               releaseDate: c.obs.releaseDate ?? (m ? m.releaseDate : null) ?? null,
+              ceiling: m ? m.ceiling : null,
             };
           }),
-          alertRooms,
-          (url, group) =>
-            announceStock(
-              url, group, now,
-              'Orderable now, ships on release. This is not a restock.',
-            ),
-        );
+          (g) => buildStockEmbeds(g, now, 'Orderable now, ships on release. This is not a restock.'),
+        ));
       }
 
       // Same card, with a footer that says which kind of message it is. Without
@@ -2166,8 +2310,10 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       const againAlerts = stillIn.filter(
         (o) => speaks(o.listingId) && fromTheShop(o.sellerKind) && o.isPreOrder !== true,
       );
-      if (againAlerts.length > 0 && env.DISCORD_WEBHOOK_URL) {
-        await toRooms(
+      if (againAlerts.length > 0 && out && willAlert) {
+        sends.push(deliver(
+          out,
+          'stillIn',
           againAlerts.map((o) => {
             const m = byListing.get(o.listingId);
             return {
@@ -2184,14 +2330,15 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
               addToCart: o.addToCart ?? null,
             };
           }),
-          alertRooms,
-          (url, group) => announceStock(url, group, now, 'still in stock'),
-        );
+          (g) => buildStockEmbeds(g, now, 'still in stock'),
+        ));
       }
 
       const loadedAlerts = loaded.filter((l) => speaks(l.listingId));
-      if (loadedAlerts.length > 0 && env.DISCORD_WEBHOOK_URL) {
-        await toRooms(
+      if (loadedAlerts.length > 0 && out && willAlert) {
+        sends.push(deliver(
+          out,
+          'staged',
           loadedAlerts.map((l) => {
             const m = byListing.get(l.listingId);
             return {
@@ -2203,10 +2350,11 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
               releaseDate: m ? (m.releaseDate ?? '') : '',
             };
           }),
-          alertRooms,
-          (url, group) => announceStaged(url, group, now),
-        );
+          (g) => buildStagedEmbeds(g, now),
+        ));
       }
+
+      await Promise.allSettled(sends);
 
       return json({
         recorded: results.length,
