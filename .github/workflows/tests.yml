@@ -36,13 +36,22 @@ jobs:
         run: |
           set -o pipefail
           npm test 2>&1 | tee test-output.txt || {
-            # Name every failing test on the run page, so the failure can be read
-            # without downloading the whole log.
-            grep -E '^\s*not ok' test-output.txt | head -40 | sed 's/^\s*/::error::/'
-            grep -E -A12 '^\s*not ok' test-output.txt | grep -E "error:|expected|actual|message" | head -40 | sed 's/^\s*/::warning::/'
+            # One annotation per failing test, with its error block, so the
+            # failure can be read on the run page without the raw log.
+            awk '/^[[:space:]]*not ok/{if(b!="")print b; b=$0; n=0; next}
+                 b!="" && n<30 {b=b "%0A" $0; n++}
+                 /^[[:space:]]*ok [0-9]/{if(b!=""){print b; b=""}}
+                 END{if(b!="")print b}' test-output.txt | head -20 | sed 's/^[[:space:]]*/::error::/'
             exit 1
           }
-      - run: npm run typecheck
+      - name: npm run typecheck
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run typecheck 2>&1 | tee tc-output.txt || {
+            grep -E 'error TS' tc-output.txt | head -30 | sed 's/^/::error::/'
+            exit 1
+          }
 
   phantom:
     name: Phantom (watcher)
@@ -66,10 +75,19 @@ jobs:
         run: |
           set -o pipefail
           npm test 2>&1 | tee test-output.txt || {
-            # Name every failing test on the run page, so the failure can be read
-            # without downloading the whole log.
-            grep -E '^\s*not ok' test-output.txt | head -40 | sed 's/^\s*/::error::/'
-            grep -E -A12 '^\s*not ok' test-output.txt | grep -E "error:|expected|actual|message" | head -40 | sed 's/^\s*/::warning::/'
+            # One annotation per failing test, with its error block, so the
+            # failure can be read on the run page without the raw log.
+            awk '/^[[:space:]]*not ok/{if(b!="")print b; b=$0; n=0; next}
+                 b!="" && n<30 {b=b "%0A" $0; n++}
+                 /^[[:space:]]*ok [0-9]/{if(b!=""){print b; b=""}}
+                 END{if(b!="")print b}' test-output.txt | head -20 | sed 's/^[[:space:]]*/::error::/'
             exit 1
           }
-      - run: npm run typecheck
+      - name: npm run typecheck
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run typecheck 2>&1 | tee tc-output.txt || {
+            grep -E 'error TS' tc-output.txt | head -30 | sed 's/^/::error::/'
+            exit 1
+          }
