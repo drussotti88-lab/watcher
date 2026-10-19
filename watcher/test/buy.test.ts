@@ -14,7 +14,7 @@ import { attemptBuy, type BuyDeps } from '../src/buy.ts';
 import type { Mission, RunOut, Authorisation, Settings } from '../src/hub.ts';
 import type { Reading } from '../src/read.ts';
 import type { CartTotals } from '../src/money.ts';
-import type { CartDriver } from '../src/checkout/target.ts';
+import { SecurityCodeNeeded, type CartDriver, type CartItem, type CheckoutState } from '../src/checkout/target.ts';
 import { DEFAULT_SETTINGS } from '../src/hub.ts';
 
 const mission = (over: Partial<Mission> = {}): Mission => ({
@@ -67,6 +67,15 @@ interface World {
   browserOpens: number;
   browserCloses: number;
   failAt?: 'goto' | 'addToCart' | 'readCart' | 'placeOrder';
+  /** placeOrder meets the card's security-code box. */
+  securityCode?: boolean;
+  /** What the open checkout shows on each poll while a person is waited on. */
+  states?: CheckoutState[];
+  /** removeFromCart refuses, as it does when it cannot tell which line is ours. */
+  removeRefuses?: string;
+  /** Every item a cart step was told about. */
+  items?: CartItem[];
+  logs?: string[];
 }
 
 function deps(world: World, over: Partial<BuyDeps> = {}): BuyDeps {
@@ -75,17 +84,24 @@ function deps(world: World, over: Partial<BuyDeps> = {}): BuyDeps {
       if (world.failAt === 'addToCart') throw new Error('no add-to-cart button');
       world.cartActions.push('add');
     },
-    async readCart() {
+    async readCart(_page, item) {
       if (world.failAt === 'readCart') throw new Error('cart page did not load');
+      world.items?.push(item);
       world.cartActions.push('read');
       return world.cart;
     },
-    async removeFromCart() {
+    async removeFromCart(_page, item) {
+      world.items?.push(item);
+      if (world.removeRefuses) throw new Error(world.removeRefuses);
       world.cartActions.push('remove');
     },
     async placeOrder() {
       if (world.failAt === 'placeOrder') throw new Error('place order button missing');
       world.cartActions.push('placeOrder');
+      if (world.securityCode) throw new SecurityCodeNeeded(true, '');
+    },
+    async checkoutState() {
+      return world.states?.shift() ?? 'security_code';
     },
   };
   const hub = {
@@ -116,6 +132,13 @@ function deps(world: World, over: Partial<BuyDeps> = {}): BuyDeps {
     },
     drivers: { Target: driver },
     live: false,
+    // A person-in-the-loop wait in milliseconds, not minutes.
+    humanWaitMs: 10,
+    humanPollMs: 2,
+    waitMs: async () => {},
+    log: (line) => {
+      world.logs?.push(line);
+    },
     ...over,
   };
 }
@@ -224,6 +247,87 @@ test('a retailer with no checkout flow is declined by name, before any grant', a
   assert.equal(run.outcome, 'declined');
   assert.match(run.reason, /no checkout flow exists for Walmart/);
   assert.deepEqual(w.resolutions, [], 'no grant was taken for a flow that cannot use it');
+});
+
+// ── Only this product, in a cart that may hold the owner's things ────────────
+
+test('EVERY CART STEP IS TOLD WHICH PRODUCT IT IS ABOUT', async () => {
+  const w = world({ items: [] });
+  await attemptBuy(deps(w), mission({ quantity: 2 }), reading());
+  assert.ok(w.items!.length >= 2, 'read and remove both');
+  for (const item of w.items!) {
+    assert.equal(item.externalId, '111');
+    assert.equal(item.url, 'https://www.target.com/p/-/A-111');
+    assert.equal(item.quantity, 2);
+  }
+});
+
+test('A CART HOLDING OTHER THINGS IS NEVER CHECKED OUT', async () => {
+  // Place Order buys the whole cart. One other line in it, and a live buy
+  // that would otherwise pass stops before the button.
+  const w = world({ cart: { ...goodCart, otherItems: 1 } });
+  const run = await attemptBuy(deps(w, { live: true }), mission(), reading());
+  assert.equal(run.outcome, 'declined');
+  assert.match(run.reason, /other item/);
+  assert.ok(!w.cartActions.includes('placeOrder'), 'the button was never pressed');
+  assert.equal(w.resolutions[0]!.result, 'released');
+
+  // And the same cart with nothing else in it does buy, so the guard is real.
+  const clean = world({ cart: { ...goodCart, otherItems: 0 } });
+  assert.equal((await attemptBuy(deps(clean, { live: true }), mission(), reading())).outcome, 'bought');
+});
+
+test('a cart where this product cannot be told apart is refused, never guessed at', async () => {
+  const w = world({ cart: { unitPrice: null, quantity: null, tax: null, shipping: null, otherItems: null } });
+  const run = await attemptBuy(deps(w, { live: true }), mission(), reading());
+  assert.equal(run.outcome, 'declined');
+  assert.match(run.reason, /could not tell which line/);
+  assert.ok(!w.cartActions.includes('placeOrder'));
+});
+
+test('A REMOVAL THAT IS NOT SAFE IS SKIPPED, AND THE RUN SAYS THE ITEM IS STILL IN THE CART', async () => {
+  const w = world({ removeRefuses: 'could not tell which cart line is Mega Evolution ETB, so nothing was removed' });
+  const run = await attemptBuy(deps(w), mission(), reading());
+  assert.equal(run.outcome, 'dry_run', 'a dry run is still a dry run');
+  assert.match(run.reason, /left in your Target cart/);
+  assert.equal(w.resolutions[0]!.result, 'released', 'nothing was bought, so the money still returns');
+});
+
+// ── The card's security code ─────────────────────────────────────────────────
+
+test('A SECURITY CODE NOBODY ENTERS RELEASES THE GRANT, AND PHANTOM NEVER TYPES IT', async () => {
+  // The box is still up when the wait ends, so the order cannot have gone
+  // through. Before 19 Oct 2026 this ended in a generic throw with the grant
+  // left live for somebody to release by hand.
+  const w = world({ securityCode: true, states: [], logs: [] });
+  const run = await attemptBuy(deps(w, { live: true }), mission(), reading());
+  assert.equal(run.outcome, 'blocked');
+  assert.match(run.reason, /security code/);
+  assert.match(run.reason, /never types/);
+  assert.deepEqual(w.resolutions.map((r) => r.result), ['released']);
+  assert.deepEqual(w.cartActions, ['add', 'read', 'placeOrder', 'remove'], 'one press, then tidy');
+  assert.ok(w.logs!.some((l) => /SECURITY CODE/.test(l) && /will not type/.test(l)), 'a person is told, loudly');
+});
+
+test('A PERSON WHO ENTERS THE SECURITY CODE FINISHES THE BUY, AND IT IS RECORDED AS BOUGHT', async () => {
+  const w = world({ securityCode: true, states: ['security_code', 'other', 'confirmed'] });
+  const run = await attemptBuy(deps(w, { live: true }), mission(), reading());
+  assert.equal(run.outcome, 'bought');
+  assert.match(run.reason, /you entered it/);
+  assert.deepEqual(w.resolutions.map((r) => r.result), ['spent']);
+  assert.equal(w.cartActions.filter((a) => a === 'placeOrder').length, 1, 'Phantom pressed it once, never again');
+  assert.ok(!w.cartActions.includes('remove'), 'a bought item is not taken back out');
+});
+
+test('A SECURITY CODE THAT GOES AWAY WITHOUT A CONFIRMATION LEAVES THE GRANT LIVE', async () => {
+  // The one case nobody can call: the box went, no order page came. Releasing
+  // would let a second buy through on top of one that may exist.
+  const w = world({ securityCode: true, states: Array(20).fill('other') });
+  const run = await attemptBuy(deps(w, { live: true }), mission(), reading());
+  assert.equal(run.outcome, 'failed');
+  assert.deepEqual(w.resolutions, [], 'not released, not spent — a person checks the orders page');
+  assert.match(run.reason, /stays live/);
+  assert.equal(w.browserCloses, 1);
 });
 
 // ── Where the seconds went ───────────────────────────────────────────────────
