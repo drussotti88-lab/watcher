@@ -387,6 +387,15 @@ test('A RESTOCK RINGS THE OWNER\u2019S PHONE EVEN WITH NO DISCORD ROOM', async (
   await call(db, 'POST', '/api/missions', { listingId, label: 'ETB' });
   await store.setSettings(db, 1, { pushTopic: 'phantom-dan-7q2x9k4m' });
 
+  // A listing's first reading is never announced (store.recordObservation
+  // marks it isFirst), so show it out of stock first, then bring it in.
+  await call(db, 'POST', '/observations', {
+    observations: [{
+      listingId, state: 'out', confidence: 'exact', price: 49.99, sellerKind: 'retailer',
+      sellerName: 'Target', availableQuantity: 0, orderLimit: 2, isPreOrder: false,
+      releaseDate: null, imageUrl: '', note: '',
+    }],
+  }, e);
   const sent = fakeFetch(() => new Response('{}', { status: 200 }));
   const r = await call(db, 'POST', '/observations', {
     observations: [{

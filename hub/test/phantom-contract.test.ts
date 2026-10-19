@@ -564,7 +564,18 @@ test('AN UNIDENTIFIABLE SELLER IS NEVER POSTED, EVEN UNDER THE CEILING', async (
   assert.equal(posts.length, 0);
 });
 
-/** Post one reading to /observations as Phantom, with a Discord room set. */
+/**
+ * Post one reading to /observations as Phantom, with a Discord room set.
+ *
+ * The app never announces a listing's FIRST reading (store.recordObservation
+ * marks it `isFirst`, so switching Phantom on doesn't ring for every product
+ * at once). Every test below therefore shows the listing out of stock first,
+ * with `seenOut`, and only then brings it in. Without that, the "stays quiet"
+ * tests would pass for the wrong reason.
+ */
+const seenOut = (send: (o: unknown) => Promise<Response>, listingId: number) =>
+  send(obs(listingId, { state: 'out' }));
+
 function observer(db: Awaited<ReturnType<typeof withMission>>['db']) {
   const handler = createHandler(db, { ...env, DISCORD_WEBHOOK_URL: 'https://discord.test/hook' });
   return (o: unknown) => handler(new Request('https://hub.test/observations', {
@@ -577,6 +588,7 @@ function observer(db: Awaited<ReturnType<typeof withMission>>['db']) {
 test('A RESELLER AT OR UNDER THE MISSION CEILING IS POSTED, AND SAYS SO', async () => {
   const { db, listingId } = await withMission({ ceiling: 50 });
   const send = observer(db);
+  await seenOut(send, listingId);
   const posts = await postsMade(async () => {
     await send(obs(listingId, { sellerKind: 'marketplace', sellerName: 'Squeaks Game World LLC', price: 42 }));
   });
@@ -587,8 +599,10 @@ test('A RESELLER AT OR UNDER THE MISSION CEILING IS POSTED, AND SAYS SO', async 
 
 test('A RESELLER EXACTLY AT THE CEILING COUNTS AS WITHIN IT', async () => {
   const { db, listingId } = await withMission({ ceiling: 50 });
+  const send = observer(db);
+  await seenOut(send, listingId);
   const posts = await postsMade(async () => {
-    await observer(db)(obs(listingId, { sellerKind: 'marketplace', sellerName: 'Squeaks', price: 50 }));
+    await send(obs(listingId, { sellerKind: 'marketplace', sellerName: 'Squeaks', price: 50 }));
   });
   assert.equal(posts.length, 1);
 });
@@ -597,16 +611,20 @@ test('A RESELLER OVER THE MISSION CEILING STAYS QUIET', async () => {
   // The guard has to fail on something: same mission, same seller, one price
   // above the line.
   const { db, listingId } = await withMission({ ceiling: 50 });
+  const send = observer(db);
+  await seenOut(send, listingId);
   const posts = await postsMade(async () => {
-    await observer(db)(obs(listingId, { sellerKind: 'marketplace', sellerName: 'Squeaks', price: 50.01 }));
+    await send(obs(listingId, { sellerKind: 'marketplace', sellerName: 'Squeaks', price: 50.01 }));
   });
   assert.equal(posts.length, 0);
 });
 
 test('A RESELLER WITH NO PRICE READ STAYS QUIET, EVEN WITH A CEILING', async () => {
   const { db, listingId } = await withMission({ ceiling: 50 });
+  const send = observer(db);
+  await seenOut(send, listingId);
   const posts = await postsMade(async () => {
-    await observer(db)(obs(listingId, { sellerKind: 'marketplace', sellerName: 'Squeaks', price: null }));
+    await send(obs(listingId, { sellerKind: 'marketplace', sellerName: 'Squeaks', price: null }));
   });
   assert.equal(posts.length, 0, 'an unknown price is not "within" anything');
 });
@@ -625,6 +643,7 @@ test('THE STILL-IN-STOCK REMINDER STAYS RETAILER-ONLY, EVEN UNDER THE CEILING', 
     const { db, listingId } = await withMission({ ceiling: 50 });
     await store.setSettings(db, 1, { inStockRepeatAfter: [5] });
     const send = observer(db);
+    await seenOut(send, listingId);
     const shop = obs(listingId, { sellerKind: 'retailer', sellerName: 'Target', price: 42 });
     assert.equal((await postsMade(async () => { await send(shop); })).length, 1);
     await overdue(db, listingId);
@@ -637,6 +656,7 @@ test('THE STILL-IN-STOCK REMINDER STAYS RETAILER-ONLY, EVEN UNDER THE CEILING', 
     const { db, listingId } = await withMission({ ceiling: 50 });
     await store.setSettings(db, 1, { inStockRepeatAfter: [5] });
     const send = observer(db);
+    await seenOut(send, listingId);
     const reseller = obs(listingId, { sellerKind: 'marketplace', sellerName: 'Squeaks', price: 42 });
     assert.equal((await postsMade(async () => { await send(reseller); })).length, 1, 'the first one goes');
     await overdue(db, listingId);
