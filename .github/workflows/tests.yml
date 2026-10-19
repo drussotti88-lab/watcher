@@ -1,0 +1,87 @@
+# Runs both test suites on every pull request, on GitHub's machines.
+#
+# Why: the rules say both suites pass before anything merges, and on 19 Oct
+# the cloud sessions doing the work could not install the test packages
+# (PGlite, jsdom) at all, so "Main runs the tests" had nowhere to run.
+# Here they run for every PR, and the result shows on the PR page as a tick
+# or a cross that Dan can read without a terminal. Nothing here reaches a
+# shop, spends money or touches the live database: tests use PGlite.
+name: tests
+
+# On every push to any branch: the result sits on the commit, so a PR shows it,
+# and a branch can be checked before a PR exists.
+on:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  app:
+    name: the app (hub)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hub
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: hub/package-lock.json
+      - run: npm ci
+      - name: npm test
+        shell: bash
+        run: |
+          set -o pipefail
+          npm test 2>&1 | tee test-output.txt || {
+            # One annotation per failing test, with its error block, so the
+            # failure can be read on the run page without the raw log.
+            awk '/^[[:space:]]*not ok/{if(b!="")print b; b=$0; n=0; next}
+                 b!="" && n<30 {b=b "%0A" $0; n++}
+                 /^[[:space:]]*ok [0-9]/{if(b!=""){print b; b=""}}
+                 END{if(b!="")print b}' test-output.txt | head -20 | sed 's/^[[:space:]]*/::error::/'
+            exit 1
+          }
+      # With the test files clean (this PR), both typechecks block again.
+      - run: npm run typecheck
+
+  phantom:
+    name: Phantom (watcher)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: watcher
+    env:
+      # The tests never open a browser; don't download one.
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: watcher/package-lock.json
+      - run: npm ci
+      - name: npm test
+        shell: bash
+        run: |
+          set -o pipefail
+          npm test 2>&1 | tee test-output.txt || {
+            # One annotation per failing test, with its error block, so the
+            # failure can be read on the run page without the raw log.
+            awk '/^[[:space:]]*not ok/{if(b!="")print b; b=$0; n=0; next}
+                 b!="" && n<30 {b=b "%0A" $0; n++}
+                 /^[[:space:]]*ok [0-9]/{if(b!=""){print b; b=""}}
+                 END{if(b!="")print b}' test-output.txt | head -20 | sed 's/^[[:space:]]*/::error::/'
+            exit 1
+          }
+      - name: npm run typecheck
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run typecheck 2>&1 | tee tc-output.txt || {
+            grep -E 'error TS' tc-output.txt | head -30 | sed 's/^/::error::/'
+            exit 1
+          }
