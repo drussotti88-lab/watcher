@@ -80,7 +80,7 @@ test('seeding stays silent until a full lap of the index is complete', async () 
 
   while (!source.seeded && sweeps < 25) {
     const result = await sweepSource(db, USER, source, fetcher);
-    assert.equal(result.ok, true, result.error);
+    assert.equal(result.ok, true, result.error ?? 'the sweep failed');
     announcedDuringSeeding += result.fresh.length;
     sweeps += 1;
     source = await reload(db);
@@ -421,7 +421,7 @@ test("A RULE'S DECISIONS COME BACK AS THE BATCH THEY WERE MADE AS", async () => 
   ], false);
 
   const mine = (await store.discoveriesToReview(db, USER)).find((d) => d.externalId === 'mine');
-  await store.forgetDiscovery(db, USER, mine.id);
+  await store.forgetDiscovery(db, USER, mine!.id);
 
   const out = await store.rerankDiscoveries(db, USER);
   assert.equal(out.retired, 2);

@@ -1351,8 +1351,8 @@ test('the confident ones come first, but the unsure ones are still shown', async
   // costs two seconds, so it is shown — just not first.
   const h = await boot(withFinds());
   const names = [...h.doc.querySelectorAll('#finds-list .name')].map((n) => n.textContent);
-  assert.match(names[0], /Elite Trainer Box/);
-  assert.match(names[1], /Poster Collection/);
+  assert.match(names[0] ?? '', /Elite Trainer Box/);
+  assert.match(names[1] ?? '', /Poster Collection/);
 });
 
 test('an uncertain find says so on its face', async () => {
@@ -1367,8 +1367,8 @@ test('KEEPING SENDS KEEP, AND SAYS IT ARMED NOTHING', async () => {
   const h = await boot(withFinds());
   h.reply('POST /api/discoveries/7/keep', { kept: { productKey: 'k', listingId: 3 } });
 
-  const keep = [...h.doc.querySelectorAll('#finds-list button')].find((b) => b.textContent === 'Keep');
-  keep.click();
+  const keep = [...h.doc.querySelectorAll<HTMLElement>('#finds-list button')].find((b) => b.textContent === 'Keep');
+  keep!.click();
   await h.settle();
 
   const call = h.calls.find((c) => c.path === '/api/discoveries/7/keep');
@@ -1384,8 +1384,8 @@ test('forgetting sends forget for that exact find', async () => {
   const h = await boot(withFinds());
   h.reply('POST /api/discoveries/7/forget', { forgotten: 7 });
 
-  const forget = [...h.doc.querySelectorAll('#finds-list button')].find((b) => b.textContent === 'Forget');
-  forget.click();
+  const forget = [...h.doc.querySelectorAll<HTMLElement>('#finds-list button')].find((b) => b.textContent === 'Forget');
+  forget!.click();
   await h.settle();
 
   assert.ok(h.calls.some((c) => c.path === '/api/discoveries/7/forget' && c.method === 'POST'));
@@ -1518,7 +1518,7 @@ test('TURNING IT BACK ON DOES NOT ASK — STARTING IS NOT THE RISKY DIRECTION', 
   await h.settle();
 
   assert.deepEqual((h.dom.window as any).__confirms, [], 'it should not have asked');
-  assert.equal(h.calls.find((c) => c.path === '/api/settings').body.paused, false);
+  assert.equal(h.calls.find((c) => c.path === '/api/settings')!.body.paused, false);
 });
 
 test('THE SWEEP BUTTON QUEUES A SWEEP', async () => {
@@ -1563,10 +1563,10 @@ test('a dashboard with no sweep block still renders the bar', async () => {
 test('A FIND SHOWS ITS PICTURE, NOT JUST ITS NAME', async () => {
   // Twenty text rows is a chore. Twenty boxes you recognise is a glance.
   const h = await boot(withFinds([{ ...FINDS[0], imageUrl: 'https://target.scene7.com/is/image/Target/GUEST_x?wid=300' }]));
-  const img = h.doc.querySelector('#finds-list img.thumb');
+  const img = h.doc.querySelector<HTMLImageElement>('#finds-list img.thumb');
   assert.ok(img, 'no thumbnail rendered');
   assert.match(img.src, /GUEST_x/);
-  assert.equal(img.alt, FINDS[0].name, 'and it is described for anyone not seeing it');
+  assert.equal(img.alt, FINDS[0]!.name, 'and it is described for anyone not seeing it');
 });
 
 test('a find with no picture gets the placeholder, not a broken image', async () => {
@@ -1582,7 +1582,7 @@ test('A CAPPED QUANTITY IS SHOWN AS A FLOOR, NOT A COUNT', async () => {
   // and 10 and 20 recur far too often to be real counts. Printing "10
   // available" states as fact something the retailer only bounded.
   const h = await boot(withRelease({ state: 'in', availableQuantity: 10, orderLimit: 2 }));
-  const text = h.doc.body.querySelector('#tab-missions').textContent;
+  const text = h.doc.body.querySelector('#tab-missions')!.textContent;
   assert.match(text, /10\+ available/);
   // And nothing explaining what the plus means. The plus means it.
   assert.ok(!text.includes('at least 10'));
@@ -1591,7 +1591,7 @@ test('A CAPPED QUANTITY IS SHOWN AS A FLOOR, NOT A COUNT', async () => {
 test('a number below the ceiling is reported plainly', async () => {
   // Nine means nine. This is the range where the figure is worth trusting.
   const h = await boot(withRelease({ state: 'in', availableQuantity: 9, orderLimit: 2 }));
-  const text = h.doc.querySelector('#tab-missions').textContent;
+  const text = h.doc.querySelector('#tab-missions')!.textContent;
   assert.match(text, /9 available/);
   assert.ok(!text.includes('9+ available'));
 });
@@ -1600,17 +1600,17 @@ test('THE PER-ORDER LIMIT IS SHOWN NEXT TO IT', async () => {
   // A limit of 2 against 10 available is two. Burying that in the note line
   // while the headline says 10 is the wrong way round.
   const h = await boot(withRelease({ state: 'in', availableQuantity: 10, orderLimit: 2 }));
-  assert.match(h.doc.querySelector('#tab-missions').textContent, /limit 2 per order/);
+  assert.match(h.doc.querySelector('#tab-missions')!.textContent, /limit 2 per order/);
 });
 
 test('no stated limit means no line about it', async () => {
   const h = await boot(withRelease({ state: 'in', availableQuantity: 9, orderLimit: null }));
-  assert.ok(!h.doc.querySelector('#tab-missions').textContent.includes('per order'));
+  assert.ok(!h.doc.querySelector('#tab-missions')!.textContent.includes('per order'));
 });
 
 test('zero available is still shown, and is not a floor', async () => {
   const h = await boot(withRelease({ state: 'out', availableQuantity: 0 }));
-  const text = h.doc.querySelector('#tab-missions').textContent;
+  const text = h.doc.querySelector('#tab-missions')!.textContent;
   assert.match(text, /0 available/);
   assert.ok(!text.includes('0+ available'));
 });
@@ -1647,7 +1647,7 @@ test('NO TAB CAN RUN OFF THE EDGE OF A PHONE', async () => {
   // gone — no scrollbar, no affordance, just off the right-hand side. Fixed by
   // the seven of them sharing the width; the rule is that nothing is off-screen.
   const h = await boot();
-  const style = h.doc.querySelector('style').textContent;
+  const style = h.doc.querySelector('style')!.textContent;
   const phone = /@media \(max-width: 899px\) \{([\s\S]*?)\n\}/.exec(style)?.[1] ?? '';
   assert.match(phone, /\.tab \{[^}]*flex:\s*1 1 0/, 'every tab takes an equal share');
   assert.match(phone, /\.tab \{[^}]*min-width:\s*0/, 'and none of them can refuse to shrink');
@@ -1655,7 +1655,7 @@ test('NO TAB CAN RUN OFF THE EDGE OF A PHONE', async () => {
 
 test('THE PHONE NAV IS AT THE BOTTOM, WHERE THE THUMB IS', async () => {
   const h = await boot();
-  const style = h.doc.querySelector('style').textContent;
+  const style = h.doc.querySelector('style')!.textContent;
   const phone = /@media \(max-width: 899px\) \{([\s\S]*?)\n\}/.exec(style)?.[1] ?? '';
   assert.match(phone, /\.tabs \{[^}]*position:\s*fixed/);
   assert.match(phone, /\.tabs \{[^}]*bottom:\s*0/);
@@ -1670,7 +1670,7 @@ test('CONTENT CLEARS THE BOTTOM BAR, INCLUDING THE HOME INDICATOR', async () => 
   // and on an iPhone the labels sit under the home indicator and read as
   // clipped. Both are the same one-line mistake.
   const h = await boot();
-  const style = h.doc.querySelector('style').textContent;
+  const style = h.doc.querySelector('style')!.textContent;
   const phone = /@media \(max-width: 899px\) \{([\s\S]*?)\n\}/.exec(style)?.[1] ?? '';
   assert.match(phone, /padding-bottom:\s*calc\(58px \+ env\(safe-area-inset-bottom/);
   assert.match(phone, /\.tabs \{[^}]*padding-bottom:\s*env\(safe-area-inset-bottom/);
@@ -1679,7 +1679,7 @@ test('CONTENT CLEARS THE BOTTOM BAR, INCLUDING THE HOME INDICATOR', async () => 
 test('the rail-only furniture is not drawn on a phone', async () => {
   // The group label and the collapse control mean nothing in a strip.
   const h = await boot();
-  const style = h.doc.querySelector('style').textContent;
+  const style = h.doc.querySelector('style')!.textContent;
   const phone = /@media \(max-width: 899px\) \{([\s\S]*?)\n\}/.exec(style)?.[1] ?? '';
   assert.match(phone, /\.tabs \.navtop, \.navgroup, \.navspacer \{ display: none/);
 });
@@ -1688,7 +1688,7 @@ test('THE RAIL COLLAPSES TO ICONS, AND EVERY ITEM STILL HAS A NAME', async () =>
   // Collapsed, the label is display:none — so the title attribute is the only
   // thing left naming each item, and a tab without one becomes a mystery glyph.
   const h = await boot();
-  const style = h.doc.querySelector('style').textContent;
+  const style = h.doc.querySelector('style')!.textContent;
   assert.match(style, /body\.nav-collapsed .tab .lbl[\s\S]{0,120}display: none/);
   for (const tab of h.doc.querySelectorAll('.tab')) {
     assert.ok(tab.getAttribute('title'), 'every tab carries a title for the collapsed rail');
@@ -1700,7 +1700,7 @@ test('every nav item has an icon and a label, and the icon is not announced', as
   // beside it is the accessible name, and "image, crosshair, Missions" is
   // worse than silence.
   const h = await boot();
-  const tabs = [...h.doc.querySelectorAll('.tab')];
+  const tabs = [...h.doc.querySelectorAll<HTMLElement>('.tab')];
   assert.equal(tabs.length, 7);
   for (const t of tabs) {
     const ico = t.querySelector('svg.ico');
@@ -1714,7 +1714,7 @@ test('the wordmark survives on a phone, where the side panel is gone', async () 
   const h = await boot();
   const inHeader = h.doc.querySelector('header .phonebrand .brand-name');
   assert.equal(inHeader?.textContent, 'Phantom by DNA');
-  const style = h.doc.querySelector('style').textContent;
+  const style = h.doc.querySelector('style')!.textContent;
   assert.match(style, /\.phonebrand \{[^}]*display:\s*none/, 'hidden by default');
   assert.match(style, /@media \(max-width: 899px\) \{ \.phonebrand \{ display: flex/);
 });
@@ -1773,7 +1773,7 @@ test('the policy is editable and is sent when saved', async () => {
   const h = await boot(preorderMission());
   openMission(h);
   const form = h.doc.querySelector('#detail-dialog form');
-  form.querySelector('[name=preOrderPolicy]').value = 'allow';
+  form!.querySelector<HTMLSelectElement>('[name=preOrderPolicy]')!.value = 'allow';
   h.reply('POST /api/missions', { mission: {} });
 
   submit(form, h.dom.window);
@@ -3209,7 +3209,7 @@ test('STEP TWO IS THE PRODUCT, NOT A TOUR OF IT — the catalogue is pickable', 
   const rows = [...h.doc.querySelectorAll('#wiz-body .pickable')];
   assert.equal(rows.length, 2, 'both catalogue listings offered');
 
-  const watch = rows[0]!.querySelector('button');
+  const watch = rows[0]!.querySelector('button')!;
   assert.equal(watch.textContent, 'Watch this');
   watch.click();
   await h.settle();
@@ -3315,7 +3315,7 @@ test('ANYBODY CAN WATCH A LISTING SOMEBODY ELSE CATALOGUED', async () => {
   // Scoped to the pop-up: the quick-add form has a "Watch this" submit button
   // of its own, and finding that one instead is how this test first passed
   // while proving nothing.
-  const watch = [...h.doc.querySelectorAll('#detail-body button')]
+  const watch = [...h.doc.querySelectorAll<HTMLElement>('#detail-body button')]
     .find((b) => b.textContent === 'Watch this');
   assert.ok(watch, 'a member is offered the listing');
   watch!.click();
@@ -3382,9 +3382,9 @@ test('THE TAB IS CALLED DISCOVERY', async () => {
   // the name the code uses are allowed to differ, and churning ids the night
   // of a drop is not a trade worth making.
   const h = await boot();
-  const tab = [...h.doc.querySelectorAll('.tab')].find((t) => t.dataset.tab === 'finds');
-  assert.equal(tab.textContent.trim(), 'Discovery');
-  assert.match(h.doc.querySelector('#tab-finds h2').textContent, /^Discovery/);
+  const tab = [...h.doc.querySelectorAll<HTMLElement>('.tab')].find((t) => t.dataset.tab === 'finds');
+  assert.equal(tab!.textContent.trim(), 'Discovery');
+  assert.match(h.doc.querySelector('#tab-finds h2')!.textContent, /^Discovery/);
 });
 
 // ── The material ─────────────────────────────────────────────────────────────
@@ -3670,7 +3670,7 @@ test('THE MONEY BAR DOES NOT SHARE A CLASS WITH EVERY FORM', async () => {
   // forms still laid out — while height 14px and overflow hidden came through
   // untouched and clipped every input in the app out of existence.
   const h = await boot(DASHBOARD);
-  const css = h.doc.querySelector('style').textContent;
+  const css = h.doc.querySelector('style')!.textContent;
   assert.match(css, /\.moneybar \{[^}]*height: 14px/);
   assert.doesNotMatch(css, /\n\.stack \{[^}]*height: 14px/, 'never again');
   assert.match(css, /\.stack, form\.stack \{[^}]*display: grid/);
@@ -3686,11 +3686,11 @@ test('MOVING REFRESH OUT OF THE TOOLBAR KEEPS IT WORKING', async () => {
   assert.ok(auto, 'the auto-refresh tick still exists');
   assert.ok(refresh, 'and the button');
   assert.ok(
-    h.doc.getElementById('tab-settings').contains(auto),
+    h.doc.getElementById('tab-settings')!.contains(auto),
     'both now live in Settings rather than above every list',
   );
-  assert.ok(h.doc.getElementById('tab-settings').contains(refresh));
-  assert.ok(!h.doc.querySelector('header').contains(refresh), 'and not in the header');
+  assert.ok(h.doc.getElementById('tab-settings')!.contains(refresh));
+  assert.ok(!h.doc.querySelector('header')!.contains(refresh), 'and not in the header');
 });
 
 test('A MISSION CAN BE MUTED FROM ITS SETTINGS, WITHOUT PAUSING IT', async () => {
@@ -3733,7 +3733,7 @@ test('THE POP-UP DOES NOT RESIZE WHEN YOU CHANGE TABS', async () => {
   const runsBox = $(h, '#detail-body .dlgbody');
   assert.ok(runsBox, 'and so does the history');
 
-  const css = h.doc.querySelector('style').textContent;
+  const css = h.doc.querySelector('style')!.textContent;
   assert.match(css, /\.dlgbody \{[^}]*height: min\(/, 'one height for both');
   assert.match(css, /\.dlgbody \{[^}]*overflow-y: auto/, 'and the content moves, not the window');
 });
@@ -3745,9 +3745,9 @@ test('ONE HEADER ROW, WITH ONLY WHAT YOU DO FROM A LIST', async () => {
   // product is the only action you take FROM a list, so it is the only one
   // still out here.
   const h = await boot(DASHBOARD);
-  const ribbon = h.doc.querySelector('.ribbon');
-  const settings = h.doc.getElementById('tab-settings');
-  const mePop = h.doc.getElementById('me-pop');
+  const ribbon = h.doc.querySelector('.ribbon')!;
+  const settings = h.doc.getElementById('tab-settings')!;
+  const mePop = h.doc.getElementById('me-pop')!;
 
   assert.ok(ribbon.querySelector('#add-open'), 'add stays');
   assert.ok(!h.doc.querySelector('.bar'), 'the toolbar row is gone entirely');
@@ -3759,11 +3759,11 @@ test('ONE HEADER ROW, WITH ONLY WHAT YOU DO FROM A LIST', async () => {
 });
 
 test('the settings row says the state, so the button can name the action', async () => {
-  const running = await boot({ ...DASHBOARD, settings: { ...DASHBOARD.settings, paused: false } });
+  const running = await boot({ ...DASHBOARD, settings: { ...(DASHBOARD as any).settings, paused: false } });
   assert.match($(running, '#phantom-state').textContent, /watching/);
   assert.equal($(running, '#phantom-toggle').textContent, 'Turn Phantom off');
 
-  const stopped = await boot({ ...DASHBOARD, settings: { ...DASHBOARD.settings, paused: true } });
+  const stopped = await boot({ ...DASHBOARD, settings: { ...(DASHBOARD as any).settings, paused: true } });
   assert.match($(stopped, '#phantom-state').textContent, /off/);
   assert.equal($(stopped, '#phantom-toggle').textContent, 'Turn Phantom on');
 });
@@ -3831,12 +3831,12 @@ test('KEEP AND FORGET ARE NOT BUILT FOR SOMEBODY THE SERVER WILL REFUSE', async 
     confidence: 'sealed', foundBy: 'q', status: 'new',
     firstSeenAt: new Date().toISOString(), alreadyHave: false, retailer: 'Target',
   }];
-  const member = await boot({ ...withFinds(finds), canCurate: false });
+  const member = await boot({ ...(withFinds(finds) as object), canCurate: false });
   const labels = [...member.doc.querySelectorAll('#finds-list button')].map((b) => b.textContent);
   assert.ok(!labels.includes('Keep'));
   assert.ok(!labels.includes('Forget'));
 
-  const owner = await boot({ ...withFinds(finds), canCurate: true });
+  const owner = await boot({ ...(withFinds(finds) as object), canCurate: true });
   const ownerLabels = [...owner.doc.querySelectorAll('#finds-list button')].map((b) => b.textContent);
   assert.ok(ownerLabels.includes('Keep'));
   assert.ok(ownerLabels.includes('Forget'));
@@ -3874,7 +3874,7 @@ test('NOTHING IN THE RIBBON IS DECORATION', async () => {
 
   const wired = await boot({
     ...DASHBOARD,
-    settings: { ...DASHBOARD.settings, discordInvite: 'https://discord.gg/abc' },
+    settings: { ...(DASHBOARD as any).settings, discordInvite: 'https://discord.gg/abc' },
   });
   assert.equal(($(wired, '#discord-link') as any).hidden, false);
   assert.equal(($(wired, '#discord-link') as any).getAttribute('href'), 'https://discord.gg/abc');
@@ -4081,7 +4081,7 @@ test('the Open button still goes to the shop', async () => {
 });
 
 test('nothing in stock says so, rather than showing an empty panel', async () => {
-  const d = JSON.parse(JSON.stringify(DASHBOARD));
+  const d: typeof DASHBOARD = JSON.parse(JSON.stringify(DASHBOARD));
   d.missions = d.missions.map((m) => ({ ...m, state: 'out' }));
   const h = await boot(d);
   assert.equal($(h, '#live-n').textContent, '0');
@@ -4105,13 +4105,13 @@ test('THE IN-STOCK HEADLINE IS BRIGHT WHEN THERE IS STOCK, AND GREY WHEN THERE I
   assert.equal($(on, '#live-title').textContent, 'In stock');
   assert.equal($(on, '#live-title').className, 'livetitle');
 
-  const none = JSON.parse(JSON.stringify(DASHBOARD));
+  const none: typeof DASHBOARD = JSON.parse(JSON.stringify(DASHBOARD));
   none.missions = none.missions.map((m) => ({ ...m, state: 'out' }));
   const off = await boot(none);
   assert.equal($(off, '#live-title').textContent, 'Nothing in stock');
   assert.match($(off, '#live-title').className, /none/);
 
-  const css = on.doc.querySelector('style').textContent;
+  const css = on.doc.querySelector('style')!.textContent;
   assert.match(css, /\.livetitle \{[^}]*color: var\(--in\)/, 'the app\'s own in-stock green');
   assert.match(css, /\.livetitle\.none \{[^}]*color: var\(--muted\)/);
 });
@@ -4179,7 +4179,7 @@ test('never checked keeps its own word and is not double-counted as stale', asyn
 // 3 Sep 2026 it was a row in a table.
 
 const boughtRun = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
-  id: 901, missionId: DASHBOARD.missions[0].id, productName: 'Pitch Black ETB',
+  id: 901, missionId: DASHBOARD.missions[0]!.id, productName: 'Pitch Black ETB',
   retailer: 'Target', outcome: 'bought', reason: 'order confirmed', state: 'in',
   price: 49.99, total: 54.86, quantity: 1, sellerKind: 'retailer', sellerName: 'Target',
   startedAt: new Date(Date.now() - 60_000).toISOString(),

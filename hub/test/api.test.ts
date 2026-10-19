@@ -461,13 +461,13 @@ test('EACH PRODUCT GETS ITS OWN CARD, NOT A SHARED DIGEST', async () => {
   assert.ok(!embeds[1]!.thumbnail, 'no photo, no empty thumbnail');
 
   const f = (e: any, name: string) => e.fields.find((x: any) => x.name === name)?.value;
-  assert.equal(f(embeds[0]!, 'Price'), '$59.99');
-  assert.equal(f(embeds[0]!, 'Stock'), '10+ available', 'a ceiling is still shown as a floor');
-  assert.equal(f(embeds[0]!, 'vs MSRP'), '+$10.00');
-  assert.equal(f(embeds[1]!, 'Stock'), '7 available', 'a real count is printed plainly');
-  assert.equal(f(embeds[1]!, 'vs MSRP'), 'at or under');
-  assert.ok(!f(embeds[1]!, 'Mission'), 'the owner\'s arming state is not the readers\' business');
-  assert.ok(embeds[0]!.fields.every((x: any) => x.inline), 'laid out across, not down');
+  assert.equal(f(embeds[0], 'Price'), '$59.99');
+  assert.equal(f(embeds[0], 'Stock'), '10+ available', 'a ceiling is still shown as a floor');
+  assert.equal(f(embeds[0], 'vs MSRP'), '+$10.00');
+  assert.equal(f(embeds[1], 'Stock'), '7 available', 'a real count is printed plainly');
+  assert.equal(f(embeds[1], 'vs MSRP'), 'at or under');
+  assert.ok(!f(embeds[1], 'Mission'), 'the owner\'s arming state is not the readers\' business');
+  assert.ok(embeds[0]!.fields!.every((x: any) => x.inline), 'laid out across, not down');
 });
 
 test('a marketplace seller is named and flagged, because the price will not say', async () => {
@@ -497,9 +497,9 @@ test('STAGED STOCK IS ITS OWN CARD, IN ITS OWN COLOUR', async () => {
   );
   assert.equal(staged!.title, '30th Celebration ETB');
   const f = (e: any, n: string) => e.fields.find((x: any) => x.name === n)?.value;
-  assert.match(f(staged!, 'Stock staged'), /31,000/, 'a number this size needs its commas');
-  assert.equal(f(staged!, 'Buyable'), 'not yet');
-  assert.equal(f(staged!, 'On sale'), '2026-09-16');
+  assert.match(f(staged, 'Stock staged'), /31,000/, 'a number this size needs its commas');
+  assert.equal(f(staged, 'Buyable'), 'not yet');
+  assert.equal(f(staged, 'On sale'), '2026-09-16');
 
   const [inStock] = buildStockEmbeds(
     [{ name: 'x', retailer: 'Target', price: 1, msrp: 1, url: '', imageUrl: '',
@@ -541,7 +541,7 @@ test('A WAITING ROOM IS AN INSTRUCTION, NOT A STATUS', async () => {
 test('an unknown shop still gets an alert, just without a link', async () => {
   const { buildQueueEmbed } = await import('../src/notify.ts');
   const e = buildQueueEmbed('', '', '2026-09-02T21:00:05Z');
-  assert.match(e.title, /WAITING ROOM UP AT A SHOP/);
+  assert.match(e.title ?? '', /WAITING ROOM UP AT A SHOP/);
   assert.equal(e.url, undefined);
 });
 

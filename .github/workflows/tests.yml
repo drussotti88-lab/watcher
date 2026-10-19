@@ -44,15 +44,8 @@ jobs:
                  END{if(b!="")print b}' test-output.txt | head -20 | sed 's/^[[:space:]]*/::error::/'
             exit 1
           }
-      # The app's own code must typecheck; that blocks.
-      - name: typecheck (app code)
-        run: npx tsc -p tsconfig.json --noEmit
-      # The test files carried ~78 strict-mode type errors on main before CI
-      # existed (19 Oct 2026). They run fine; their types are being cleaned up
-      # in their own PR. Reported here, not blocking, until that lands.
-      - name: typecheck (tests, not blocking yet)
-        continue-on-error: true
-        run: npx tsc -p tsconfig.test.json --noEmit
+      # With the test files clean (this PR), both typechecks block again.
+      - run: npm run typecheck
 
   phantom:
     name: Phantom (watcher)

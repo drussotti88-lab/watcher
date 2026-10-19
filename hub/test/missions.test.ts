@@ -1492,8 +1492,8 @@ test('THE DISCORD CARD FOR A DRAWING DOES NOT READ LIKE A DROP', async () => {
     windowAt: new Date(Date.parse(now) + 3 * 3600000).toISOString(),
   }], now, 'opened');
 
-  assert.match(card!.title, /^DRAWING OPEN · /);
-  const f = (name: string) => card!.fields.find((x: any) => x.name === name)?.value;
+  assert.match(card!.title ?? '', /^DRAWING OPEN · /);
+  const f = (name: string) => card!.fields!.find((x: any) => x.name === name)?.value;
   assert.equal(f('Price'), '$69.49');
   assert.equal(f('Open until'), 'Sep 18, 2:00pm PDT', "Walmart's words, not ours");
   assert.equal(f('Time left'), 'in 3 hours');
@@ -1501,8 +1501,8 @@ test('THE DISCORD CARD FOR A DRAWING DOES NOT READ LIKE A DROP', async () => {
   // The footer is the honesty: entering early is worth no more than entering
   // late, and a card that implies otherwise is spending adrenaline on a coin
   // toss — which makes the next real drop alert worth less.
-  assert.match(card!.footer.text, /drawn at random/i);
-  assert.match(card!.footer.text, /entering early is worth no more/i);
+  assert.match(card!.footer!.text, /drawn at random/i);
+  assert.match(card!.footer!.text, /entering early is worth no more/i);
 });
 
 test('GIVEN ROWS AND RECOGNISING NONE IS A 400, NOT A CHEERFUL 200', async () => {
@@ -1584,16 +1584,16 @@ test('OPENS-SOON IS WORDED AS A PREDICTION, BECAUSE THAT IS WHAT IT IS', async (
     windowAt: new Date(Date.parse(now) + 25 * 60000).toISOString(),
   }], now, 'soon');
 
-  assert.match(card!.title, /^DRAWING OPENS SOON · /);
-  const f = (name: string) => card!.fields.find((x: any) => x.name === name)?.value;
+  assert.match(card!.title ?? '', /^DRAWING OPENS SOON · /);
+  const f = (name: string) => card!.fields!.find((x: any) => x.name === name)?.value;
   assert.equal(f('Opens'), 'Sep 16, 2:00pm PDT');
   assert.equal(f('That is'), 'in 25 minutes');
   // It must not claim a button exists. Sending somebody to a page with no
   // control on it is how an alert stops being believed, and the alert that
   // stops being believed is the one that mattered.
-  assert.doesNotMatch(card!.footer.text, /enter now/i);
-  assert.match(card!.footer.text, /stated start time/i);
-  assert.match(card!.footer.text, /may take a few minutes/i);
+  assert.doesNotMatch(card!.footer!.text, /enter now/i);
+  assert.match(card!.footer!.text, /stated start time/i);
+  assert.match(card!.footer!.text, /may take a few minutes/i);
 });
 
 // ── Which room a card goes to ────────────────────────────────────────────────
@@ -2068,15 +2068,15 @@ test('THE WALL CARD DOES NOT CRY DROP, AND SAYS WHOSE JOB THE CHECK IS', async (
     { retailer: 'Target', at: now, reason: 'Press-and-hold check', restingMinutes: 20 },
     now,
   );
-  assert.match(card.title, /^TARGET PUT A HUMAN CHECK UP$/);
-  assert.match(card.description, /standing down and will not touch the check/i);
-  assert.match(card.description, /does not on its own mean a drop is live/i);
-  assert.match(card.description, /look yourself/i);
+  assert.match(card.title ?? '', /^TARGET PUT A HUMAN CHECK UP$/);
+  assert.match(card.description ?? '', /standing down and will not touch the check/i);
+  assert.match(card.description ?? '', /does not on its own mean a drop is live/i);
+  assert.match(card.description ?? '', /look yourself/i);
   // The quiet is the thing being explained. Without this the channel says
   // nothing and nothing is indistinguishable from nothing happening.
-  assert.match(card.description, /treat the quiet as blindness/i);
-  assert.match(card.footer.text, /never this program/i);
-  assert.doesNotMatch(card.description, /drop is live now|go buy|in stock/i);
+  assert.match(card.description ?? '', /treat the quiet as blindness/i);
+  assert.match(card.footer!.text, /never this program/i);
+  assert.doesNotMatch(card.description!, /drop is live now|go buy|in stock/i);
 });
 
 test('A DRAWING CARD LINKS TO THE SHELF, NOT TO A LINK THAT LIES', async () => {
@@ -2105,9 +2105,9 @@ test('A DRAWING CARD LINKS TO THE SHELF, NOT TO A LINK THAT LIES', async () => {
   assert.equal(card!.url, 'https://www.walmart.com/shop/collectibles/draw');
   assert.doesNotMatch(String(card!.url), /\/ip\//, 'never the item page');
   // The link no longer identifies the item, so the card has to.
-  const f = (name: string) => card!.fields.find((x: any) => x.name === name)?.value;
+  const f = (name: string) => card!.fields!.find((x: any) => x.name === name)?.value;
   assert.equal(f('Item'), '20959422790');
-  assert.match(card!.title, /Elite Trainer Box - 2ct Bundle/);
+  assert.match(card!.title ?? '', /Elite Trainer Box - 2ct Bundle/);
 });
 
 test('A RETAILER WITH NO KNOWN DRAWINGS SHELF GETS NO LINK AT ALL', async () => {
@@ -2338,8 +2338,8 @@ test('THE BLIND CARD SAYS NOTHING IS WATCHING, AND TO LOOK BY HAND', async () =>
   const { buildBlindEmbed } = await import('../src/notify.ts');
   const card = buildBlindEmbed({ retailer: 'Target', checks: 61, minutes: 30 }, new Date().toISOString());
   assert.equal(card.title, 'TARGET: PHANTOM IS BLIND');
-  assert.match(card.description, /nothing is watching it/i);
-  assert.match(card.description, /check by hand/i);
+  assert.match(card.description ?? '', /nothing is watching it/i);
+  assert.match(card.description ?? '', /check by hand/i);
 });
 
 // ── Magic is one of ours now ─────────────────────────────────────────────────

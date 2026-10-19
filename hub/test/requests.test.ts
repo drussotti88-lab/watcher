@@ -166,7 +166,13 @@ test('an approved product is the shared catalogue, with the typed name winning',
   const products = await store.listProducts(db, MEMBER);
   assert.equal(products.length, 1, 'everybody reads the same row');
   assert.equal(products[0]!.name, 'Pitch Black Elite Trainer Box');
-  assert.notEqual(products[0]!.nameIsGuess, true, 'a typed name is not a guess');
+  // ProductRow does not carry nameIsGuess, so reading it off the row was always
+  // undefined and this could never fail. Read the column itself.
+  const [flag] = await db.query<{ name_is_guess: boolean }>(
+    'SELECT name_is_guess FROM products WHERE key = $1',
+    [products[0]!.key],
+  );
+  assert.equal(flag!.name_is_guess, false, 'a typed name is not a guess');
 });
 
 test('A MEMBER CANNOT APPROVE THEIR OWN REQUEST', async () => {

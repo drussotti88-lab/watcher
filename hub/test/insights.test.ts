@@ -622,17 +622,19 @@ test('A PROFILE COUNTS THIS ACCOUNT AND NOBODY ELSE', async () => {
   // A profile that quietly showed the owner's totals to a member would be a
   // leak wearing a friendly face.
   const { db, listing } = await seeded();
-  const other = await store.upsertUser(db, { handle: 'someone-else' }).catch(() => null);
+  // upsertUser takes (handle, passwordHash) and returns the new id. This line
+  // used to pass an object and read `.id` off the result; the insert failed,
+  // the .catch swallowed it, and the other-account half below never ran.
+  const other = await store.upsertUser(db, 'someone-else', '');
   const mine = await store.profile(db, A);
   assert.equal(mine.handle.length > 0, true);
   assert.equal(mine.missions, 1, 'the one mission this account has');
   assert.equal(mine.bought, 0);
   assert.equal(mine.spent, 0);
   assert.equal(typeof mine.vaultLinked, 'boolean');
-  if (other) {
-    const theirs = await store.profile(db, other.id);
-    assert.equal(theirs.missions, 0, 'a fresh account watches nothing');
-  }
+  const theirs = await store.profile(db, other);
+  assert.equal(theirs.handle, 'someone-else', 'the profile of the account asked about');
+  assert.equal(theirs.missions, 0, 'a fresh account watches nothing');
 });
 
 test('the profile carries no secret about the account', async () => {
