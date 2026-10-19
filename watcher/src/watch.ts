@@ -24,7 +24,7 @@
 import type { Browser } from './browser.ts';
 import { isQueue, queueScope } from './challenge.ts';
 import { DEFAULT_SETTINGS, type Hub, type Mission, type ObservationOut, type RunOut, type Settings } from './hub.ts';
-import { Pacer, isDue, nextUp } from './rate.ts';
+import { Pacer, isDue, nextUp, dropOpenFor, type DropOpen } from './rate.ts';
 import { quietInterval, quietLabel } from './quiet.ts';
 import { readListing, type Reading } from './read.ts';
 import type { Activity } from './activity.ts';
@@ -413,8 +413,11 @@ export interface WatchDeps {
    * mission asked for, however long it has been sitting still. Decided in
    * drop.ts and passed in, so there is one answer to "is a drop on" in the
    * process rather than two that can disagree.
+   *
+   * Asked per shop when it is a function: a Walmart window wakes Walmart's
+   * listings and nobody else's.
    */
-  dropOpen?: boolean;
+  dropOpen?: DropOpen;
   /** Injectable so draining can be tested without real time passing. */
   wait?: (ms: number) => Promise<void>;
   /** The per-check ceiling. Injectable so a hang can be tested in milliseconds. */
@@ -465,11 +468,12 @@ function soonestAllowed(
   missions: Mission[],
   pacer: Pacer,
   now: number,
-  dropOpen = false,
+  dropOpen: DropOpen = false,
 ): number | null {
   let soonest: number | null = null;
   for (const m of missions) {
-    if (!(m.checkNow === true || isDue(m.lastCheckedAt || null, quietInterval(m, now, dropOpen), now))) continue;
+    const open = dropOpenFor(dropOpen, m.retailer);
+    if (!(m.checkNow === true || isDue(m.lastCheckedAt || null, quietInterval(m, now, open), now))) continue;
     const wait = pacer.waitMs(m.retailer, now);
     if (wait <= 0) return 0;
     if (soonest === null || wait < soonest) soonest = wait;
@@ -507,7 +511,7 @@ export async function pass(missions: Mission[], pacer: Pacer, deps: WatchDeps): 
   // it. Zero means the old behaviour — one round and out — so every existing
   // test still describes what it always did.
   const windowMs = deps.windowMs ?? 0;
-  const dropOpen = deps.dropOpen === true;
+  const dropOpen: DropOpen = deps.dropOpen ?? false;
   const wait = deps.wait ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const started = now();
 
@@ -739,7 +743,7 @@ export async function pass(missions: Mission[], pacer: Pacer, deps: WatchDeps): 
           lastChangedAt: moved ? new Date(now()).toISOString() : mission.lastChangedAt,
         },
         now(),
-        dropOpen,
+        dropOpenFor(dropOpen, mission.retailer),
       );
       log(
         `  ${mission.productName} (${mission.retailer}): ${reading.state}, ${reading.ms}ms` +
@@ -759,7 +763,7 @@ export async function pass(missions: Mission[], pacer: Pacer, deps: WatchDeps): 
   for (const m of missions) {
     if (done.has(m.id)) continue;
     if (named.has(m.retailer)) continue;
-    if (!isDue(m.lastCheckedAt || null, quietInterval(m, nowMs, dropOpen), nowMs)) continue;
+    if (!isDue(m.lastCheckedAt || null, quietInterval(m, nowMs, dropOpenFor(dropOpen, m.retailer)), nowMs)) continue;
     const wait = pacer.waitMs(m.retailer, nowMs);
     if (wait <= 0) continue;
     const label = pacer.standingDown(m.retailer, nowMs) ? 'standing down' : 'pacing';
@@ -781,7 +785,7 @@ export async function pass(missions: Mission[], pacer: Pacer, deps: WatchDeps): 
       // pass. The number is only printed, which is exactly why it survived:
       // wrong output that nobody acts on is the kind that lasts.
       const dueAt =
-        new Date(m.lastCheckedAt).getTime() + quietInterval(m, nowMs, dropOpen) * 1000;
+        new Date(m.lastCheckedAt).getTime() + quietInterval(m, nowMs, dropOpenFor(dropOpen, m.retailer)) * 1000;
       if (!Number.isFinite(dueAt)) continue;
       const wait = Math.max(0, dueAt - nowMs);
       if (soonest === null || wait < soonest) soonest = wait;

@@ -35,10 +35,22 @@ export const STEPS: readonly { afterHours: number; times: number }[] = [
   { afterHours: 6, times: 8 },
   { afterHours: 24, times: 15 },
   { afterHours: 24 * 7, times: 30 },
+  { afterHours: 24 * 14, times: 60 },
+  { afterHours: 24 * 30, times: 120 },
 ];
 
-/** However quiet it gets, never longer than this between reads. */
-export const MAX_INTERVAL_S = 30 * 60;
+/**
+ * However quiet it gets, never longer than this between reads.
+ *
+ * Thirty minutes until 19 Oct 2026. By then most of the watchlist had been
+ * out of stock for weeks and still cost forty-eight reads a day each, and the
+ * shop that walled us for three weeks running was being asked about every one
+ * of them. Two hours is still twelve looks a day at a shelf that has not moved
+ * in a month, and everything that makes a listing urgent (stock, money, a
+ * street date, a drop window, a person pressing the button) skips the ramp
+ * entirely, as before.
+ */
+export const MAX_INTERVAL_S = 120 * 60;
 
 /**
  * The ramp is asymmetric, because the two directions are not the same event.

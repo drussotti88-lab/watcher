@@ -5,15 +5,19 @@
  * otherwise be guesses: can this machine see these sites at all, and what does
  * a given product page actually contain.
  */
-import { existsSync, rmSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { existsSync, rmSync, writeFileSync, mkdirSync, readFileSync, renameSync } from 'node:fs';
 import { loadConfig, CONFIG_PATH } from './config.ts';
 import { Browser } from './browser.ts';
 import { probeAll, renderProbe, PROBE_TARGETS } from './probe.ts';
 import { inspectUrl, renderInspection } from './inspect.ts';
 import { Hub } from './hub.ts';
-import { Pacer } from './rate.ts';
+import { Pacer, pacingFor } from './rate.ts';
 import { isAwake, overrides } from './hours.ts';
-import { dropWindow, burstMsFor, retailerOn, pausedList } from './drop.ts';
+import { dropWindow, burstMsFor, retailerOn, pausedList, windowCovers } from './drop.ts';
+import {
+  loadMemory, saveMemory, mayPlanSweep, nextSweepAllowedAt, STANDDOWN_FILE,
+  type MemoryDeps, type SweepMemory,
+} from './standdown.ts';
 import { scanDraws, drawInterval, drawChanges, toDrawingIn } from './draws.ts';
 import type { DrawRow } from './readers/walmart-draw.ts';
 import { pass } from './watch.ts';
@@ -270,6 +274,18 @@ function timestamp(): string {
   return new Date().toLocaleTimeString();
 }
 
+/** A clock time for the owner, who reads Central. */
+function centralTime(at: number): string {
+  return (
+    new Date(at).toLocaleString('en-US', {
+      timeZone: 'America/Chicago',
+      weekday: 'short',
+      hour: 'numeric',
+      minute: '2-digit',
+    }) + ' CT'
+  );
+}
+
 async function runPasses(once: boolean): Promise<void> {
   const config = loadConfig();
 
@@ -299,7 +315,8 @@ async function runPasses(once: boolean): Promise<void> {
   const hub = new Hub({ url: config.hub.url, token: config.hub.token });
   // Signed out, always. See the Persona comment in browser.ts.
   const browser = new Browser(config, 'watch');
-  const pacer = new Pacer();
+  // The wall probe comes from the config; see rate.ts WALLED_AFTER.
+  const pacer = new Pacer(pacingFor(config.wallProbeHours));
 
 
   // The log. Its own token goes in as a known secret so that even a Hub error
@@ -328,6 +345,44 @@ async function runPasses(once: boolean): Promise<void> {
     },
     log: (line) => console.log(line),
   });
+
+  // ── What the last run knew about walls ────────────────────────────────
+  //
+  // Read back before the first pass, so a restart does not knock on a wall
+  // the previous run was waiting out. See standdown.ts for the three weeks
+  // that taught this. Written again every time a stand-down starts, grows or
+  // is forgiven, and whenever a sweep is planned or settles.
+  const memoryDeps: MemoryDeps = {
+    read: (path) => (existsSync(path) ? readFileSync(path, 'utf8') : null),
+    write: (path, text) => {
+      mkdirSync('logs', { recursive: true });
+      // Write then rename, so a crash mid-write leaves the old file whole
+      // rather than half a file that reads as nothing.
+      writeFileSync(`${path}.tmp`, text);
+      renameSync(`${path}.tmp`, path);
+    },
+  };
+  const remembered = loadMemory(memoryDeps);
+  pacer.restore(remembered.pacer, Date.now());
+  let sweepMemory: SweepMemory | null = remembered.sweep;
+  let memoryErrorSaid = '';
+  const remember = (): void => {
+    const err = saveMemory(memoryDeps, { pacer: pacer.snapshot(), sweep: sweepMemory }, Date.now());
+    if (err && err !== memoryErrorSaid) {
+      memoryErrorSaid = err;
+      console.log(`  ${timestamp()}  could not write ${STANDDOWN_FILE}: ${err}`);
+      activity.record({ kind: 'startup', level: 'warn', message: `could not write down stand-downs: ${err}` });
+    }
+  };
+  pacer.onChange = remember;
+  for (const [shop, s] of Object.entries(pacer.snapshot().retailers)) {
+    if (s.standDownUntil <= Date.now()) continue;
+    const said =
+      `remembered from the last run: ${shop} is standing down until ${centralTime(s.standDownUntil)} ` +
+      `(${s.consecutiveChallenges} refusals running)`;
+    console.log(`  ${said}`);
+    activity.record({ kind: 'startup', level: 'warn', retailer: shop, message: said });
+  }
 
   browser.onEvent = (level, message) => {
     activity.record({ kind: 'browser', level, message });
@@ -374,6 +429,7 @@ async function runPasses(once: boolean): Promise<void> {
   /** Last-said states, so these lines appear on change rather than every pass. */
   let dropSaid = '';
   let retailersOffSaid = '';
+  let sweepHeldSaid = '';
 
   let stopped = false;
   process.on('SIGINT', () => {
@@ -584,6 +640,16 @@ async function runPasses(once: boolean): Promise<void> {
 
   /** Take one step if any retailer will have us. Returns whether it did. */
   const sweepStep = async (): Promise<boolean> => {
+    // A shop that started standing down since the plan was made (a check
+    // walled, not the sweep) loses its remaining steps here, for the same
+    // reason it is left out of a new plan.
+    const before = sweepPlan.length;
+    sweepPlan = sweepPlan.filter((s) => !pacer.standingDown(s.retailer, Date.now()));
+    if (sweepPlan.length < before) {
+      const said = `sweep dropped ${before - sweepPlan.length} steps for a shop standing down`;
+      console.log(`  ${timestamp()}  ${said}`);
+      activity.record({ kind: 'sweep', level: 'warn', message: said });
+    }
     if (sweepPlan.length === 0) return false;
 
     // The first step whose retailer will have us, not simply the first step.
@@ -814,13 +880,19 @@ async function runPasses(once: boolean): Promise<void> {
       // or the day something on the watchlist is released. Outside one, the
       // ordinary 20s floor is restored — including the moment a window closes,
       // which is why this is recomputed every pass rather than latched.
+      //
+      // And only for the shops the window is for. Until 19 Oct 2026 one shop's
+      // window sped up every shop; see drop.ts DropWindow.retailers.
       const window = dropWindow(hub.settings, allMissions, Date.now());
-      pacer.setBurstSpacing(burstMsFor(hub.settings, allMissions, Date.now()));
+      const settingsNow = hub.settings;
+      const covered = (retailer: string): boolean => windowCovers(window, settingsNow, retailer);
+      pacer.setBurstSpacing(burstMsFor(hub.settings, allMissions, Date.now()), covered);
       if (window.reason !== dropSaid) {
         dropSaid = window.reason;
         if (window.open) {
           const secs = Math.round(pacer.spacingMs / 1000);
-          const said = `DROP WINDOW open — checking every ${secs}s (${window.reason})`;
+          const shops = window.retailers === null ? 'every shop that is on' : window.retailers.join(', ');
+          const said = `DROP WINDOW open for ${shops} — checking every ${secs}s (${window.reason})`;
           console.log(`  ${timestamp()}  ${said}`);
           activity.record({ kind: 'pass', level: 'warn', message: said });
         } else {
@@ -862,7 +934,29 @@ async function runPasses(once: boolean): Promise<void> {
       // The plan lives in memory. A restart part-way through defers the
       // remaining queries to the next window rather than resuming — a mild
       // cost, and the alternative is another piece of state to keep honest.
-      if (sweepPlan.length === 0 && hub.sweepDue) {
+      //
+      // When the last plan was MADE is kept, though (standdown.ts). The app
+      // only counts a sweep done when its last Target query lands, so while
+      // Target was walling us (29 Sep to at least 19 Oct 2026) a sweep was
+      // due forever and the plan was rebuilt every time it ran dry, thirteen
+      // Target searches into the same wall each time. Now a sweep that did
+      // not finish is planned again at most once a day, a restart included,
+      // and a shop that is standing down is left out of the plan altogether.
+      if (!stale && !hub.sweepDue && sweepMemory && !sweepMemory.settled) {
+        // The app has stopped asking: whatever was planned is finished.
+        sweepMemory = { ...sweepMemory, settled: true };
+        remember();
+      }
+      if (sweepPlan.length === 0 && hub.sweepDue && !mayPlanSweep(sweepMemory, Date.now())) {
+        const at = nextSweepAllowedAt(sweepMemory);
+        const said = `sweep still due, but the last one did not finish — next try after ${at === null ? 'now' : centralTime(at)}`;
+        if (said !== sweepHeldSaid) {
+          sweepHeldSaid = said;
+          console.log(`  ${timestamp()}  ${said}`);
+          activity.record({ kind: 'sweep', message: said });
+        }
+      } else if (sweepPlan.length === 0 && hub.sweepDue) {
+        sweepHeldSaid = '';
         // Both retailers, interleaved rather than one after the other. The
         // pacer holds each retailer separately, so alternating means a Pokémon
         // Center page can be read during Target's cooldown and vice versa —
@@ -895,6 +989,21 @@ async function runPasses(once: boolean): Promise<void> {
         sweepPlan = interleave(targetSteps, pcSteps, walmartSteps).filter((step) =>
           retailerOn(hub.settings, step.retailer),
         );
+        // A shop standing down from a wall is not swept: thirteen searches
+        // queued behind a six-hour stand-down would all go out the moment it
+        // ends, and the first would only earn a longer one. Watching probes
+        // it; the sweep waits for tomorrow's plan.
+        const walledShops = [...new Set(sweepPlan.map((s) => s.retailer))].filter((r) =>
+          pacer.standingDown(r, Date.now()),
+        );
+        if (walledShops.length) {
+          sweepPlan = sweepPlan.filter((s) => !walledShops.includes(s.retailer));
+          const said = `sweep leaves out ${walledShops.join(', ')} — standing down from a wall`;
+          console.log(`  ${timestamp()}  ${said}`);
+          activity.record({ kind: 'sweep', level: 'warn', message: said });
+        }
+        sweepMemory = { plannedAt: Date.now(), settled: false };
+        remember();
         // Pressed by hand means somebody is looking at the button. Take the
         // next turn rather than waiting for one — the alternation exists to
         // stop a background sweep starving the watching, not to make a person
@@ -920,7 +1029,17 @@ async function runPasses(once: boolean): Promise<void> {
       // whose whole job is to tell a person a thing they asked to be told, and
       // a drawing missed is missed for good. Its own switch is `drawWatch`.
       // `neverTouch` still outranks both, in the browser context.
-      if (config.drawWatch !== false && Date.now() >= nextDrawAt) {
+      //
+      // But not while Walmart is standing down from a wall. The drawings page
+      // is the same shop through the same profile, so reading it then is one
+      // more knock on the door the stand-down exists to leave alone. A wall
+      // ON this page stands Walmart down the same way (below), so the two
+      // share one memory and a restart forgets neither.
+      if (
+        config.drawWatch !== false &&
+        Date.now() >= nextDrawAt &&
+        !pacer.standingDown(WALMART_RETAILER, Date.now())
+      ) {
         const scan = await scanDraws(browser);
         nextDrawAt = Date.now() + drawInterval(scan.rows) * 1000;
 
@@ -930,8 +1049,10 @@ async function runPasses(once: boolean): Promise<void> {
             kind: 'draw', level: 'warn', retailer: 'Walmart',
             message: `drawings page challenged: ${scan.challengeReason}`,
           });
-          // A wall is a reason to back off hard, not to keep knocking.
+          // A wall is a reason to back off hard, not to keep knocking. A
+          // waiting room is not a wall and does not stand the shop down.
           nextDrawAt = Date.now() + 4 * 3600_000;
+          if (!isQueue(scan.challengeReason)) pacer.challenged(WALMART_RETAILER, Date.now());
         } else if (scan.note) {
           console.log(`  ${timestamp()}  drawings: ${scan.note}`);
         }
@@ -1006,7 +1127,7 @@ async function runPasses(once: boolean): Promise<void> {
           windowMs: Math.round(config.intervalSec * 1000 * 0.9),
           // During a drop, nothing rests: every listing is read at the
           // interval its mission asked for, however long it has been still.
-          dropOpen: window.open,
+          dropOpen: covered,
           urgent: () => urgent,
         });
         const parts = [`${result.checked} checked`];

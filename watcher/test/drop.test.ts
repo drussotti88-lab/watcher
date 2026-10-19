@@ -7,9 +7,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { dropWindow, burstMsFor, retailerOn, pausedList, todayIn } from '../src/drop.ts';
+import { dropWindow, burstMsFor, retailerOn, pausedList, todayIn, windowCovers } from '../src/drop.ts';
 import { DEFAULT_SETTINGS, type Mission, type Settings } from '../src/hub.ts';
-import { Pacer, DEFAULT_PACING, MIN_SAFE_SPACING_MS } from '../src/rate.ts';
+import { Pacer, DEFAULT_PACING, MIN_SAFE_SPACING_MS, nextUp } from '../src/rate.ts';
 
 const T0 = Date.parse('2026-09-16T14:00:00Z');
 
@@ -199,4 +199,90 @@ test('an unknown shop is ON — the list names what is off', () => {
   assert.equal(retailerOn(settings(), 'Target'), true);
   // Spelling is not a reason to leave a shop running.
   assert.equal(retailerOn(settings({ pausedRetailers: ['walmart'] }), 'Walmart'), false);
+});
+
+// ── one shop's window is that shop's alone ──────────────────────────────────
+
+/** Wednesday 14 Oct 2026, 8:05pm Chicago: inside Walmart's weekly slot. */
+const WED_8PM = Date.parse('2026-10-15T01:05:00Z');
+
+test('A WALMART DROP WINDOW DOES NOT SPEED UP TARGET', () => {
+  // Until 19 Oct 2026 the burst was one floor for the whole machine, so every
+  // Wednesday at 8pm Target and Pokemon Center went to five-second spacing
+  // for fifty minutes because of a drop at a different shop.
+  const s = settings({ burstSpacingSeconds: 5 });
+  const w = dropWindow(s, [], WED_8PM);
+  assert.equal(w.open, true, 'the guard must see a real window, or it proves nothing');
+  assert.deepEqual(w.retailers, ['Walmart']);
+  assert.equal(windowCovers(w, s, 'Walmart'), true);
+  assert.equal(windowCovers(w, s, 'walmart'), true, 'spelling is not a reason to miss it');
+  assert.equal(windowCovers(w, s, 'Target'), false);
+  assert.equal(windowCovers(w, s, 'Pokemon Center'), false);
+
+  const pacer = new Pacer({ ...DEFAULT_PACING, jitterMs: 0 }, () => 0);
+  pacer.setBurstSpacing(burstMsFor(s, [], WED_8PM), (r) => windowCovers(w, s, r));
+  pacer.record('Walmart', WED_8PM);
+  pacer.record('Target', WED_8PM);
+  assert.equal(pacer.waitMs('Walmart', WED_8PM), 5_000, 'the shop that is dropping is hurried');
+  assert.equal(pacer.waitMs('Target', WED_8PM), 20_000, 'the one that is not keeps its pace');
+  assert.equal(pacer.spacingFor('Pokemon Center'), 20_000);
+});
+
+test('A WALMART DROP WINDOW DOES NOT WAKE TARGET\'S RESTING LISTINGS', () => {
+  // The other half of the same bug: the window also told every resting
+  // listing at every shop to read at full speed.
+  const s = settings({ burstSpacingSeconds: 5 });
+  const w = dropWindow(s, [], WED_8PM);
+  const pacer = new Pacer({ ...DEFAULT_PACING, jitterMs: 0 }, () => 0);
+  const quiet = {
+    checkEverySeconds: 60,
+    state: 'out',
+    lastChangedAt: new Date(WED_8PM - 48 * 3_600_000).toISOString(),
+    lastCheckedAt: new Date(WED_8PM - 120_000).toISOString(),
+  };
+  const target = { ...quiet, id: 1, retailer: 'Target' };
+  const walmart = { ...quiet, id: 2, retailer: 'Walmart' };
+  const covers = (r: string) => windowCovers(w, s, r);
+
+  assert.equal(nextUp([target], pacer, WED_8PM, covers), null, 'Target is still resting');
+  assert.equal(nextUp([walmart], pacer, WED_8PM, covers)?.id, 2, 'Walmart is woken');
+  // And the old whole-machine yes wakes both, which is what this replaced.
+  assert.equal(nextUp([target], pacer, WED_8PM, true)?.id, 1);
+});
+
+test('A SWITCHED-OFF SHOP\'S DROP SLOT OPENS NOTHING', () => {
+  // Walmart paused, Wednesday 8pm: no window at all, and no line in the log
+  // claiming one.
+  const s = settings({ burstSpacingSeconds: 5, pausedRetailers: ['Walmart'] });
+  const w = dropWindow(s, [], WED_8PM);
+  assert.equal(w.open, false);
+  assert.equal(burstMsFor(s, [], WED_8PM), null);
+  // The same instant with Walmart on does open one, so the guard is real.
+  assert.equal(dropWindow(settings({ burstSpacingSeconds: 5 }), [], WED_8PM).open, true);
+});
+
+test('staged stock at a switched-off shop opens nothing; at a shop that is on, only that shop', () => {
+  const loaded = mission({ retailer: 'Walmart', availableQuantity: 31000, state: 'out' });
+  const off = settings({ burstSpacingSeconds: 10, pausedRetailers: ['Walmart'] });
+  assert.equal(dropWindow(off, [loaded], T0).open, false);
+
+  const on = settings({ burstSpacingSeconds: 10 });
+  const w = dropWindow(on, [loaded, mission({ id: 2 })], T0);
+  assert.equal(w.open, true);
+  assert.deepEqual(w.retailers, ['Walmart']);
+  assert.equal(windowCovers(w, on, 'Target'), false);
+});
+
+test('a manual window covers every shop that is on, and no shop that is off', () => {
+  const s = settings({
+    burstSpacingSeconds: 8,
+    dropModeUntil: new Date(T0 + 20 * 60_000).toISOString(),
+    pausedRetailers: ['Walmart'],
+  });
+  const w = dropWindow(s, [], T0);
+  assert.equal(w.open, true);
+  assert.equal(w.retailers, null);
+  assert.equal(windowCovers(w, s, 'Target'), true);
+  assert.equal(windowCovers(w, s, 'Walmart'), false);
+  assert.equal(windowCovers(dropWindow(settings(), [], T0), s, 'Target'), false, 'a shut window covers nothing');
 });
