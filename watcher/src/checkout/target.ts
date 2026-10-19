@@ -25,7 +25,11 @@
  * address and card inside Target's account — this flow only ever clicks
  * "add to cart" and, when live and verified, the final place-order button.
  * If Target asks for a sign-in or a card number instead of a cart, that is a
- * failure with a screenshot, never a form to fill.
+ * failure with a screenshot, never a form to fill. The same goes for the
+ * card's security code (CVV): it is detected, named, and left for a person.
+ *
+ * And nothing here acts on a cart line it cannot tell is this mission's
+ * product: the owner's own basket may hold other things (see findCartLine).
  */
 import type { Page } from 'playwright';
 import { mkdirSync } from 'node:fs';
@@ -165,15 +169,254 @@ export function moneyFrom(text: string): number | null {
   return Number.isFinite(n) ? Math.round(n * 100) / 100 : null;
 }
 
+/** Which product a cart operation is about, so it never acts on another line. */
+export interface CartItem {
+  /** The retailer's own id. At Target, the TCIN. */
+  externalId: string;
+  url: string;
+  name: string;
+  /** How many of it this mission puts in the cart. */
+  quantity: number;
+}
+
+/** Where a checkout stands while a person is being waited on. */
+export type CheckoutState = 'confirmed' | 'security_code' | 'other';
+
 export interface CartDriver {
   /** Put the item in the basket. The page must already be the product page. */
   addToCart(page: Page): Promise<void>;
-  /** Read what the cart actually says. Null fields are refusals downstream. */
-  readCart(page: Page): Promise<CartTotals>;
-  /** Take it back out — dry runs must not leave a basket behind. */
-  removeFromCart(page: Page): Promise<void>;
+  /**
+   * Read what the cart says about THIS item. Null fields are refusals
+   * downstream, and so is `otherItems` being anything but zero.
+   */
+  readCart(page: Page, item: CartItem): Promise<CartTotals>;
+  /**
+   * Take this item back out — dry runs must not leave a basket behind. Throws,
+   * removing nothing, when the line cannot be told apart from the rest of the
+   * cart or holds more than this mission put there.
+   */
+  removeFromCart(page: Page, item: CartItem): Promise<void>;
   /** The last click. Only ever called when live AND the selector is verified. */
   placeOrder(page: Page): Promise<void>;
+  /** What the open checkout is showing, for a person-in-the-loop wait. */
+  checkoutState?(page: Page): Promise<CheckoutState>;
+}
+
+/**
+ * Target asked for the card's security code (CVV).
+ *
+ * ── Why this is its own error ───────────────────────────────────────────────
+ *
+ * The first live buy (31 Aug 2026) clicked Place Order and nothing happened:
+ * "most likely a card-confirmation prompt swallowed the click". The
+ * confirmation wait then ran out, threw a generic error, and the grant stayed
+ * live for somebody to release by hand, with nobody told that a person could
+ * have finished the order in the open window.
+ *
+ * A security code is a question for the card holder. Phantom never types it,
+ * never stores it, and never clicks on past it. What it can do is say so,
+ * loudly, and hold the window open (buy.ts does that).
+ */
+export class SecurityCodeNeeded extends CheckoutStepError {
+  /** True when Place Order had already been clicked when the prompt was seen. */
+  readonly afterClick: boolean;
+  constructor(afterClick: boolean, screenshot: string) {
+    super(
+      'placeOrder',
+      `Target is asking for the card's security code${afterClick ? ' after Place Order' : ''} — ` +
+        `Phantom does not type it; a person must` +
+        (screenshot ? `. What the page showed is in ${screenshot}` : ''),
+      screenshot,
+    );
+    this.name = 'SecurityCodeNeeded';
+    this.afterClick = afterClick;
+  }
+}
+
+/**
+ * Is a security-code (CVV) box showing?
+ *
+ * Runs INSIDE the page, so it must be self-contained: no imports, no closures.
+ * Matches an input by what it says it is (autocomplete="cc-csc", or a name,
+ * id, label, placeholder or data-test naming a CVV or security code), and
+ * only when it is actually on screen. Never reads the box's value.
+ */
+export function securityCodeShowing(): boolean {
+  const looksLikeCvv = /cc-csc|\bcvv\b|\bcvc\b|\bcsc\b|cvv|security[\s_-]*code|securitycode|card[\s_-]*verification/i;
+  const inputs = Array.from(document.querySelectorAll('input'));
+  for (const el of inputs) {
+    const label = Array.from(el.labels ?? [])
+      .map((l) => l.textContent ?? '')
+      .join(' ');
+    const said = [
+      el.getAttribute('autocomplete'),
+      el.getAttribute('name'),
+      el.getAttribute('id'),
+      el.getAttribute('aria-label'),
+      el.getAttribute('placeholder'),
+      el.getAttribute('data-test'),
+      label,
+    ].join(' ');
+    if (!looksLikeCvv.test(said)) continue;
+    const box = el.getBoundingClientRect();
+    const style = getComputedStyle(el);
+    if (box.width > 0 && box.height > 0 && style.visibility !== 'hidden' && style.display !== 'none') {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Ask every frame, because a card field is the thing most often put in its
+ * own iframe. Any frame that will not answer is a no from that frame, never
+ * an error: this is a check, and a check that throws hides the real failure.
+ */
+async function securityCodeOn(page: Page): Promise<boolean> {
+  // page.frames() includes the main frame, so asking each covers the page.
+  const frames = typeof page.frames === 'function' ? page.frames() : [];
+  if (frames.length) {
+    for (const f of frames) {
+      if ((await f.evaluate(securityCodeShowing).catch(() => false)) === true) return true;
+    }
+    return false;
+  }
+  return (await page.evaluate(securityCodeShowing).catch(() => false)) === true;
+}
+
+/** The TCIN to look for in the cart, or null when the mission does not carry one. */
+export function tcinOf(item: Pick<CartItem, 'externalId' | 'url'>): string | null {
+  const id = String(item.externalId ?? '').trim();
+  if (/^\d{5,}$/.test(id)) return id;
+  const m = /\/A-(\d{5,})(?:\b|$)/.exec(String(item.url ?? ''));
+  return m ? m[1]! : null;
+}
+
+/** What findCartLine says about the cart. */
+export interface CartLines {
+  /** Every line in the cart: one per quantity stepper. */
+  lines: number;
+  /** Lines that are this product and nothing else. One is the only good answer. */
+  ours: number;
+  /** Whether a single delete button belongs to our line alone (and is marked). */
+  removable: boolean;
+}
+
+/**
+ * Find this product's line in the cart and mark it.
+ *
+ * Runs INSIDE the page, so it must be self-contained: no imports, no
+ * closures, nothing from module scope. Kept pure over a tiny slice of the DOM
+ * (querySelectorAll, parentElement, getAttribute, setAttribute) so a test can
+ * walk it over a fake cart.
+ *
+ * ── How a line is told apart ────────────────────────────────────────────────
+ *
+ * Each line has one quantity stepper (measured at the 31 Aug sitting). From a
+ * stepper, climb to the nearest ancestor that holds a product link (a link
+ * whose address carries "/A-<TCIN>"), giving up if the climb reaches anything
+ * holding a second stepper first: that is the cart, not a line. The line is
+ * ours when every product link in it is our TCIN. Then, from that line, the
+ * delete button is the one at the nearest level that holds exactly one,
+ * still never climbing into a second line.
+ *
+ * Before 19 Oct 2026 the driver read "the first quantity box" and clicked
+ * "the first delete button", so a cart that already held something of the
+ * owner's could be misread or have the wrong thing removed from it.
+ */
+export function findCartLine(arg: {
+  tcin: string;
+  marker: string;
+  stepper: string;
+  remove: string;
+  /** Defaults to `document` in the page; a fake DOM in tests. */
+  root?: unknown;
+}): CartLines {
+  type El = {
+    parentElement: El | null;
+    querySelectorAll(sel: string): ArrayLike<El>;
+    getAttribute(name: string): string | null;
+    setAttribute(name: string, value: string): void;
+  };
+  const root = (arg.root ?? document) as unknown as El;
+  const steppers = Array.from(root.querySelectorAll(arg.stepper));
+  const tcinsIn = (node: El): string[] => {
+    const out: string[] = [];
+    for (const a of Array.from(node.querySelectorAll('a[href]'))) {
+      const m = /\/A-(\d{5,})(?:\b|$)/.exec(a.getAttribute('href') ?? '');
+      if (m && !out.includes(m[1]!)) out.push(m[1]!);
+    }
+    return out;
+  };
+  const ours: El[] = [];
+  for (const stepper of steppers) {
+    let node = stepper.parentElement;
+    while (node) {
+      if (node.querySelectorAll(arg.stepper).length > 1) {
+        node = null; // climbed into the cart without finding this line's product
+        break;
+      }
+      const found = tcinsIn(node);
+      if (found.length) {
+        if (found.length === 1 && found[0] === arg.tcin) ours.push(node);
+        break;
+      }
+      node = node.parentElement;
+    }
+  }
+  const result: CartLines = { lines: steppers.length, ours: ours.length, removable: false };
+  if (ours.length !== 1) return result;
+
+  const line = ours[0]!;
+  line.setAttribute('data-phantom-line', arg.marker);
+  let scope: El | null = line;
+  while (scope && scope.querySelectorAll(arg.stepper).length === 1) {
+    const buttons = Array.from(scope.querySelectorAll(arg.remove));
+    if (buttons.length === 1) {
+      buttons[0]!.setAttribute('data-phantom-remove', arg.marker);
+      result.removable = true;
+      break;
+    }
+    if (buttons.length > 1) break;
+    scope = scope.parentElement;
+  }
+  return result;
+}
+
+/** Find and mark this item's line. Null when the page would not answer. */
+async function locateLine(page: Page, item: CartItem, marker: string): Promise<CartLines | null> {
+  const tcin = tcinOf(item);
+  if (!tcin) return null;
+  return page
+    .evaluate(findCartLine, {
+      tcin,
+      marker,
+      stepper: TARGET_SELECTORS.cartItemQuantity.candidates[0]!,
+      // The data-test one only. The text fallback ("Remove") is fine for
+      // finding A delete button and wrong for finding THIS line's one.
+      remove: TARGET_SELECTORS.removeItem.candidates[0]!,
+    })
+    .then((r) => (r && typeof r === 'object' && typeof (r as CartLines).lines === 'number' ? (r as CartLines) : null))
+    .catch(() => null);
+}
+
+/** The quantity in our marked line's stepper, or null. */
+async function lineQuantity(page: Page, marker: string): Promise<number | null> {
+  try {
+    const qty = page
+      .locator(`[data-phantom-line="${marker}"] ${TARGET_SELECTORS.cartItemQuantity.candidates[0]!}`)
+      .first();
+    await qty.waitFor({ state: 'visible', timeout: 4000 });
+    const text = (await qty.inputValue().catch(() => '')) || (await qty.innerText());
+    return Number(String(text).replace(/[^0-9]/g, '')) || null;
+  } catch {
+    return null;
+  }
+}
+
+/** A fresh marker per read, so a stale mark from an earlier read never matches. */
+function newMarker(): string {
+  return `p${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 }
 
 /**
@@ -224,7 +467,7 @@ export const targetCart: CartDriver = {
     await settle(page, SETTLE.afterAdd);
   },
 
-  async readCart(page) {
+  async readCart(page, item) {
     await page.goto('https://www.target.com/cart', { waitUntil: 'domcontentloaded' });
 
     // No flat wait here any more: every read below goes through `find`, which
@@ -242,9 +485,23 @@ export const targetCart: CartDriver = {
       await settle(page, SETTLE.afterToggle);
     }
 
-    const qty = await find(page, 'cartItemQuantity');
-    const quantityText = (await qty.inputValue().catch(() => '')) || (await qty.innerText());
-    const quantity = Number(String(quantityText).replace(/[^0-9]/g, '')) || null;
+    // Wait for the cart to render a line at all, then find OURS. Nothing
+    // below reads "the first" of anything any more.
+    await find(page, 'cartItemQuantity');
+    const marker = newMarker();
+    const lines = await locateLine(page, item, marker);
+    if (!lines || lines.ours !== 1) {
+      // No line, two lines, or a line we cannot tell apart: every number on
+      // this page is untrustworthy, and verifyCart refuses on otherItems null.
+      return { unitPrice: null, quantity: null, tax: null, shipping: null, otherItems: null };
+    }
+    const otherItems = lines.lines - 1;
+    const quantity = await lineQuantity(page, marker);
+    if (otherItems > 0) {
+      // The subtotal, tax and shipping are the whole cart's, so none of them
+      // is this item's. verifyCart refuses on otherItems before reading them.
+      return { unitPrice: null, quantity, tax: null, shipping: null, otherItems };
+    }
 
     const read = async (step: TargetStep): Promise<number | null> => {
       try {
@@ -257,6 +514,7 @@ export const targetCart: CartDriver = {
       }
     };
 
+    // Only our line is in the cart, so the cart's subtotal is our line's.
     const subtotal = await read('subtotal');
     return {
       unitPrice:
@@ -264,12 +522,39 @@ export const targetCart: CartDriver = {
       quantity,
       tax: await read('tax'),
       shipping: await read('shipping'),
+      otherItems,
     };
   },
 
-  async removeFromCart(page) {
+  async removeFromCart(page, item) {
     await page.goto('https://www.target.com/cart', { waitUntil: 'domcontentloaded' });
-    const remove = await find(page, 'removeItem');
+    await find(page, 'cartItemQuantity');
+    const marker = newMarker();
+    const lines = await locateLine(page, item, marker);
+    // Fail closed: when in doubt, the cart is left exactly as it is. An item
+    // left in a basket costs nothing; a line of the owner's deleted does.
+    if (!lines || lines.ours !== 1 || !lines.removable) {
+      const shot = await screenshot(page, 'removeItem-unidentified');
+      throw new CheckoutStepError(
+        'removeItem',
+        `could not tell which cart line is ${item.name}, so nothing was removed` +
+          (shot ? `; what the page showed is in ${shot}` : ''),
+        shot,
+      );
+    }
+    // And only when the line holds what this mission put there. If the owner
+    // already had one of these in the cart, the line now holds theirs and
+    // ours, and deleting it would take theirs too.
+    const quantity = await lineQuantity(page, marker);
+    if (quantity !== Math.max(1, item.quantity || 1)) {
+      throw new CheckoutStepError(
+        'removeItem',
+        `the cart line for ${item.name} holds ${quantity ?? 'an unreadable number'}, not the ` +
+          `${Math.max(1, item.quantity || 1)} Phantom added, so it was left alone`,
+        '',
+      );
+    }
+    const remove = page.locator(`[data-phantom-remove="${marker}"]`).first();
     await remove.click();
     // The last flat sleep on this path. Same rule as the others: wait for the
     // page to go quiet, not for a guess at how long quiet takes. It matters
@@ -296,6 +581,11 @@ export const targetCart: CartDriver = {
     // we were about to wait for anyway.
     await settle(page, SETTLE.afterCheckout);
     const place = await find(page, 'placeOrder');
+    // A security-code box already on the review page means Place Order would
+    // only bounce off it. Stop before the click; a person finishes this.
+    if (await securityCodeOn(page)) {
+      throw new SecurityCodeNeeded(false, await screenshot(page, 'placeOrder-securityCode'));
+    }
     await place.click();
 
     // ── The click is not the order ──────────────────────────────────────────
@@ -312,16 +602,7 @@ export const targetCart: CartDriver = {
     // and strict about the consequence: no confirmation within the wait means
     // a loud throw with a screenshot, the caller keeps the grant LIVE, and a
     // person checks the orders page. Fail closed on not knowing.
-    const confirmed = async (): Promise<boolean> => {
-      const url = page.url();
-      if (/thank|confirm|receipt/i.test(url)) return true;
-      const text = await page
-        .evaluate(() => document.body?.innerText?.slice(0, 6000) ?? '')
-        .catch(() => '');
-      return /thanks for your order|order placed|order number|we got your order|your order.s in/i.test(
-        text,
-      );
-    };
+    const confirmed = (): Promise<boolean> => orderConfirmed(page);
     // Polled at 400ms, not 2.5s. The order is already submitted by this point,
     // so this is not a race — but a coarse poll means the machine can be up to
     // 2.1 seconds late to know it succeeded, and everything downstream (the
@@ -331,6 +612,11 @@ export const targetCart: CartDriver = {
     for (let waited = 0; waited < CONFIRM_TIMEOUT_MS; waited += CONFIRM_POLL_MS) {
       await page.waitForTimeout(CONFIRM_POLL_MS);
       if (await confirmed()) return;
+      // The prompt that most likely swallowed the 31 Aug click. Seen, it is
+      // named at once rather than after thirty seconds of a generic wait.
+      if (await securityCodeOn(page)) {
+        throw new SecurityCodeNeeded(true, await screenshot(page, 'placeOrder-securityCode'));
+      }
     }
     const shot = await screenshot(page, 'placeOrder-unconfirmed');
     throw new CheckoutStepError(
@@ -341,4 +627,31 @@ export const targetCart: CartDriver = {
       shot,
     );
   },
+
+  async checkoutState(page) {
+    if (await orderConfirmed(page)) return 'confirmed';
+    if (await securityCodeOn(page)) return 'security_code';
+    return 'other';
+  },
 };
+
+/**
+ * Does the page say an order exists?
+ *
+ * Deliberately loose about HOW it says so (see placeOrder) and never throws:
+ * a page that will not answer has not confirmed anything.
+ */
+async function orderConfirmed(page: Page): Promise<boolean> {
+  try {
+    const url = page.url();
+    if (/thank|confirm|receipt/i.test(url)) return true;
+  } catch {
+    /* fall through to the text */
+  }
+  const text = await page
+    .evaluate(() => document.body?.innerText?.slice(0, 6000) ?? '')
+    .catch(() => '');
+  return /thanks for your order|order placed|order number|we got your order|your order.s in/i.test(
+    String(text),
+  );
+}

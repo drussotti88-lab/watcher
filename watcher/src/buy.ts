@@ -28,7 +28,7 @@ import type { Reading } from './read.ts';
 import type { Activity } from './activity.ts';
 import { verifyCart, type CartTotals } from './money.ts';
 import { detectChallenge } from './challenge.ts';
-import { targetCart, type CartDriver } from './checkout/target.ts';
+import { targetCart, SecurityCodeNeeded, type CartDriver, type CartItem, type CheckoutState } from './checkout/target.ts';
 
 export interface BuyDeps {
   hub: Hub;
@@ -154,6 +154,117 @@ async function waitForHuman(
   return false;
 }
 
+/** Our security-code error, by class or by name (a test fake may only carry the name). */
+function isSecurityCode(err: unknown): boolean {
+  return err instanceof SecurityCodeNeeded || (err as { name?: string } | null)?.name === 'SecurityCodeNeeded';
+}
+
+/**
+ * Target wants the card's security code. Say so, hold the window open for a
+ * person, and settle the grant by what the page shows when the wait ends.
+ *
+ * ── The line this sits on ───────────────────────────────────────────────────
+ *
+ * Phantom never types a security code, never reads one, and never clicks on
+ * past the box. The person types it and presses Place Order themselves, in
+ * the window already open on their desk; all this does is watch for the
+ * result. Same shape as the press-and-hold wait above, for the same reason.
+ *
+ * ── How the grant ends ──────────────────────────────────────────────────────
+ *
+ *   - The page confirms an order: SPENT. A person finished it, and the order
+ *     exists, so the money did move.
+ *   - The box is still there when the wait runs out: RELEASED. With the box
+ *     unanswered the order cannot have gone through, so nothing was bought.
+ *     Our item is taken back out of the cart (only our line; see the driver).
+ *   - The box went away but no confirmation came: left LIVE. That is the one
+ *     case where nobody can tell whether an order was placed, and releasing it
+ *     would let a second buy through on top of one that may exist. A person
+ *     checks the orders page, as for any mid-checkout failure.
+ */
+async function securityCodeHold(
+  deps: BuyDeps,
+  ctx: {
+    mission: Mission;
+    base: Omit<RunOut, 'outcome' | 'reason'>;
+    record: (run: RunOut) => RunOut;
+    clock: Stopwatch;
+    page: Page;
+    driver: CartDriver;
+    authId: number;
+    tidy: (p: Page) => Promise<string>;
+    afterClick: boolean;
+  },
+): Promise<RunOut> {
+  const { mission, base, record, clock, page, driver, authId } = ctx;
+  const log = deps.log ?? (() => {});
+  const waited = deps.waitMs ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const budget = deps.humanWaitMs ?? HUMAN_WAIT_MS;
+  const poll = deps.humanPollMs ?? HUMAN_POLL_MS;
+  const stateOf = async (): Promise<CheckoutState> => {
+    if (!driver.checkoutState) return 'other';
+    return driver.checkoutState(page).catch((): CheckoutState => 'other');
+  };
+
+  log(
+    `  ${mission.retailer} wants the card's SECURITY CODE — type it and press Place Order ` +
+      `yourself in the open window. Phantom will not type it. I will wait.`,
+  );
+  deps.activity?.record({
+    kind: 'buy',
+    level: 'error',
+    retailer: mission.retailer,
+    missionId: mission.id,
+    message: `HUMAN NEEDED: ${mission.retailer} is asking for the card's security code`,
+    detail:
+      'the buy window is open on this machine — type the code and place the order there; ' +
+      'Phantom never types it',
+  });
+
+  let state: CheckoutState = 'security_code';
+  for (let spent = 0; spent < budget; spent += poll) {
+    await waited(poll);
+    state = await stateOf();
+    if (state === 'confirmed') break;
+    if (spent > 0 && spent % 20_000 < poll) {
+      log(`  still waiting on the security code — ${Math.round((budget - spent) / 1000)}s left`);
+    }
+  }
+  clock.mark('human');
+
+  if (state === 'confirmed') {
+    await deps.hub.resolveAuthorisation(authId, 'spent', 'bought; a person entered the security code');
+    return record({
+      ...base,
+      outcome: 'bought',
+      reason:
+        `BOUGHT: ${mission.productName} — ${mission.retailer} asked for the card's security code, ` +
+        `you entered it, and the order was confirmed`,
+    });
+  }
+
+  if (state === 'security_code') {
+    const left = await ctx.tidy(page);
+    await deps.hub.resolveAuthorisation(authId, 'released', 'security code went unanswered');
+    return record({
+      ...base,
+      outcome: 'blocked',
+      reason:
+        `${mission.retailer} asked for the card's security code and nobody entered it in time. ` +
+        `Nothing was bought and the money is released. Phantom never types a security code.${left}`,
+    });
+  }
+
+  return record({
+    ...base,
+    outcome: 'failed',
+    reason:
+      `${mission.retailer} asked for the card's security code; the box went away but no order ` +
+      `confirmation appeared${ctx.afterClick ? ' after Place Order' : ''}. The authorisation stays ` +
+      `live and its money stays committed until you check your orders page and release it in the app`,
+  });
+}
+
 export async function attemptBuy(
   deps: BuyDeps,
   mission: Mission,
@@ -211,10 +322,31 @@ export async function attemptBuy(
 
   // ── 2–4. The cart, and what it costs to be wrong about it ─────────────────
   let browser: Awaited<ReturnType<BuyDeps['openBuyBrowser']>> | null = null;
+  let page: Page | null = null;
   let inCart = false;
+  // Which product every cart step is about. The owner's own Target cart may
+  // hold other things, and nothing here may read or remove those.
+  const item: CartItem = {
+    externalId: mission.externalId,
+    url: mission.url,
+    name: mission.productName,
+    quantity: Math.max(1, mission.quantity || 1),
+  };
+  /**
+   * Take our item back out, and say so when that could not be done safely.
+   * Never throws: tidying up must not turn a clean refusal into a failure.
+   */
+  const tidy = async (p: Page): Promise<string> => {
+    try {
+      await driver.removeFromCart(p, item);
+      return '';
+    } catch (err) {
+      return ` (left in your Target cart: ${(err as Error).message})`;
+    }
+  };
   try {
     browser = await deps.openBuyBrowser();
-    const page = await browser.page();
+    page = await browser.page();
     clock.mark('browser');
 
     await page.goto(mission.url, { waitUntil: 'domcontentloaded' });
@@ -223,7 +355,7 @@ export async function attemptBuy(
     clock.mark('cart');
     inCart = true;
 
-    const cart: CartTotals = await driver.readCart(page);
+    const cart: CartTotals = await driver.readCart(page, item);
     clock.mark('read');
     const check = verifyCart({
       watch: {
@@ -247,7 +379,7 @@ export async function attemptBuy(
     });
 
     if (!check.ok) {
-      await driver.removeFromCart(page).catch(() => {});
+      const left = await tidy(page);
       inCart = false;
       await deps.hub.resolveAuthorisation(auth.id, 'released', `cart refused: ${check.note}`);
       return record({
@@ -255,12 +387,12 @@ export async function attemptBuy(
         outcome: check.outcome === 'price_exceeded' ? 'price_exceeded' : 'declined',
         quantity: cart.quantity,
         total: check.total,
-        reason: `the cart got the final word: ${check.note}`,
+        reason: `the cart got the final word: ${check.note}${left}`,
       });
     }
 
     if (!deps.live) {
-      await driver.removeFromCart(page).catch(() => {});
+      const left = await tidy(page);
       inCart = false;
       await deps.hub.resolveAuthorisation(auth.id, 'released', 'dry run — stopped before the button');
       return record({
@@ -270,7 +402,7 @@ export async function attemptBuy(
         total: check.total,
         reason:
           `DRY RUN complete: cart verified at $${(check.total ?? 0).toFixed(2)} all-in, ` +
-          `stopped on the line before the button. live: false is doing its job.`,
+          `stopped on the line before the button. live: false is doing its job.${left}`,
       });
     }
 
@@ -297,6 +429,27 @@ export async function attemptBuy(
       reason: `BOUGHT: ${cart.quantity} × ${mission.productName} at $${(check.total ?? 0).toFixed(2)} all-in`,
     });
   } catch (err) {
+    // ── The card's security code ────────────────────────────────────────────
+    //
+    // Checked first because it is our own, specific error: the driver has
+    // already looked at the page and seen a CVV box. Before 19 Oct 2026 this
+    // case was a thirty-second wait ending in a generic throw, the grant left
+    // live for somebody to release by hand, and nobody told that the order
+    // could still be finished in the open window.
+    if (isSecurityCode(err) && browser && page) {
+      return await securityCodeHold(deps, {
+        mission,
+        base,
+        record,
+        clock,
+        page,
+        driver,
+        authId: auth.id,
+        tidy,
+        afterClick: (err as SecurityCodeNeeded).afterClick === true,
+      });
+    }
+
     // ── Was it a wall, or was it us? ────────────────────────────────────────
     //
     // On the first live drop rehearsal (1 Sep 2026) addToCart threw "none of
