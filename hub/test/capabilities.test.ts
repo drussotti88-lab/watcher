@@ -31,6 +31,7 @@ const CODE_NAME: Record<string, string> = {
   target: 'Target',
   walmart: 'Walmart',
   'pokemon-center': 'Pokemon Center',
+  'best-buy': 'Best Buy',
 };
 
 // ── the table against the code ───────────────────────────────────────────────

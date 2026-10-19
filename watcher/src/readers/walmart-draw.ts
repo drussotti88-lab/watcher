@@ -44,9 +44,10 @@
  * "announced" costs the drawing, and calling an announced one "open" sends
  * somebody to a page with no button and teaches them to ignore the alert.
  *
- * Only `showDrawCTA` was observed false, on an announced drawing. What it does
- * when a window opens has not been seen yet, and this file does not pretend
- * otherwise — `phase` is 'open' only when the flag says so.
+ * Until 19 Oct 2026 `phase` was 'open' only when the flag said so, and across
+ * the October windows the flag was never seen true, so no Pokémon drawing was
+ * ever announced as open. The badge's own words now count as well - see the
+ * note at the phase decision in readWalmartDraw.
  */
 import type { StockState } from '../types.ts';
 
@@ -80,6 +81,12 @@ export interface DrawRow {
   orderLimit: number | null;
   imageUrl: string;
   phase: DrawPhase;
+  /**
+   * Which signal said `open`: Walmart's flag, an "ends <future>" badge, or a
+   * stated start that has passed. Absent unless open. Log only; it does not
+   * travel to the app.
+   */
+  openedBy?: 'flag' | 'badge' | 'clock';
   /** Walmart's own flag for a live enter button. */
   showDrawCTA: boolean;
   /** "Drawing starts" / "Drawing ends", as Walmart wrote it. */
@@ -159,6 +166,14 @@ export function windowBadge(product: unknown): { label: string; text: string } {
  * time has actually gone by.
  */
 const ENDED_WORDS = /\b(ended|closed|has ended|is over|no longer)\b/i;
+
+/**
+ * How long after a stated start a "Drawing starts" badge still counts as an
+ * open window. Walmart's windows have run an hour or a few; a start badge a
+ * whole day stale is content nobody updated, and calling that open would
+ * send people to a shelf with nothing on it.
+ */
+const OPEN_BY_CLOCK_MS = 24 * 3600_000;
 
 /** Month names, because Walmart writes the date for a person to read. */
 const MONTHS: Record<string, number> = {
@@ -302,39 +317,78 @@ export function readWalmartDraw(data: unknown, now: number = Date.now()): DrawRo
       const windowAt = parseDrawWhen(badge.text, now);
       const cta = p.showDrawCTA === true;
 
-      // ── The phase, and the refusal to guess it ──
-      //
-      // Open only when Walmart's own flag says the button is live. Announced
-      // when it is not and the stated time is still ahead. Anything else is
-      // unknown and says so: a drawing reported open with no button teaches
-      // somebody to ignore the next alert, which is the one that mattered.
       // ── The phase, in the order the signals deserve ──
       //
       // Walmart's own flag first: if it says the button is live, the button is
       // live, whatever the badge reads. Then the past tense, which is the only
-      // unambiguous statement of an end. Then a resolved end time that has
-      // passed. Only then the start-time rules.
+      // unambiguous statement of an end. Then what the badge says in the
+      // present tense, read against the clock.
+      //
+      // ── Why "open" no longer waits for the flag (19 Oct 2026) ──
+      //
+      // Until today `open` came from `showDrawCTA` and nothing else, and the
+      // "drawing open" alert had never fired for a single Pokémon drawing in
+      // 34 rows. The app's own table says why: every window on 7, 8 and 14 Oct
+      // went from announced to ended with `opened_at` empty, so the flag was
+      // never seen true while they ran. The only rows that ever opened were
+      // five on 30 Sep. And this house's watching profile is never signed in
+      // (rule 6), so a button Walmart only renders for a signed-in, eligible
+      // shopper is a button this page may simply never show us.
+      //
+      // Meanwhile the page DOES say, in words, that a window is running. On
+      // 30 Sep the badge changed from "Drawing starts Sep 30, 2:00pm PDT" to
+      // "Drawing ends today, 3:00pm PDT" at the start. Before this change that
+      // wording matched no rule at all: not past tense, not a start, so it read
+      // `unknown` - and `unknown` is neither open for the opened alert nor
+      // opened for the closing reminder, which counts down only to drawings it
+      // has seen open. Both alerts were waiting for a signal that never came.
+      //
+      // So, beside the flag, two readings of what the page actually shows:
+      //
+      //   - "Drawing ends <a time still ahead>". Walmart only writes the end
+      //     of a window once the window has begun. That is open.
+      //   - "Drawing starts <a time that has passed>", within a day of it. The
+      //     start has happened and nothing says it has ended. Walmart's badge
+      //     and its button are not always the same minute, so this is the
+      //     same "the clock has answered" reading the ended rule already uses.
+      //
+      // The old worry was a card sending somebody to a page with no button.
+      // That still costs a refresh; staying quiet through the whole window
+      // costs the drawing, and on a lottery that is the only loss there is.
+      // `openedBy` says which signal it was, for the log.
       let phase: DrawPhase = 'unknown';
+      let openedBy: DrawRow['openedBy'];
+      const ends = /\bend(s|ing)?\b/i.test(badge.label);
+      const starts = /start/i.test(badge.label);
+      const at = windowAt === null ? null : Date.parse(windowAt);
       if (cta) {
         phase = 'open';
+        openedBy = 'flag';
       } else if (ENDED_WORDS.test(badge.label) || ENDED_WORDS.test(badge.text)) {
         // "Drawing ended", "Drawing closed". Walmart said it in the past tense
         // and there is nothing to second-guess.
         phase = 'ended';
-      } else if (
-        /\bend(s|ing)?\b/i.test(badge.label) &&
-        windowAt !== null &&
-        Date.parse(windowAt) <= now
-      ) {
+      } else if (ends && at !== null && at <= now) {
         // "Drawing ends <time>" where the time has gone by. Present tense, but
-        // the clock has answered. Deliberately NOT applied to a start label:
-        // a start time in the past means the window opened, not that it shut.
+        // the clock has answered.
         phase = 'ended';
-      } else if (/start/i.test(badge.label) && windowAt !== null && Date.parse(windowAt) > now) {
+      } else if (ends && (at !== null || badge.text)) {
+        // "Drawing ends today, 3:00pm PDT" with that time still ahead: the
+        // window is running. An end Walmart wrote but we could not resolve is
+        // still an end it only writes once the window has begun.
+        phase = 'open';
+        openedBy = 'badge';
+      } else if (starts && at !== null && at > now) {
         phase = 'announced';
-      } else if (/start/i.test(badge.label) && badge.text) {
-        // A start time we could not resolve is still an announcement.
-        phase = windowAt === null ? 'announced' : 'unknown';
+      } else if (starts && at !== null && now - at <= OPEN_BY_CLOCK_MS) {
+        // The stated start has passed and nothing says the window shut. A
+        // start time in the past means the window opened, never that it ended.
+        phase = 'open';
+        openedBy = 'clock';
+      } else if (starts && badge.text) {
+        // A start time we could not resolve is still an announcement. One a
+        // day or more stale is a badge nobody has updated, not a window.
+        phase = at === null ? 'announced' : 'unknown';
       }
 
       const path = String(p.canonicalUrl ?? '').trim();
@@ -346,6 +400,7 @@ export function readWalmartDraw(data: unknown, now: number = Date.now()): DrawRo
         orderLimit: num(p.orderLimit),
         imageUrl: String(p.imageInfo?.thumbnailUrl ?? p.image ?? '').trim(),
         phase,
+        ...(openedBy ? { openedBy } : {}),
         showDrawCTA: cta,
         windowLabel: badge.label,
         windowText: badge.text,

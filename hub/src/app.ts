@@ -39,6 +39,8 @@ import {
   sendEmail,
   buildStockEmbeds,
   buildDrawEmbeds,
+  buildCeilingEmbeds,
+  buildInviteEmbed,
   buildQueueEmbed,
   buildWallEmbed,
   buildBlindEmbed,
@@ -153,6 +155,105 @@ async function outletsOf(db: Sql, userId: number, env: Env): Promise<Outlets> {
   return outletsFor(env, await store.getSettings(db, userId).catch(() => null));
 }
 
+/**
+ * Where a DRAWING card from this account may go.
+ *
+ * The drawings rooms are shared: one Walmart channel, read by everyone. Until
+ * 19 Oct 2026 any account whose Phantom read the drawings page posted into
+ * them, so a tester running Phantom alongside the owner's put every card in
+ * twice. Only the catalogue writer - the owner's machine, the one whose
+ * readings are the shared ones - speaks in the rooms now. Anyone else still
+ * gets their own phone and inbox, which are theirs.
+ */
+async function drawingOutletsOf(db: Sql, userId: number, env: Env): Promise<Outlets> {
+  const out = await outletsOf(db, userId, env);
+  const writer = await store.canWriteCatalogue(db, userId).catch(() => false);
+  return writer ? out : { ...out, rooms: { main: '', byRetailer: {} } };
+}
+
+type DrawCard = ReturnType<typeof drawCard>;
+function drawCard(r: store.DrawingRow) {
+  return {
+    name: r.name,
+    retailer: r.retailer,
+    externalId: r.externalId,
+    url: r.url,
+    imageUrl: r.imageUrl,
+    price: r.price,
+    orderLimit: r.orderLimit,
+    windowText: r.windowText,
+    windowLabel: r.windowLabel,
+    windowAt: r.windowAt,
+  };
+}
+
+/**
+ * The drawing reminders that run on the clock rather than on a page change:
+ * opens soon, opens within a day, closing, and ended.
+ *
+ * ── Why these ride on Phantom's check-ins, and not on a cron ───────────────
+ *
+ * Vercel's Hobby plan runs cron once a day with an hour of slop, so a
+ * scheduled route could not say "opens in 30 minutes" on time. These are
+ * therefore claimed on every Phantom check-in: the drawings post, AND the
+ * activity post every pass makes. That second one is the 19 Oct change. The
+ * drawings page is read every half hour and not at all while Walmart is
+ * standing down from a wall, so a reminder that waited for it could be half
+ * an hour late or never; the activity post arrives every minute or so from a
+ * Phantom that is running. When no Phantom is running, nothing reminds -
+ * which the page says in words.
+ *
+ * Every one is claimed once in the database, so calling this twice is safe.
+ */
+async function drawingReminders(
+  db: Sql,
+  userId: number,
+  env: Env,
+  now: string,
+  opts: { soon?: boolean } = {},
+): Promise<{ soon: number; closing: number; eve: number; ended: number }> {
+  const [soon, closing, eve, ended] = await Promise.all([
+    opts.soon === false ? Promise.resolve([]) : store.claimOpeningDrawings(db, userId).catch(() => []),
+    store.claimClosingDrawings(db, userId).catch(() => []),
+    store.claimEveDrawings(db, userId).catch(() => []),
+    store.claimEndedDrawings(db, userId).catch(() => []),
+  ]);
+  const counts = { soon: soon.length, closing: closing.length, eve: eve.length, ended: ended.length };
+  if (soon.length + closing.length + eve.length + ended.length === 0) return counts;
+  const out = await drawingOutletsOf(db, userId, env);
+  if (!anyOutlet(out)) return counts;
+  const say = (kind: 'drawSoon' | 'drawClosing' | 'drawEve' | 'drawEnded', rows: store.DrawingRow[]) => {
+    const style = kind === 'drawSoon' ? 'soon' : kind === 'drawClosing' ? 'closing'
+      : kind === 'drawEve' ? 'eve' : 'ended';
+    return deliver(out, kind, rows.map(drawCard), (g: DrawCard[]) => buildDrawEmbeds(g, now, style));
+  };
+  await Promise.allSettled([
+    say('drawSoon', soon),
+    say('drawClosing', closing),
+    say('drawEve', eve),
+    say('drawEnded', ended),
+  ]);
+  return counts;
+}
+
+/** Best Buy invite reminders that have come due for this account. */
+async function inviteReminders(db: Sql, userId: number, env: Env, now: string): Promise<number> {
+  const due = await store.claimInviteReminders(db, userId).catch(() => []);
+  if (due.length === 0) return 0;
+  const out = await outletsOf(db, userId, env);
+  if (!anyOutlet(out)) return due.length;
+  await deliver(
+    out,
+    'inviteReminder',
+    due.map((d) => ({
+      name: d.name, retailer: d.retailer, url: d.url, imageUrl: d.imageUrl,
+      expiresAt: d.expiresAt, minutesLeft: d.minutesLeft,
+    })),
+    (g) => g.slice(0, 10).map((i) => buildInviteEmbed(i, now, 'reminder')),
+  ).catch(() => {});
+  return due.length;
+}
+
 /** Post everything a set of sweeps found, then mark it announced. */
 async function publish(
   db: Sql,
@@ -195,6 +296,24 @@ function redirect(to: string, headers: Record<string, string> = {}): Response {
 
 /** Build the API. Everything it needs arrives as an argument. */
 export function createHandler(db: Sql, env: Env): (request: Request) => Promise<Response> {
+  /*
+   * When each account's clock-driven reminders last ran on this instance.
+   *
+   * /api/activity is the hottest endpoint here and the database has timed out
+   * under it before. The reminders it now carries are minute-grained at best,
+   * so they run at most once a minute per account per warm instance. A cold
+   * instance runs them on its first request, which is a few extra cheap
+   * UPDATEs, never a missed reminder.
+   */
+  const lastTick = new Map<number, number>();
+  const TICK_MS = 60_000;
+  const tickDue = (userId: number): boolean => {
+    const t = Date.now();
+    if (t - (lastTick.get(userId) ?? 0) < TICK_MS) return false;
+    lastTick.set(userId, t);
+    return true;
+  };
+
   return async function handle(request: Request): Promise<Response> {
 
     const url = new URL(request.url);
@@ -683,18 +802,7 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       const seen = outcomes.map((o) => o.row.externalId);
       const retired = await store.retireMissingDrawings(db, userId, retailer, seen);
 
-      const card = (r: store.DrawingRow) => ({
-        name: r.name,
-        retailer: r.retailer,
-        externalId: r.externalId,
-        url: r.url,
-        imageUrl: r.imageUrl,
-        price: r.price,
-        orderLimit: r.orderLimit,
-        windowText: r.windowText,
-        windowLabel: r.windowLabel,
-        windowAt: r.windowAt,
-      });
+      const card = drawCard;
 
       // Opened is the loud one, said once. Announced is a diary entry, and is
       // only sent for something we had never seen — a drawing sitting
@@ -722,17 +830,6 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       const announced = outcomes
         .filter((o) => o.isNew && ours(o) && !o.justOpened && o.row.phase === 'announced')
         .map((o) => card(o.row));
-      const closing = (await store.claimClosingDrawings(db, userId)).map(card);
-      // The belt to `opened`'s brace. That one fires on Walmart's own
-      // showDrawCTA flag, which is the right signal and one nobody here has
-      // ever watched change — every row in the capture it was built from had
-      // it false. This fires on the start time Walmart printed on the page,
-      // so a window still gets announced loudly if the flag disappoints.
-      // Suppressed once a drawing has actually been seen open, so the two
-      // never both shout about the same thing.
-      const soon = opened.length > 0
-        ? []
-        : (await store.claimOpeningDrawings(db, userId)).map(card);
 
       // Every card carries its own retailer, so the room is decided per card
       // rather than per endpoint. Drawings are Walmart's today and the routing
@@ -740,24 +837,32 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       // go to its own room without a line changing here.
       // Settings are only read when there is something to say: this runs on
       // every Walmart pass and almost every pass has nothing new.
-      if (opened.length + soon.length + announced.length + closing.length > 0) {
-        const out = await outletsOf(db, userId, env);
+      if (opened.length + announced.length > 0) {
+        // The shared rooms are the catalogue writer's alone - see
+        // drawingOutletsOf for the tester whose Phantom doubled every card.
+        const out = await drawingOutletsOf(db, userId, env);
         if (anyOutlet(out)) {
           await Promise.allSettled([
             deliver(out, 'drawOpened', opened, (g) => buildDrawEmbeds(g, now, 'opened')),
-            deliver(out, 'drawSoon', soon, (g) => buildDrawEmbeds(g, now, 'soon')),
             deliver(out, 'drawAnnounced', announced, (g) => buildDrawEmbeds(g, now, 'announced')),
-            deliver(out, 'drawClosing', closing, (g) => buildDrawEmbeds(g, now, 'closing')),
           ]);
         }
       }
 
+      // The clock-driven ones: closing, day-before, ended, and opens-soon.
+      // Opens-soon is the belt to `opened`'s brace - it fires on the start
+      // time Walmart printed - and is suppressed once a drawing has actually
+      // been seen open in this same post, so the two never both shout.
+      const reminded = await drawingReminders(db, userId, env, now, { soon: opened.length === 0 });
+
       return json({
         recorded: outcomes.length,
         opened: opened.length,
-        soon: soon.length,
+        soon: reminded.soon,
         announced: announced.length,
-        closing: closing.length,
+        closing: reminded.closing,
+        eve: reminded.eve,
+        ended: reminded.ended,
         // Stored, shown, deliberately not announced. Counted so a quiet
         // channel is never the only evidence that something was held.
         held,
@@ -780,6 +885,11 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
      * current routing says it goes. Safe to run twice; it just says it twice.
      */
     if (request.method === 'POST' && path === '/api/drawings/announce') {
+      // The shared rooms are the catalogue writer's to speak in. See
+      // drawingOutletsOf for the duplicates that taught it.
+      if (!(await store.canWriteCatalogue(db, userId))) {
+        return json({ error: 'only the catalogue owner posts drawings to the shared rooms', sent: 0 }, 403);
+      }
       if (!env.DISCORD_WEBHOOK_URL) {
         return json({ error: 'no Discord webhook is configured', sent: 0 }, 400);
       }
@@ -812,6 +922,42 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
         }
       }
       return json({ sent: live.length, rooms: rooms_ });
+    }
+
+    /*
+     * "I got the invite" - the start of Best Buy's 24 hours.
+     *
+     * A person's own note, like "entered" on a drawing: nothing here can see
+     * Best Buy's email or the account it went to. Pressing it starts a
+     * countdown with reminders at 12 hours, 2 hours and 30 minutes left;
+     * pressing it off stops them. Best Buy missions only, because no other
+     * shop has an invite to count down.
+     */
+    if (request.method === 'POST' && path.startsWith('/api/missions/') && path.endsWith('/invite')) {
+      const id = Number(path.split('/')[3]);
+      if (!Number.isInteger(id)) return json({ error: 'bad mission id' }, 400);
+      const m = await store.getMission(db, userId, id);
+      if (!m) return json({ error: 'no such mission' }, 404);
+      if (m.retailer !== 'Best Buy') {
+        return json({ error: 'only a Best Buy listing has an invite to count down' }, 400);
+      }
+      const b = await body_<{ received?: unknown }>();
+      const received = b?.received !== false;
+      const done = await store.setInviteReceived(db, userId, id, received);
+      if (done === 'not-ready') {
+        return json({
+          error: 'the invite countdown needs the 19 Oct database update first — run the SQL from the pull request in Supabase',
+        }, 409);
+      }
+      if (done === 'no-mission') return json({ error: 'no such mission' }, 404);
+      const after = await store.getMission(db, userId, id);
+      return json({
+        ok: true,
+        inviteAt: after?.inviteAt ?? null,
+        expiresAt: after?.inviteAt
+          ? new Date(Date.parse(after.inviteAt) + store.INVITE_HOURS * 3600_000).toISOString()
+          : null,
+      });
     }
 
     /** A person's own note that they have dealt with a drawing. */
@@ -884,8 +1030,8 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
           {
             error:
               'could not read a retailer and product id out of that URL. Expected a ' +
-              'target.com/p/…/A-123, pokemoncenter.com/product/100-123/… or ' +
-              'walmart.com/ip/…/123 link.',
+              'target.com/p/…/A-123, pokemoncenter.com/product/100-123/…, ' +
+              'walmart.com/ip/…/123 or bestbuy.com/site/…/1234567.p link.',
           },
           400,
         );
@@ -930,8 +1076,8 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
           {
             error:
               'could not read a retailer and product id out of that URL. Expected a ' +
-              'target.com/p/…/A-123, pokemoncenter.com/product/100-123/… or ' +
-              'walmart.com/ip/…/123 link.',
+              'target.com/p/…/A-123, pokemoncenter.com/product/100-123/…, ' +
+              'walmart.com/ip/…/123 or bestbuy.com/site/…/1234567.p link.',
           },
           400,
         );
@@ -1783,6 +1929,20 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
         }
       }
 
+      /*
+       * The clock, borrowed. Phantom posts here every pass, so this is the
+       * nearest thing the app has to a scheduler: drawing reminders that are
+       * due by the time rather than by a page change, and Best Buy invite
+       * countdowns. At most once a minute per account (tickDue), and never
+       * allowed to fail the post it rode in on.
+       */
+      if (tickDue(userId)) {
+        await Promise.allSettled([
+          drawingReminders(db, userId, env, now),
+          inviteReminders(db, userId, env, now),
+        ]);
+      }
+
       return json({ ...result, pruned });
     }
 
@@ -1922,8 +2082,18 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
         manual: state.queued,
         sourceId: SWEEP_SOURCE,
       };
+      /*
+       * A shop that is off until switched on (Best Buy) is not handed to
+       * Phantom at all while it is off. Filtered HERE as well as on the
+       * machine because a Phantom older than 19 Oct has never heard of the
+       * switch, and would otherwise open bestbuy.com pages it has no reader
+       * for. Only opt-in shops: a paused shop is still the machine's to skip,
+       * as it always was.
+       */
+      const handed = missions.filter((m) =>
+        store.retailerEnabled({ pausedRetailers: [], enabledRetailers: settings.enabledRetailers }, m.retailer));
       // Phantom needs the money settings, never the push topic.
-      return json({ missions, settings: store.maskSettings(settings), sweep });
+      return json({ missions: handed, settings: store.maskSettings(settings), sweep });
     }
 
     /** Phantom reporting a run it has already finished. */
@@ -2023,6 +2193,11 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       const loaded: { listingId: number; quantity: number }[] = [];
       // Listings that were already in stock and have earned a reminder.
       const stillIn: store.ObservationIn[] = [];
+      // In stock before and now, with the price or the seller moved. Judged
+      // against the ceiling below, once the watchlist is loaded.
+      const moved: { obs: store.ObservationIn; before: store.CeilingReading }[] = [];
+      // Best Buy pages offering "ask for an invite" right now.
+      const invitesOpen: store.ObservationIn[] = [];
       // Read once for the batch: the repeat interval is a setting, and this
       // endpoint runs on every pass.
       const cfg = await store.getSettings(db, userId).catch(() => null);
@@ -2040,6 +2215,42 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
           const outcome = await store.recordObservation(db, userId, obs);
           results.push({ listingId: obs.listingId, changed: outcome.changed });
           if (outcome.changed) changes.push({ obs, was: outcome.previousState });
+
+          /*
+           * "Dropped under your ceiling" - the alert nothing else could send.
+           *
+           * Until 19 Oct 2026 every alert here fired on out -> in. A listing
+           * already in stock whose price fell to the mission ceiling, or
+           * whose buy box moved to a reseller under it, changed no state,
+           * and so said nothing - the deal arrived silently on a listing
+           * everybody had stopped looking at. Only collected here (no query);
+           * the ceiling lives on the mission, which is read below.
+           */
+          if (
+            obs.state === 'in' &&
+            outcome.previousState === 'in' &&
+            (outcome.previousPrice !== (obs.price ?? null) ||
+              (outcome.previousSellerKind ?? 'unknown') !== (obs.sellerKind ?? 'unknown'))
+          ) {
+            moved.push({
+              obs,
+              before: {
+                state: outcome.previousState,
+                price: outcome.previousPrice,
+                sellerKind: outcome.previousSellerKind,
+              },
+            });
+          }
+
+          // Best Buy's invite button. The claim is per window: offered now
+          // and not said yet. A page that stops offering one forgets it, so
+          // the next window is news. Only a reading that SAID something about
+          // invites can clear it - an older Phantom sends no field at all.
+          if (obs.invite === 'open') {
+            invitesOpen.push(obs);
+          } else if ('invite' in obs && obs.state !== 'unknown') {
+            await store.clearInviteOpenAlert(db, userId, obs.listingId);
+          }
 
           /*
            * The drop precursor, raised here rather than only on the machine
@@ -2157,7 +2368,7 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       // One lookup serves both alerts, and only when at least one will be sent.
       const candidates =
         cameIntoStock.length > 0 || preOrdersOpened.length > 0 || loaded.length > 0 ||
-        stillIn.length > 0;
+        stillIn.length > 0 || moved.length > 0 || invitesOpen.length > 0;
       // Discord rooms from the environment, phone and inbox from this
       // account's settings (already read above as `cfg`, so this costs nothing).
       const out = candidates ? outletsFor(env, cfg) : null;
@@ -2210,9 +2421,9 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
        * shows all of them regardless, with the NOT-the-shop pill: the
        * watchlist is the owner's record and should be complete.
        *
-       * TODO(separate PR): a marketplace price DROPPING under the ceiling
-       * while the listing was already in stock is not a state change, so
-       * nothing fires for it yet.
+       * A price DROPPING under the ceiling while the listing was already in
+       * stock is not a state change; it has its own card below ("dropped
+       * under your ceiling"), since 19 Oct 2026.
        */
       const alertable = (
         o: { sellerKind?: string | null; price?: number | null },
@@ -2266,6 +2477,89 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
             };
           }),
           (g) => buildStockEmbeds(g, now),
+        ));
+        // A card that already said "within your ceiling" counts as the
+        // ceiling alert, so a dip a few minutes later does not say it twice.
+        for (const c of freshAlerts) {
+          const m = byListing.get(c.obs.listingId);
+          if (m && store.withinCeiling(c.obs, m.ceiling)) {
+            await store.stampCeilingAlert(db, userId, m.id);
+          }
+        }
+      }
+
+      /*
+       * Dropped under your ceiling. Edge-triggered on the previous reading,
+       * claimed per mission in the database (so a buy box flapping between
+       * two sellers says it once per CEILING_ALERT_COOLDOWN_HOURS), and
+       * skipped - never errored - when the column has not been added yet.
+       * Retailer or marketplace alike: the ceiling is the owner's own number
+       * for what the thing is worth, whoever is selling it.
+       */
+      const ceilingAlerts: { obs: store.ObservationIn; m: store.MissionRow }[] = [];
+      if (moved.length > 0 && out && willAlert) {
+        for (const c of moved) {
+          const m = byListing.get(c.obs.listingId);
+          if (!m || !speaks(c.obs.listingId)) continue;
+          if (!store.droppedUnderCeiling(c.before, c.obs, m.ceiling)) continue;
+          try {
+            if (await store.claimCeilingAlert(db, userId, m.id)) ceilingAlerts.push({ obs: c.obs, m });
+          } catch {
+            /* an alert that cannot be claimed is an alert not sent, never a failed reading */
+          }
+        }
+      }
+      if (ceilingAlerts.length > 0 && out && willAlert) {
+        sends.push(deliver(
+          out,
+          'ceiling',
+          ceilingAlerts.map(({ obs: o, m }) => ({
+            name: m.productName,
+            retailer: m.retailer,
+            price: o.price ?? null,
+            msrp: m.msrp,
+            url: m.url,
+            imageUrl: m.imageUrl,
+            seller: o.sellerKind ?? '',
+            sellerName: o.sellerName ?? m.sellerName ?? '',
+            quantity: o.availableQuantity ?? null,
+            orderLimit: o.orderLimit ?? m.orderLimit,
+            addToCart: o.addToCart ?? null,
+            isPreOrder: o.isPreOrder === true,
+            releaseDate: o.releaseDate ?? m.releaseDate ?? null,
+            ceiling: m.ceiling,
+          })),
+          (g) => buildCeilingEmbeds(g, now),
+        ));
+      }
+
+      /*
+       * Best Buy's invite window. Urgent, because an invite list is the queue
+       * this shop has instead of a drop - but the card tells the person to
+       * ask for one themselves. Phantom reads Best Buy signed out and never
+       * presses the button; asking is applying to buy, and that is theirs.
+       */
+      const inviteAlerts: store.MissionRow[] = [];
+      if (invitesOpen.length > 0 && out && willAlert) {
+        for (const o of invitesOpen) {
+          const m = byListing.get(o.listingId);
+          if (!m || !speaks(o.listingId)) continue;
+          try {
+            if (await store.claimInviteOpenAlert(db, userId, o.listingId)) inviteAlerts.push(m);
+          } catch {
+            /* as above: a reading is never failed by its alert */
+          }
+        }
+      }
+      if (inviteAlerts.length > 0 && out && willAlert) {
+        sends.push(deliver(
+          out,
+          'inviteOpen',
+          inviteAlerts.map((m) => ({
+            name: m.productName, retailer: m.retailer, url: m.url, imageUrl: m.imageUrl,
+            price: m.price,
+          })),
+          (g) => g.slice(0, 10).map((i) => buildInviteEmbed(i, now, 'open')),
         ));
       }
 

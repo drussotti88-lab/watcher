@@ -23,6 +23,7 @@ import { offersFromLd } from './inspect.ts';
 import { readTargetBodies } from './readers/target.ts';
 import { readPokemonCenterOffers } from './readers/pokemoncenter.ts';
 import { readWalmartNextData } from './readers/walmart.ts';
+import { readBestBuy, type PageButton } from './readers/bestbuy.ts';
 import type { ProductRead } from './readers/types.ts';
 import { unknownRead } from './readers/types.ts';
 
@@ -100,6 +101,12 @@ interface Scraped {
   ld: unknown[];
   nextData: unknown;
   ogImage: string;
+  /**
+   * The page's buy-box buttons, for the one shop (Best Buy) whose state lives
+   * in a button label rather than in page data. Read-only: nothing here ever
+   * clicks one. Optional so the pure dispatch below can be tested without it.
+   */
+  buttons?: PageButton[];
 }
 
 async function scrape(page: Page): Promise<Scraped> {
@@ -130,7 +137,27 @@ async function scrape(page: Page): Promise<Scraped> {
     const og = document.querySelector('meta[property="og:image"], meta[name="og:image"]');
     const ogImage = og?.getAttribute('content') ?? '';
 
-    return { ld, nextData, ogImage };
+    // Buttons that carry Best Buy's own buy-button markers. Looked at, never
+    // pressed. Capped, because a page with a hundred tiles is not a reason to
+    // ship a hundred labels back across the bridge on every poll.
+    const buttons: { text: string; state: string; sku: string; disabled: boolean; inBuyBox: boolean }[] = [];
+    const seenEls = new Set<Element>();
+    for (const b of Array.from(document.querySelectorAll(
+      'button[data-sku-id], button[data-button-state], .fulfillment-add-to-cart-button button, ' +
+      'button.add-to-cart-button',
+    ))) {
+      if (seenEls.has(b) || buttons.length >= 40) continue;
+      seenEls.add(b);
+      buttons.push({
+        text: (b.textContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 80),
+        state: b.getAttribute('data-button-state') ?? '',
+        sku: b.getAttribute('data-sku-id') ?? '',
+        disabled: (b as HTMLButtonElement).disabled === true || b.getAttribute('aria-disabled') === 'true',
+        inBuyBox: b.closest('.fulfillment-add-to-cart-button') !== null,
+      });
+    }
+
+    return { ld, nextData, ogImage, buttons };
   });
 }
 
@@ -339,6 +366,10 @@ export function readFor(
       return readPokemonCenterOffers(offersFromLd(scraped.ld), externalId);
     case 'Walmart':
       return readWalmartNextData(scraped.nextData, externalId);
+    case 'Best Buy':
+      // Alerts only. The reader says which button the page shows; nothing in
+      // this program presses one at Best Buy, and there is no checkout driver.
+      return readBestBuy({ ld: scraped.ld, buttons: scraped.buttons ?? [] }, externalId);
     default:
       // Never guess. An unknown retailer has no reader, and inventing one from
       // whatever markup happens to be present is how a wrong price gets acted on.

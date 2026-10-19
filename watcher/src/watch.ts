@@ -94,6 +94,9 @@ export function judge(
     availableQuantity: reading.availableQuantity,
     orderLimit: reading.orderLimit,
     addToCart: reading.addToCart,
+    // Only a reader with an opinion sends it (Best Buy's), so "the page said
+    // nothing about invites" and "this shop has none" stay distinguishable.
+    ...(reading.invite !== undefined ? { invite: reading.invite } : {}),
     isPreOrder: reading.preOrder.isPreOrder,
     releaseDate: reading.preOrder.releaseDate,
     imageUrl: reading.imageUrl,

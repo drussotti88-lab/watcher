@@ -176,6 +176,8 @@ function parseJsonList(payload, config) {
 var TARGET_TCIN = /\/-\/A-(\w+)/i;
 var PC_PRODUCT = /\/product\/([^/?#]+)/i;
 var WALMART_IP = /\/ip\/(?:([^/?#]+)\/)?(\d{5,})/i;
+var BESTBUY_SITE = /\/site\/(?:([^/?#]+)\/)?(\d{6,8})\.p\b/i;
+var BESTBUY_PRODUCT = /\/product\/([^/?#]+)\/([A-Za-z0-9]{6,})\/?$/i;
 function titleise(slug) {
   const cleaned = slug.replace(/[-_+]+/g, " ").replace(/\.(html?|aspx)$/i, "").replace(/\s+/g, " ").trim();
   if (!cleaned) return "";
@@ -193,6 +195,21 @@ function fromUrl(rawUrl, retailer) {
     return null;
   }
   const path = u.pathname;
+  if (/(^|\.)bestbuy\.com$/i.test(u.hostname) || retailer === "Best Buy") {
+    const site = BESTBUY_SITE.exec(path);
+    if (site) {
+      return {
+        externalId: site[2],
+        name: titleise(site[1] ?? "") || site[2],
+        url: `${u.origin}${path}?skuId=${site[2]}`
+      };
+    }
+    const prod = BESTBUY_PRODUCT.exec(path);
+    if (prod) {
+      return { externalId: prod[2], name: titleise(prod[1]) || prod[2], url: `${u.origin}${path}` };
+    }
+    return null;
+  }
   const tcin = TARGET_TCIN.exec(path);
   if (tcin) {
     const slug = path.split("/-/")[0]?.replace(/^\/p\//, "") ?? "";
@@ -241,7 +258,12 @@ var HOSTS = [
     product: /\/product\/[^/?#]+/i,
     retailer: "Pokemon Center"
   },
-  { match: /(^|\.)walmart\.com$/i, product: /\/ip\/(?:[^/?#]+\/)?\d{5,}/i, retailer: "Walmart" }
+  { match: /(^|\.)walmart\.com$/i, product: /\/ip\/(?:[^/?#]+\/)?\d{5,}/i, retailer: "Walmart" },
+  {
+    match: /(^|\.)bestbuy\.com$/i,
+    product: /\/site\/(?:[^/?#]+\/)?\d{6,8}\.p\b|\/product\/[^/?#]+\/[A-Za-z0-9]{6,}\/?$/i,
+    retailer: "Best Buy"
+  }
 ];
 function identifyListing(rawUrl) {
   let u;
@@ -622,7 +644,13 @@ var ALERT_KINDS = [
   "drawAnnounced",
   "drawClosing",
   "bought",
-  "report"
+  "report",
+  // 19 Oct 2026.
+  "ceiling",
+  "drawEve",
+  "drawEnded",
+  "inviteOpen",
+  "inviteReminder"
 ];
 var ALERT_KIND_LABELS = {
   stock: "In stock",
@@ -637,7 +665,12 @@ var ALERT_KIND_LABELS = {
   drawAnnounced: "Drawing announced",
   drawClosing: "Drawing closing",
   bought: "Bought",
-  report: "Tester report"
+  report: "Tester report",
+  ceiling: "Dropped under your ceiling",
+  drawEve: "Drawing opens within a day",
+  drawEnded: "Drawing ended (watch your email)",
+  inviteOpen: "Invite window open (Best Buy)",
+  inviteReminder: "Invite running out (Best Buy)"
 };
 var DEFAULT_PUSH_KINDS = [
   "stock",
@@ -649,9 +682,22 @@ var DEFAULT_PUSH_KINDS = [
   "drawOpened",
   "drawSoon",
   "drawClosing",
-  "bought"
+  "bought",
+  // A price falling to the ceiling is a buy decision with a clock on it; an
+  // invite window is first-come; an invite running out is money left on the
+  // table. All three are "move within the hour".
+  "ceiling",
+  "inviteOpen",
+  "inviteReminder",
+  "drawEve"
 ];
-var DEFAULT_EMAIL_KINDS = ["drawAnnounced", "bought", "report"];
+var DEFAULT_EMAIL_KINDS = [
+  "drawAnnounced",
+  "bought",
+  "report",
+  // "Watch your email for a win" belongs where the win will arrive.
+  "drawEnded"
+];
 var PUSH_STYLE = {
   stock: { priority: 5, tags: "rotating_light,shopping_cart" },
   queue: { priority: 5, tags: "rotating_light,hourglass" },
@@ -665,7 +711,12 @@ var PUSH_STYLE = {
   drawSoon: { priority: 3, tags: "ticket" },
   stillIn: { priority: 3, tags: "repeat" },
   drawAnnounced: { priority: 3, tags: "ticket" },
-  report: { priority: 3, tags: "memo" }
+  report: { priority: 3, tags: "memo" },
+  ceiling: { priority: 5, tags: "rotating_light,moneybag" },
+  inviteOpen: { priority: 5, tags: "rotating_light,envelope" },
+  inviteReminder: { priority: 4, tags: "alarm_clock,envelope" },
+  drawEve: { priority: 3, tags: "ticket,calendar" },
+  drawEnded: { priority: 3, tags: "ticket,email" }
 };
 function asciiHeader(s, max = 200) {
   return String(s ?? "").normalize("NFKD").replace(/[̀-ͯ]/g, "").replace(/[‒-―·•]/g, "-").replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/[^\x20-\x7e]/g, "").replace(/\s+/g, " ").trim().slice(0, max);
@@ -882,20 +933,21 @@ var DRAW_HOME = {
   Walmart: "https://www.walmart.com/shop/collectibles/draw"
 };
 function buildDrawEmbeds(items, now, kind) {
-  const heading = kind === "opened" ? "DRAWING OPEN" : kind === "closing" ? "DRAWING CLOSING" : kind === "soon" ? "DRAWING OPENS SOON" : "DRAWING ANNOUNCED";
+  const heading = kind === "opened" ? "DRAWING OPEN" : kind === "closing" ? "DRAWING CLOSING" : kind === "soon" ? "DRAWING OPENS SOON" : kind === "eve" ? "DRAWING OPENS WITHIN A DAY" : kind === "ended" ? "DRAWING ENDED" : "DRAWING ANNOUNCED";
   return items.slice(0, 10).map((i) => {
     const fields = [
       inline("Price", dollars(i.price)),
       inline(
-        kind === "closing" ? "Closes" : kind === "opened" ? "Open until" : "Opens",
+        kind === "closing" ? "Closes" : kind === "opened" ? /start/i.test(i.windowLabel) ? "Opened" : "Open until" : kind === "ended" ? "Window" : "Opens",
         i.windowText || "not stated"
       ),
       inline("Retailer", i.retailer || "\u2014")
     ];
-    const until = untilPhrase(i.windowAt, now);
-    if (until) {
+    const until = kind === "ended" ? "" : untilPhrase(i.windowAt, now);
+    const past = i.windowAt ? Date.parse(i.windowAt) < Date.parse(now) : false;
+    if (until && !(past && (kind === "opened" || kind === "closing"))) {
       fields.push(
-        inline(kind === "announced" || kind === "soon" ? "That is" : "Time left", until)
+        inline(kind === "announced" || kind === "soon" || kind === "eve" ? "That is" : "Time left", until)
       );
     }
     if (i.externalId) fields.push(inline("Item", i.externalId));
@@ -910,7 +962,7 @@ function buildDrawEmbeds(items, now, kind) {
       ...i.imageUrl ? { thumbnail: { url: i.imageUrl } } : {},
       fields,
       footer: {
-        text: kind === "closing" ? "Entry closes soon and you have not marked this entered. Winners are drawn at random." : kind === "soon" ? "This is Walmart\u2019s own stated start time, not a confirmed open button \u2014 the page may take a few minutes to catch up. Free, one entry per account, drawn at random." : "Free, one entry per account. Winners are drawn at random after the window closes \u2014 entering early is worth no more than entering late."
+        text: kind === "closing" ? "Entry closes soon and you have not marked this entered. Winners are drawn at random." : kind === "soon" ? "This is Walmart\u2019s own stated start time, not a confirmed open button \u2014 the page may take a few minutes to catch up. Free, one entry per account, drawn at random." : kind === "eve" ? "A reminder the day before. Nothing to do until it opens \u2014 free, one entry per account, drawn at random." : kind === "ended" ? "The window has shut. Walmart draws winners at random and places the order for them \u2014 watch your email from Walmart for a win. Nothing else will tell you." : "Free, one entry per account. Winners are drawn at random after the window closes \u2014 entering early is worth no more than entering late."
       },
       timestamp: now
     };
@@ -919,6 +971,44 @@ function buildDrawEmbeds(items, now, kind) {
 async function announceDraw(webhookUrl, items, now, kind) {
   const embeds = buildDrawEmbeds(items, now, kind);
   if (embeds.length) await post(webhookUrl, embeds);
+}
+function buildCeilingEmbeds(items, now) {
+  return buildStockEmbeds(items, now, "already in stock - the price is what moved").map((e, n) => {
+    const i = items[n];
+    const who = i.seller === "marketplace" ? ` Sold by ${i.sellerName || "a third-party seller"}, not ${i.retailer || "the shop"}.` : "";
+    return {
+      ...e,
+      title: clip(`UNDER YOUR CEILING \xB7 ${i.name || "a watched listing"}`, 240),
+      description: `Dropped to ${dollars(i.price)} \u2014 within your ${dollars(i.ceiling ?? null)} ceiling.${who}`
+    };
+  });
+}
+function leftPhrase(min) {
+  if (min >= 90) return `${Math.round(min / 60)} hours`;
+  return `${Math.max(1, Math.round(min))} minutes`;
+}
+function buildInviteEmbed(i, now, kind) {
+  const fields = [inline("Retailer", i.retailer || "Best Buy")];
+  if (i.price !== null && i.price !== void 0) fields.unshift(inline("Price", dollars(i.price)));
+  if (kind === "reminder" && i.expiresAt) {
+    fields.push(inline("Runs out", discordTime(i.expiresAt)));
+  }
+  const left = i.minutesLeft ?? null;
+  return {
+    title: clip(
+      kind === "open" ? `INVITE WINDOW OPEN \xB7 ${i.name || "a watched listing"}` : `INVITE RUNS OUT IN ${left === null ? "UNDER A DAY" : leftPhrase(left).toUpperCase()} \xB7 ${i.name || "a watched listing"}`,
+      240
+    ),
+    ...i.url ? { url: i.url } : {},
+    description: kind === "open" ? "Best Buy is taking invite requests for this right now. Ask for one on the product page yourself - Phantom never asks for you." : "You said you got the invite. Buy it on the product page before it runs out.",
+    color: COLOR_QUEUE,
+    ...i.imageUrl ? { thumbnail: { url: i.imageUrl } } : {},
+    fields,
+    footer: {
+      text: kind === "open" ? 'If one arrives, press "I got the invite" in the app and it will remind you at 12 hours, 2 hours and 30 minutes left.' : "Reminders ride on Phantom\u2019s check-ins: they arrive while Phantom is running."
+    },
+    timestamp: now
+  };
 }
 async function announceTest(webhookUrl, now) {
   await post(webhookUrl, [
@@ -954,7 +1044,8 @@ function buildStagedEmbeds(items, now, note) {
 var SHOP_HOME = {
   Walmart: "https://www.walmart.com",
   Target: "https://www.target.com",
-  "Pokemon Center": "https://www.pokemoncenter.com"
+  "Pokemon Center": "https://www.pokemoncenter.com",
+  "Best Buy": "https://www.bestbuy.com"
 };
 function buildQueueEmbed(retailer, at, now) {
   const home = SHOP_HOME[retailer] ?? "";
@@ -1614,6 +1705,7 @@ var DEFAULT_SETTINGS = {
   spendCapDay: null,
   budgetTotal: 0,
   pausedRetailers: [],
+  enabledRetailers: [],
   burstSpacingSeconds: 0,
   dropModeUntil: "",
   pushTopic: "",
@@ -1627,7 +1719,16 @@ function maskSettings(s) {
     pushTopic: s.pushTopic ? `\u2022\u2022\u2022${s.pushTopic.slice(-3)}` : ""
   };
 }
-var KNOWN_RETAILERS = ["Target", "Walmart", "Pokemon Center"];
+var KNOWN_RETAILERS = ["Target", "Walmart", "Pokemon Center", "Best Buy"];
+var OPT_IN_RETAILERS = ["Best Buy"];
+function retailerEnabled(s, retailer) {
+  const same = (r) => String(r).toLowerCase() === String(retailer).toLowerCase();
+  if ((s.pausedRetailers ?? []).some(same)) return false;
+  if (OPT_IN_RETAILERS.some(same)) {
+    return (s.enabledRetailers ?? []).some(same);
+  }
+  return true;
+}
 function isClockTime(v) {
   if (v === "") return true;
   const parts = v.split(":");
@@ -1666,6 +1767,14 @@ function validateSettings(s) {
     for (const r of s.pausedRetailers) {
       if (!KNOWN_RETAILERS.includes(String(r))) {
         return `"${r}" is not a shop this system watches`;
+      }
+    }
+  }
+  if (s.enabledRetailers !== void 0) {
+    if (!Array.isArray(s.enabledRetailers)) return "switched-on shops must be a list of names";
+    for (const r of s.enabledRetailers) {
+      if (!OPT_IN_RETAILERS.includes(String(r))) {
+        return `"${r}" is not a shop that needs switching on`;
       }
     }
   }
@@ -1795,6 +1904,7 @@ async function getSettings(db2, userId) {
     // Stored as one comma-separated string: the set is three names, and a
     // table for it would be three joins to answer "is Target on".
     pausedRetailers: text("pausedRetailers", "").split(",").map((r) => r.trim()).filter((r) => KNOWN_RETAILERS.includes(r)),
+    enabledRetailers: text("enabledRetailers", "").split(",").map((r) => r.trim()).filter((r) => OPT_IN_RETAILERS.includes(r)),
     burstSpacingSeconds: num2("burstSpacingSeconds", DEFAULT_SETTINGS.burstSpacingSeconds),
     dropModeUntil: text("dropModeUntil", ""),
     pushTopic: text("pushTopic", ""),
@@ -1827,6 +1937,7 @@ async function setSettings(db2, userId, patch) {
     "budgetTotal",
     "spendCapDay",
     "pausedRetailers",
+    "enabledRetailers",
     "burstSpacingSeconds",
     "dropModeUntil",
     "pushTopic",
@@ -1891,7 +2002,8 @@ function toMission(r) {
     releaseDate: toDate(r.release_date),
     note: String(r.note ?? ""),
     lastCheckedAt: iso(r.last_checked_at),
-    lastChangedAt: iso(r.last_changed_at)
+    lastChangedAt: iso(r.last_changed_at),
+    inviteAt: r.invite_at ? new Date(String(r.invite_at)).toISOString() : null
   };
 }
 var MISSION_SELECT = `
@@ -2487,6 +2599,7 @@ async function recordObservation(db2, userId, obs) {
       isFirst: false,
       previousState: before.state,
       previousPrice: toPrice(before.price),
+      previousSellerKind: before.seller_kind ?? null,
       previousQuantity: before.available_quantity === null || before.available_quantity === void 0 ? null : Number(before.available_quantity)
     };
   }
@@ -2589,8 +2702,144 @@ async function recordObservation(db2, userId, obs) {
     isFirst,
     previousState: before?.state ?? null,
     previousPrice,
+    previousSellerKind: before?.seller_kind ?? null,
     previousQuantity
   };
+}
+function isMissingSchema(err) {
+  const code = String(err?.code ?? "");
+  if (code === "42703" || code === "42P01") return true;
+  const message = String(err?.message ?? err ?? "");
+  return /(column|relation) "?[\w.]+"? (of relation "?\w+"? )?does not exist/i.test(message);
+}
+function withinCeiling(o, ceiling) {
+  if (!o || o.state !== "in") return false;
+  if (o.sellerKind !== "retailer" && o.sellerKind !== "marketplace") return false;
+  if (ceiling === null || ceiling === void 0 || o.price === null || o.price === void 0) return false;
+  const price = Number(o.price);
+  const cap = Number(ceiling);
+  return Number.isFinite(price) && Number.isFinite(cap) && price > 0 && price <= cap;
+}
+function droppedUnderCeiling(before, now, ceiling) {
+  if (!before || before.state !== "in") return false;
+  return withinCeiling(now, ceiling) && !withinCeiling(before, ceiling);
+}
+var CEILING_ALERT_COOLDOWN_HOURS = 6;
+async function claimCeilingAlert(db2, userId, missionId, cooldownHours = CEILING_ALERT_COOLDOWN_HOURS) {
+  try {
+    const rows = await db2.query(
+      `UPDATE missions SET ceiling_alert_at = now()
+        WHERE id = $1 AND user_id = $2
+          AND (ceiling_alert_at IS NULL
+               OR ceiling_alert_at < now() - ($3 || ' hours')::interval)
+        RETURNING id`,
+      [missionId, userId, String(Math.max(0, Math.round(cooldownHours)))]
+    );
+    return rows.length > 0;
+  } catch (err) {
+    if (isMissingSchema(err)) return false;
+    throw err;
+  }
+}
+async function stampCeilingAlert(db2, userId, missionId) {
+  try {
+    await db2.query(
+      "UPDATE missions SET ceiling_alert_at = now() WHERE id = $1 AND user_id = $2",
+      [missionId, userId]
+    );
+  } catch {
+  }
+}
+async function claimInviteOpenAlert(db2, userId, listingId) {
+  try {
+    const rows = await db2.query(
+      `UPDATE missions SET invite_open_alert_at = now()
+        WHERE listing_id = $1 AND user_id = $2 AND invite_open_alert_at IS NULL
+        RETURNING id`,
+      [listingId, userId]
+    );
+    return rows.length > 0;
+  } catch (err) {
+    if (isMissingSchema(err)) return false;
+    throw err;
+  }
+}
+async function clearInviteOpenAlert(db2, userId, listingId) {
+  try {
+    await db2.query(
+      `UPDATE missions SET invite_open_alert_at = NULL
+        WHERE listing_id = $1 AND user_id = $2 AND invite_open_alert_at IS NOT NULL`,
+      [listingId, userId]
+    );
+  } catch {
+  }
+}
+var INVITE_HOURS = 24;
+var INVITE_REMIND_LEFT_MIN = [12 * 60, 2 * 60, 30];
+async function setInviteReceived(db2, userId, missionId, received) {
+  try {
+    const rows = await db2.query(
+      received ? `UPDATE missions SET invite_at = now(), invite_alerts_sent = 0
+            WHERE id = $1 AND user_id = $2 RETURNING id` : `UPDATE missions SET invite_at = NULL, invite_alerts_sent = 0
+            WHERE id = $1 AND user_id = $2 RETURNING id`,
+      [missionId, userId]
+    );
+    return rows.length > 0 ? "ok" : "no-mission";
+  } catch (err) {
+    if (isMissingSchema(err)) return "not-ready";
+    throw err;
+  }
+}
+async function claimInviteReminders(db2, userId) {
+  let rows;
+  try {
+    rows = await db2.query(
+      `SELECT m.id, m.invite_at, COALESCE(m.invite_alerts_sent, 0)::int AS sent,
+              l.retailer, l.url, p.name, p.image_url
+         FROM missions m
+         JOIN listings l ON l.id = m.listing_id
+         JOIN products p ON p.key = l.product_key
+        WHERE m.user_id = $1
+          AND m.invite_at IS NOT NULL
+          AND m.invite_at > now() - ($2 || ' hours')::interval
+          AND COALESCE(m.invite_alerts_sent, 0) < $3`,
+      [userId, String(INVITE_HOURS), INVITE_REMIND_LEFT_MIN.length]
+    );
+  } catch (err) {
+    if (isMissingSchema(err)) return [];
+    throw err;
+  }
+  const out = [];
+  const nowMs = Date.now();
+  for (const r of rows) {
+    const inviteMs = Date.parse(new Date(String(r.invite_at)).toISOString());
+    const expiresMs = inviteMs + INVITE_HOURS * 36e5;
+    const leftMin = (expiresMs - nowMs) / 6e4;
+    const sent = Number(r.sent);
+    let due = -1;
+    for (let i = sent; i < INVITE_REMIND_LEFT_MIN.length; i++) {
+      if (leftMin <= INVITE_REMIND_LEFT_MIN[i]) due = i;
+    }
+    if (due < 0) continue;
+    const claimed = await db2.query(
+      `UPDATE missions SET invite_alerts_sent = $3
+        WHERE id = $1 AND user_id = $2 AND COALESCE(invite_alerts_sent, 0) = $4
+        RETURNING id`,
+      [Number(r.id), userId, due + 1, sent]
+    );
+    if (claimed.length === 0) continue;
+    out.push({
+      missionId: Number(r.id),
+      name: String(r.name ?? ""),
+      retailer: String(r.retailer ?? ""),
+      url: String(r.url ?? ""),
+      imageUrl: String(r.image_url ?? ""),
+      inviteAt: new Date(inviteMs).toISOString(),
+      expiresAt: new Date(expiresMs).toISOString(),
+      minutesLeft: Math.max(0, Math.round(leftMin))
+    });
+  }
+  return out;
 }
 async function recentObservations(db2, userId, limit = 50) {
   const rows = await db2.query(
@@ -2693,9 +2942,10 @@ async function recordDrawings(db2, userId, retailer, items) {
       [userId, retailer, externalId]
     );
     const endedAt = before?.ended_at ? Date.parse(String(before.ended_at)) : null;
-    const reborn = endedAt !== null && (item.phase === "open" || item.phase === "announced" && !!item.windowAt && Date.parse(item.windowAt) > endedAt);
+    const reborn = endedAt !== null && (item.phase === "open" && (!item.windowAt || Date.parse(item.windowAt) > endedAt) || item.phase === "announced" && !!item.windowAt && Date.parse(item.windowAt) > endedAt);
     const isNew = before === void 0 || reborn;
-    const justOpened = item.phase === "open" && (isNew || before.phase !== "open");
+    const stillEnded = endedAt !== null && !reborn;
+    const justOpened = item.phase === "open" && !stillEnded && (isNew || before.phase !== "open");
     const said = String(item.franchise ?? "").trim();
     const read = franchiseOf(String(item.name ?? "")).franchise;
     const franchise = said === "other" || read === "other" ? "other" : isWanted(read) && (said === "" || said === read) ? read : "unknown";
@@ -2720,7 +2970,12 @@ async function recordDrawings(db2, userId, retailer, items) {
                           THEN EXCLUDED.image_url ELSE drawings.image_url END,
          price = COALESCE(EXCLUDED.price, drawings.price),
          order_limit = COALESCE(EXCLUDED.order_limit, drawings.order_limit),
-         phase = EXCLUDED.phase,
+         -- Ended stays ended within a cycle, whatever a stale badge reads as.
+         phase = CASE
+           WHEN drawings.ended_at IS NOT NULL AND NOT $14::boolean AND EXCLUDED.phase = 'open'
+             THEN drawings.phase
+           ELSE EXCLUDED.phase
+         END,
          window_label = EXCLUDED.window_label,
          window_text = EXCLUDED.window_text,
          window_at = COALESCE(EXCLUDED.window_at, drawings.window_at),
@@ -2769,6 +3024,14 @@ async function recordDrawings(db2, userId, retailer, items) {
         reborn
       ]
     );
+    if (reborn) {
+      await db2.query(
+        `UPDATE drawings SET eve_alert_at = NULL, ended_alert_at = NULL
+          WHERE user_id = $1 AND retailer = $2 AND external_id = $3`,
+        [userId, retailer, externalId]
+      ).catch(() => {
+      });
+    }
     if (rows[0]) out.push({ row: toDrawing(rows[0]), isNew, justOpened });
   }
   return out;
@@ -2845,6 +3108,57 @@ async function claimClosingDrawings(db2, userId, withinMinutes = 60) {
     [userId, Math.max(1, Math.round(withinMinutes)), [...WANTED]]
   );
   return rows.map(toDrawing);
+}
+async function claimEveDrawings(db2, userId) {
+  try {
+    const rows = await db2.query(
+      `UPDATE drawings SET eve_alert_at = now()
+        WHERE id IN (
+          SELECT id FROM drawings
+           WHERE user_id = $1
+             AND gone_at IS NULL
+             AND entered_at IS NULL
+             AND franchise = ANY($2::text[])
+             AND ended_at IS NULL
+             AND opened_at IS NULL
+             AND eve_alert_at IS NULL
+             AND phase = 'announced'
+             AND window_label ILIKE '%start%'
+             AND window_at IS NOT NULL
+             AND window_at > now() + INTERVAL '2 hours'
+             AND window_at <= now() + INTERVAL '24 hours'
+             AND announced_at < window_at - INTERVAL '24 hours'
+        )
+        RETURNING *`,
+      [userId, [...WANTED]]
+    );
+    return rows.map(toDrawing);
+  } catch (err) {
+    if (isMissingSchema(err)) return [];
+    throw err;
+  }
+}
+async function claimEndedDrawings(db2, userId) {
+  try {
+    const rows = await db2.query(
+      `UPDATE drawings SET ended_alert_at = now()
+        WHERE id IN (
+          SELECT id FROM drawings
+           WHERE user_id = $1
+             AND franchise = ANY($2::text[])
+             AND ended_at IS NOT NULL
+             AND ended_alert_at IS NULL
+             AND ended_at > now() - INTERVAL '6 hours'
+             AND first_seen_at < ended_at - INTERVAL '1 minute'
+        )
+        RETURNING *`,
+      [userId, [...WANTED]]
+    );
+    return rows.map(toDrawing);
+  } catch (err) {
+    if (isMissingSchema(err)) return [];
+    throw err;
+  }
 }
 async function markDrawingEntered(db2, userId, id, entered) {
   const rows = await db2.query(
@@ -5759,7 +6073,7 @@ ${FONTS}<style>${STYLE}</style></head>
         <div class="wizhead">
           <div>
             <div class="name">Walmart drawings</div>
-            <div class="sub">Free to enter, one per account, drawn at random after the window shuts.</div>
+            <div class="sub">Free to enter, one per account, drawn at random after the window shuts. Reminders (a day before, opening, closing, ended) arrive while Phantom is running.</div>
           </div>
         </div>
         <div id="draw-list"></div>
@@ -6924,6 +7238,36 @@ function missionCard(m, redraw) {
       if (ok) { e.target.textContent = 'checking\u2026'; e.target.disabled = true; load(); }
     });
     actions.appendChild(now);
+  }
+
+  /*
+   * Best Buy's invite: the one thing on this card a person tells Phantom
+   * rather than the other way round. Best Buy emails the invite to the
+   * account; nothing here can see that, so the button is how the 24-hour
+   * countdown starts. The reminders ride on Phantom's check-ins (the app has
+   * no clock of its own on this plan), and the line under the button says so.
+   */
+  if (m.retailer === 'Best Buy') {
+    const until = m.inviteAt ? Date.parse(m.inviteAt) + 24 * 3600 * 1000 : NaN;
+    const live = Number.isFinite(until) && until > Date.now();
+    const inv = el('button', 'small', live ? 'Invite used or gone' : 'I got the invite');
+    inv.addEventListener('click', async (e) => {
+      await withButton(e.target, '\u2026', null, async () => {
+        await api('POST', '/api/missions/' + m.id + '/invite', { received: !live });
+        await load();
+        return live ? 'countdown stopped' : 'countdown started';
+      });
+    });
+    actions.appendChild(inv);
+    if (live) {
+      const mins = Math.max(0, Math.round((until - Date.now()) / 60000));
+      const leftTxt = mins >= 90 ? Math.round(mins / 60) + ' hours' : mins + ' minutes';
+      flags.appendChild(el('span', 'pill flag', 'INVITE \xB7 ' + leftTxt + ' left to buy'));
+      const how = el('div', 'meta',
+        'Reminders at 12 hours, 2 hours and 30 minutes left arrive while Phantom is running.');
+      how.style.marginTop = '6px';
+      left.appendChild(how);
+    }
   }
 
   if (actions.childNodes.length) left.appendChild(actions);
@@ -8660,14 +9004,43 @@ function render() {
  * of the same thing \u2014 so the second time is one click.
  */
 /** The shop switches, the burst field, and whether a window is open. */
-const SHOPS = ['Target', 'Walmart', 'Pokemon Center'];
+const SHOPS = ['Target', 'Walmart', 'Pokemon Center', 'Best Buy'];
+// Off until switched on (store.OPT_IN_RETAILERS). Best Buy is alert-only and
+// new, so starting to read it is the owner's decision, not a default.
+const OPT_IN_SHOPS = ['Best Buy'];
 
 function renderShops(st) {
   const box = document.getElementById('shop-toggles');
   if (!box) return;
   const off = st.pausedRetailers || [];
+  const enabled = st.enabledRetailers || [];
+  const same = (a, b) => String(a).toLowerCase() === String(b).toLowerCase();
   box.textContent = '';
   for (const shop of SHOPS) {
+    if (OPT_IN_SHOPS.includes(shop)) {
+      const onOpt = enabled.some((r) => same(r, shop)) && !off.some((r) => same(r, shop));
+      const chipOpt = el('button', 'chip' + (onOpt ? ' on' : ''),
+        shop + (onOpt ? ' \xB7 on (alerts only)' : ' \xB7 off'));
+      chipOpt.type = 'button';
+      chipOpt.setAttribute('aria-pressed', onOpt ? 'true' : 'false');
+      chipOpt.title = 'Alerts only: in stock, under your ceiling, and invite windows. Phantom never asks for an invite or buys here.';
+      chipOpt.addEventListener('click', async () => {
+        const nextOn = onOpt
+          ? enabled.filter((r) => !same(r, shop))
+          : [...enabled.filter((r) => !same(r, shop)), shop];
+        const msg = document.getElementById('shops-msg');
+        await withButton(chipOpt, '\u2026', msg, async () => {
+          await api('POST', '/api/settings', {
+            enabledRetailers: nextOn,
+            pausedRetailers: off.filter((r) => !same(r, shop)),
+          });
+          await load();
+          return shop + (onOpt ? ' is off' : ' is on, for alerts only');
+        });
+      });
+      box.appendChild(chipOpt);
+      continue;
+    }
     const on = !off.some((r) => String(r).toLowerCase() === shop.toLowerCase());
     // The chip says the STATE, and pressing it flips that state. A control
     // labelled with what it will do next reads as a description of now.
@@ -12069,6 +12442,12 @@ var ABILITIES = [
     audience: "member"
   },
   {
+    key: "inviteAlarm",
+    label: "Invite-window alarm",
+    blurb: "Shouts when a shop that sells by invitation opens its request list, and counts down an invite you received.",
+    audience: "member"
+  },
+  {
     key: "autoCheckout",
     label: "Automatic checkout",
     blurb: "Adds to cart and completes an order unattended, under a price ceiling and a daily spend cap.",
@@ -12130,6 +12509,22 @@ var RETAILERS = [
       autoCheckout: "planned"
     },
     note: "First-party only, so there is no reseller to detect. Availability is a yes/no \u2014 no quantity exists to warn on. Went behind a bot wall for three hours on 1 Sep 2026 and recovered on its own; Phantom names a wall and stands down rather than knocking, and never tries to get past one."
+  },
+  {
+    key: "best-buy",
+    name: "Best Buy",
+    abilities: {
+      // 'partial', not 'live': added 19 Oct 2026, OFF until the owner turns it
+      // on, and the reader was written from Best Buy's button wording rather
+      // than verified against a live invite window. It says unknown rather
+      // than guessing when the button is anything it does not recognise.
+      watch: "partial",
+      inviteAlarm: "partial",
+      // Alert-only, by decision. Phantom never asks for an invite and never
+      // buys here; there is no driver, and the tests hold that.
+      autoCheckout: "none"
+    },
+    note: "Alerts only, and off until switched on: in stock, under your ceiling, and when the invite list opens. Asking for an invite and buying are always done by a person."
   }
 ];
 var FEATURES = [
@@ -12214,6 +12609,69 @@ function outletsFor(env2, s) {
 async function outletsOf(db2, userId, env2) {
   return outletsFor(env2, await getSettings(db2, userId).catch(() => null));
 }
+async function drawingOutletsOf(db2, userId, env2) {
+  const out = await outletsOf(db2, userId, env2);
+  const writer = await canWriteCatalogue(db2, userId).catch(() => false);
+  return writer ? out : { ...out, rooms: { main: "", byRetailer: {} } };
+}
+function drawCard(r) {
+  return {
+    name: r.name,
+    retailer: r.retailer,
+    externalId: r.externalId,
+    url: r.url,
+    imageUrl: r.imageUrl,
+    price: r.price,
+    orderLimit: r.orderLimit,
+    windowText: r.windowText,
+    windowLabel: r.windowLabel,
+    windowAt: r.windowAt
+  };
+}
+async function drawingReminders(db2, userId, env2, now, opts = {}) {
+  const [soon, closing, eve, ended] = await Promise.all([
+    opts.soon === false ? Promise.resolve([]) : claimOpeningDrawings(db2, userId).catch(() => []),
+    claimClosingDrawings(db2, userId).catch(() => []),
+    claimEveDrawings(db2, userId).catch(() => []),
+    claimEndedDrawings(db2, userId).catch(() => [])
+  ]);
+  const counts = { soon: soon.length, closing: closing.length, eve: eve.length, ended: ended.length };
+  if (soon.length + closing.length + eve.length + ended.length === 0) return counts;
+  const out = await drawingOutletsOf(db2, userId, env2);
+  if (!anyOutlet(out)) return counts;
+  const say = (kind, rows) => {
+    const style = kind === "drawSoon" ? "soon" : kind === "drawClosing" ? "closing" : kind === "drawEve" ? "eve" : "ended";
+    return deliver(out, kind, rows.map(drawCard), (g) => buildDrawEmbeds(g, now, style));
+  };
+  await Promise.allSettled([
+    say("drawSoon", soon),
+    say("drawClosing", closing),
+    say("drawEve", eve),
+    say("drawEnded", ended)
+  ]);
+  return counts;
+}
+async function inviteReminders(db2, userId, env2, now) {
+  const due = await claimInviteReminders(db2, userId).catch(() => []);
+  if (due.length === 0) return 0;
+  const out = await outletsOf(db2, userId, env2);
+  if (!anyOutlet(out)) return due.length;
+  await deliver(
+    out,
+    "inviteReminder",
+    due.map((d) => ({
+      name: d.name,
+      retailer: d.retailer,
+      url: d.url,
+      imageUrl: d.imageUrl,
+      expiresAt: d.expiresAt,
+      minutesLeft: d.minutesLeft
+    })),
+    (g) => g.slice(0, 10).map((i) => buildInviteEmbed(i, now, "reminder"))
+  ).catch(() => {
+  });
+  return due.length;
+}
 async function publish(db2, userId, env2, results, now) {
   for (const result of results) {
     if (!result.ok || result.fresh.length === 0) continue;
@@ -12245,6 +12703,14 @@ function redirect(to, headers = {}) {
   return new Response(null, { status: 303, headers: { Location: to, ...headers } });
 }
 function createHandler(db2, env2) {
+  const lastTick = /* @__PURE__ */ new Map();
+  const TICK_MS = 6e4;
+  const tickDue = (userId) => {
+    const t = Date.now();
+    if (t - (lastTick.get(userId) ?? 0) < TICK_MS) return false;
+    lastTick.set(userId, t);
+    return true;
+  };
   return async function handle(request) {
     const url = new URL(request.url);
     const path = url.pathname.replace(/\/+$/, "") || "/";
@@ -12559,41 +13025,29 @@ function createHandler(db2, env2) {
       }
       const seen = outcomes.map((o) => o.row.externalId);
       const retired = await retireMissingDrawings(db2, userId, retailer, seen);
-      const card = (r) => ({
-        name: r.name,
-        retailer: r.retailer,
-        externalId: r.externalId,
-        url: r.url,
-        imageUrl: r.imageUrl,
-        price: r.price,
-        orderLimit: r.orderLimit,
-        windowText: r.windowText,
-        windowLabel: r.windowLabel,
-        windowAt: r.windowAt
-      });
+      const card = drawCard;
       const ours = (o) => isWanted(o.row.franchise);
       const held = outcomes.filter((o) => o.isNew && !ours(o)).length;
       const opened = outcomes.filter((o) => o.justOpened && ours(o)).map((o) => card(o.row));
       const announced = outcomes.filter((o) => o.isNew && ours(o) && !o.justOpened && o.row.phase === "announced").map((o) => card(o.row));
-      const closing = (await claimClosingDrawings(db2, userId)).map(card);
-      const soon = opened.length > 0 ? [] : (await claimOpeningDrawings(db2, userId)).map(card);
-      if (opened.length + soon.length + announced.length + closing.length > 0) {
-        const out = await outletsOf(db2, userId, env2);
+      if (opened.length + announced.length > 0) {
+        const out = await drawingOutletsOf(db2, userId, env2);
         if (anyOutlet(out)) {
           await Promise.allSettled([
             deliver(out, "drawOpened", opened, (g) => buildDrawEmbeds(g, now, "opened")),
-            deliver(out, "drawSoon", soon, (g) => buildDrawEmbeds(g, now, "soon")),
-            deliver(out, "drawAnnounced", announced, (g) => buildDrawEmbeds(g, now, "announced")),
-            deliver(out, "drawClosing", closing, (g) => buildDrawEmbeds(g, now, "closing"))
+            deliver(out, "drawAnnounced", announced, (g) => buildDrawEmbeds(g, now, "announced"))
           ]);
         }
       }
+      const reminded = await drawingReminders(db2, userId, env2, now, { soon: opened.length === 0 });
       return json({
         recorded: outcomes.length,
         opened: opened.length,
-        soon: soon.length,
+        soon: reminded.soon,
         announced: announced.length,
-        closing: closing.length,
+        closing: reminded.closing,
+        eve: reminded.eve,
+        ended: reminded.ended,
         // Stored, shown, deliberately not announced. Counted so a quiet
         // channel is never the only evidence that something was held.
         held,
@@ -12601,6 +13055,9 @@ function createHandler(db2, env2) {
       });
     }
     if (request.method === "POST" && path === "/api/drawings/announce") {
+      if (!await canWriteCatalogue(db2, userId)) {
+        return json({ error: "only the catalogue owner posts drawings to the shared rooms", sent: 0 }, 403);
+      }
       if (!env2.DISCORD_WEBHOOK_URL) {
         return json({ error: "no Discord webhook is configured", sent: 0 }, 400);
       }
@@ -12632,6 +13089,30 @@ function createHandler(db2, env2) {
         }
       }
       return json({ sent: live.length, rooms: rooms_ });
+    }
+    if (request.method === "POST" && path.startsWith("/api/missions/") && path.endsWith("/invite")) {
+      const id = Number(path.split("/")[3]);
+      if (!Number.isInteger(id)) return json({ error: "bad mission id" }, 400);
+      const m = await getMission(db2, userId, id);
+      if (!m) return json({ error: "no such mission" }, 404);
+      if (m.retailer !== "Best Buy") {
+        return json({ error: "only a Best Buy listing has an invite to count down" }, 400);
+      }
+      const b = await body_();
+      const received = b?.received !== false;
+      const done = await setInviteReceived(db2, userId, id, received);
+      if (done === "not-ready") {
+        return json({
+          error: "the invite countdown needs the 19 Oct database update first \u2014 run the SQL from the pull request in Supabase"
+        }, 409);
+      }
+      if (done === "no-mission") return json({ error: "no such mission" }, 404);
+      const after = await getMission(db2, userId, id);
+      return json({
+        ok: true,
+        inviteAt: after?.inviteAt ?? null,
+        expiresAt: after?.inviteAt ? new Date(Date.parse(after.inviteAt) + INVITE_HOURS * 36e5).toISOString() : null
+      });
     }
     if (request.method === "POST" && path.startsWith("/api/drawings/") && path.endsWith("/entered")) {
       const id = Number(path.split("/")[3]);
@@ -12676,7 +13157,7 @@ function createHandler(db2, env2) {
       if (!parsed) {
         return json(
           {
-            error: "could not read a retailer and product id out of that URL. Expected a target.com/p/\u2026/A-123, pokemoncenter.com/product/100-123/\u2026 or walmart.com/ip/\u2026/123 link."
+            error: "could not read a retailer and product id out of that URL. Expected a target.com/p/\u2026/A-123, pokemoncenter.com/product/100-123/\u2026, walmart.com/ip/\u2026/123 or bestbuy.com/site/\u2026/1234567.p link."
           },
           400
         );
@@ -12697,7 +13178,7 @@ function createHandler(db2, env2) {
       if (!parsed) {
         return json(
           {
-            error: "could not read a retailer and product id out of that URL. Expected a target.com/p/\u2026/A-123, pokemoncenter.com/product/100-123/\u2026 or walmart.com/ip/\u2026/123 link."
+            error: "could not read a retailer and product id out of that URL. Expected a target.com/p/\u2026/A-123, pokemoncenter.com/product/100-123/\u2026, walmart.com/ip/\u2026/123 or bestbuy.com/site/\u2026/1234567.p link."
           },
           400
         );
@@ -13204,6 +13685,12 @@ function createHandler(db2, env2) {
           }
         }
       }
+      if (tickDue(userId)) {
+        await Promise.allSettled([
+          drawingReminders(db2, userId, env2, now),
+          inviteReminders(db2, userId, env2, now)
+        ]);
+      }
       return json({ ...result, pruned });
     }
     if (request.method === "GET" && path === "/api/activity/export") {
@@ -13290,7 +13777,8 @@ function createHandler(db2, env2) {
         manual: state.queued,
         sourceId: SWEEP_SOURCE
       };
-      return json({ missions, settings: maskSettings(settings), sweep });
+      const handed = missions.filter((m) => retailerEnabled({ pausedRetailers: [], enabledRetailers: settings.enabledRetailers }, m.retailer));
+      return json({ missions: handed, settings: maskSettings(settings), sweep });
     }
     if (request.method === "POST" && path === "/api/runs") {
       const b = await body();
@@ -13353,6 +13841,8 @@ function createHandler(db2, env2) {
       const changes = [];
       const loaded = [];
       const stillIn = [];
+      const moved = [];
+      const invitesOpen = [];
       const cfg = await getSettings(db2, userId).catch(() => null);
       for (const obs of body2.observations) {
         if (!obs?.listingId || !obs?.state) {
@@ -13367,6 +13857,21 @@ function createHandler(db2, env2) {
           const outcome = await recordObservation(db2, userId, obs);
           results.push({ listingId: obs.listingId, changed: outcome.changed });
           if (outcome.changed) changes.push({ obs, was: outcome.previousState });
+          if (obs.state === "in" && outcome.previousState === "in" && (outcome.previousPrice !== (obs.price ?? null) || (outcome.previousSellerKind ?? "unknown") !== (obs.sellerKind ?? "unknown"))) {
+            moved.push({
+              obs,
+              before: {
+                state: outcome.previousState,
+                price: outcome.previousPrice,
+                sellerKind: outcome.previousSellerKind
+              }
+            });
+          }
+          if (obs.invite === "open") {
+            invitesOpen.push(obs);
+          } else if ("invite" in obs && obs.state !== "unknown") {
+            await clearInviteOpenAlert(db2, userId, obs.listingId);
+          }
           if (obs.state === "in" && outcome.previousState === "in" && (obs.sellerKind ?? "") !== "marketplace" && (cfg?.inStockRepeatAfter?.length ?? 0) > 0) {
             const again = await claimStockFollowUp(
               db2,
@@ -13400,7 +13905,7 @@ function createHandler(db2, env2) {
       const enteredIn = changes.filter((c) => c.obs.state === "in" && c.was !== "in");
       const cameIntoStock = enteredIn.filter((c) => c.obs.isPreOrder !== true);
       const preOrdersOpened = enteredIn.filter((c) => c.obs.isPreOrder === true);
-      const candidates = cameIntoStock.length > 0 || preOrdersOpened.length > 0 || loaded.length > 0 || stillIn.length > 0;
+      const candidates = cameIntoStock.length > 0 || preOrdersOpened.length > 0 || loaded.length > 0 || stillIn.length > 0 || moved.length > 0 || invitesOpen.length > 0;
       const out = candidates ? outletsFor(env2, cfg) : null;
       const willAlert = anyOutlet(out);
       const byListing = willAlert ? new Map((await listMissions(db2, userId).catch(() => [])).map((m) => [m.listingId, m])) : /* @__PURE__ */ new Map();
@@ -13441,6 +13946,72 @@ function createHandler(db2, env2) {
             };
           }),
           (g) => buildStockEmbeds(g, now)
+        ));
+        for (const c of freshAlerts) {
+          const m = byListing.get(c.obs.listingId);
+          if (m && withinCeiling(c.obs, m.ceiling)) {
+            await stampCeilingAlert(db2, userId, m.id);
+          }
+        }
+      }
+      const ceilingAlerts = [];
+      if (moved.length > 0 && out && willAlert) {
+        for (const c of moved) {
+          const m = byListing.get(c.obs.listingId);
+          if (!m || !speaks(c.obs.listingId)) continue;
+          if (!droppedUnderCeiling(c.before, c.obs, m.ceiling)) continue;
+          try {
+            if (await claimCeilingAlert(db2, userId, m.id)) ceilingAlerts.push({ obs: c.obs, m });
+          } catch {
+          }
+        }
+      }
+      if (ceilingAlerts.length > 0 && out && willAlert) {
+        sends.push(deliver(
+          out,
+          "ceiling",
+          ceilingAlerts.map(({ obs: o, m }) => ({
+            name: m.productName,
+            retailer: m.retailer,
+            price: o.price ?? null,
+            msrp: m.msrp,
+            url: m.url,
+            imageUrl: m.imageUrl,
+            seller: o.sellerKind ?? "",
+            sellerName: o.sellerName ?? m.sellerName ?? "",
+            quantity: o.availableQuantity ?? null,
+            orderLimit: o.orderLimit ?? m.orderLimit,
+            addToCart: o.addToCart ?? null,
+            isPreOrder: o.isPreOrder === true,
+            releaseDate: o.releaseDate ?? m.releaseDate ?? null,
+            ceiling: m.ceiling
+          })),
+          (g) => buildCeilingEmbeds(g, now)
+        ));
+      }
+      const inviteAlerts = [];
+      if (invitesOpen.length > 0 && out && willAlert) {
+        for (const o of invitesOpen) {
+          const m = byListing.get(o.listingId);
+          if (!m || !speaks(o.listingId)) continue;
+          try {
+            if (await claimInviteOpenAlert(db2, userId, o.listingId)) inviteAlerts.push(m);
+          } catch {
+          }
+        }
+      }
+      if (inviteAlerts.length > 0 && out && willAlert) {
+        sends.push(deliver(
+          out,
+          "inviteOpen",
+          inviteAlerts.map((m) => ({
+            name: m.productName,
+            retailer: m.retailer,
+            url: m.url,
+            imageUrl: m.imageUrl,
+            price: m.price
+          })),
+          (g) => g.slice(0, 10).map((i) => buildInviteEmbed(i, now, "open"))
         ));
       }
       const preOrderAlerts = preOrdersOpened.filter(

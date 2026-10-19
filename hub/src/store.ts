@@ -1315,6 +1315,13 @@ export interface Settings {
    */
   pausedRetailers: string[];
   /**
+   * Opt-in shops that are switched ON (OPT_IN_RETAILERS). Empty by default,
+   * which is what keeps Best Buy off until the owner turns it on. Phantom
+   * reads it too, so an opt-in shop stays dark on the machine as well as in
+   * the list of missions it is handed.
+   */
+  enabledRetailers: string[];
+  /**
    * The tight floor between requests to one shop, in seconds, used only
    * inside a drop window. 0 means the feature is off and the ordinary floor
    * (20s) always applies.
@@ -1369,6 +1376,7 @@ export const DEFAULT_SETTINGS: Settings = {
   spendCapDay: null,
   budgetTotal: 0,
   pausedRetailers: [],
+  enabledRetailers: [],
   burstSpacingSeconds: 0,
   dropModeUntil: '',
   pushTopic: '',
@@ -1396,7 +1404,34 @@ export function maskSettings(s: Settings): Settings {
 }
 
 /** The shops this system knows. A toggle for a shop we cannot read is a lie. */
-export const KNOWN_RETAILERS = ['Target', 'Walmart', 'Pokemon Center'] as const;
+export const KNOWN_RETAILERS = ['Target', 'Walmart', 'Pokemon Center', 'Best Buy'] as const;
+
+/**
+ * Shops that are OFF until the owner switches them on.
+ *
+ * Best Buy, added 19 Oct 2026, is alert-only and its reader was written from
+ * the button wording rather than from a live invite window. A new shop
+ * starting off is the only safe default: switching it on is a decision to
+ * start reading another retailer's pages from this house's address, and that
+ * belongs to the person whose address it is.
+ */
+export const OPT_IN_RETAILERS = ['Best Buy'] as const;
+
+/**
+ * Is this shop being watched? Off when paused, and an opt-in shop is off
+ * until it is in `enabledRetailers`. Case-blind, like the page's chips.
+ */
+export function retailerEnabled(
+  s: Pick<Settings, 'pausedRetailers' | 'enabledRetailers'>,
+  retailer: string,
+): boolean {
+  const same = (r: string) => String(r).toLowerCase() === String(retailer).toLowerCase();
+  if ((s.pausedRetailers ?? []).some(same)) return false;
+  if ((OPT_IN_RETAILERS as readonly string[]).some(same)) {
+    return (s.enabledRetailers ?? []).some(same);
+  }
+  return true;
+}
 
 /** HH:MM, 24-hour, or blank. Deliberately strict: a half-parsed time is worse. */
 export function isClockTime(v: string): boolean {
@@ -1440,6 +1475,14 @@ export function validateSettings(s: Partial<Settings>): string | null {
     for (const r of s.pausedRetailers) {
       if (!(KNOWN_RETAILERS as readonly string[]).includes(String(r))) {
         return `"${r}" is not a shop this system watches`;
+      }
+    }
+  }
+  if (s.enabledRetailers !== undefined) {
+    if (!Array.isArray(s.enabledRetailers)) return 'switched-on shops must be a list of names';
+    for (const r of s.enabledRetailers) {
+      if (!(OPT_IN_RETAILERS as readonly string[]).includes(String(r))) {
+        return `"${r}" is not a shop that needs switching on`;
       }
     }
   }
@@ -1602,6 +1645,10 @@ export async function getSettings(db: Sql, userId: number): Promise<Settings> {
       .split(',')
       .map((r) => r.trim())
       .filter((r) => (KNOWN_RETAILERS as readonly string[]).includes(r)),
+    enabledRetailers: text('enabledRetailers', '')
+      .split(',')
+      .map((r) => r.trim())
+      .filter((r) => (OPT_IN_RETAILERS as readonly string[]).includes(r)),
     burstSpacingSeconds: num('burstSpacingSeconds', DEFAULT_SETTINGS.burstSpacingSeconds),
     dropModeUntil: text('dropModeUntil', ''),
     pushTopic: text('pushTopic', ''),
@@ -1644,6 +1691,7 @@ export async function setSettings(
     'budgetTotal',
     'spendCapDay',
     'pausedRetailers',
+    'enabledRetailers',
     'burstSpacingSeconds',
     'dropModeUntil',
     'pushTopic',
@@ -1721,6 +1769,12 @@ export interface MissionRow {
   lastCheckedAt: string;
   lastChangedAt: string;
   /**
+   * When the owner said "I got the invite" (Best Buy), or null. Read through
+   * `m.*`, so before the 19 Oct columns exist it is simply null and nothing
+   * breaks.
+   */
+  inviteAt: string | null;
+  /**
    * This listing is watched by somebody else, not by the account reading it.
    * Read the page and post the observation; record no run and buy nothing.
    */
@@ -1769,6 +1823,7 @@ function toMission(r: Record<string, unknown>): MissionRow {
     note: String(r.note ?? ''),
     lastCheckedAt: iso(r.last_checked_at),
     lastChangedAt: iso(r.last_changed_at),
+    inviteAt: r.invite_at ? new Date(String(r.invite_at)).toISOString() : null,
   };
 }
 
@@ -2678,6 +2733,14 @@ export interface ObservationIn {
   releaseDate?: string | null;
   imageUrl?: string;
   note?: string;
+  /**
+   * Best Buy's invite system, as the page's button put it. 'open' means the
+   * page is offering "ask for an invite" right now; 'requested' means this
+   * browser already asked. Null or absent: the shop has no such thing, or the
+   * page did not say. Like addToCart, read for the alert in this same request
+   * and not stored on the reading.
+   */
+  invite?: 'open' | 'requested' | null;
 }
 
 /**
@@ -2836,6 +2899,13 @@ export interface RecordedObservation {
   previousState: string | null;
   previousPrice: number | null;
   /**
+   * Who was selling it at the PREVIOUS reading. Carried beside the price so
+   * "dropped under your ceiling" can see a buy box that moved from a reseller
+   * over the ceiling to one under it, which is a price change nobody's stock
+   * state records.
+   */
+  previousSellerKind: string | null;
+  /**
    * What the shop said was available at the PREVIOUS reading. Null means it
    * had not said. Carried out of here so a load-in can be detected on the
    * edge — the difference between two readings — rather than by alerting on
@@ -2937,6 +3007,7 @@ export async function recordObservation(
       isFirst: false,
       previousState: before.state,
       previousPrice: toPrice(before.price),
+      previousSellerKind: before.seller_kind ?? null,
       previousQuantity:
         before.available_quantity === null || before.available_quantity === undefined
           ? null
@@ -3087,8 +3158,267 @@ export async function recordObservation(
     isFirst,
     previousState: before?.state ?? null,
     previousPrice,
+    previousSellerKind: before?.seller_kind ?? null,
     previousQuantity,
   };
+}
+
+// ─── Dropped under your ceiling, and Best Buy invites ────────────────────────
+//
+// Both hang off columns added on 19 Oct 2026 that the owner applies by hand,
+// so everything here FAILS SOFT: a missing column means "not yet", never an
+// error that breaks the reading it rode in on.
+
+/**
+ * Postgres saying a column or table this code expects is not there yet.
+ *
+ * 42703 is undefined_column and 42P01 undefined_table. The message is checked
+ * as well because a pooler or a driver may hand the error back without its
+ * code, and the cost of missing that is a 500 on /observations.
+ */
+export function isMissingSchema(err: unknown): boolean {
+  const code = String((err as { code?: unknown } | null)?.code ?? '');
+  if (code === '42703' || code === '42P01') return true;
+  const message = String((err as { message?: unknown } | null)?.message ?? err ?? '');
+  return /(column|relation) "?[\w.]+"? (of relation "?\w+"? )?does not exist/i.test(message);
+}
+
+/** The minimum a reading needs to be judged against a ceiling. */
+export interface CeilingReading {
+  state?: string | null;
+  price?: number | null;
+  sellerKind?: string | null;
+}
+
+/**
+ * Is this reading something the owner said he would pay for?
+ *
+ * In stock, a seller somebody could name, a price that was read, and a mission
+ * ceiling it is at or under. A seller nobody could name is never inside a
+ * ceiling: the same rule as the in-stock alert, because silence is not a
+ * retailer and a card that says "within your ceiling" is a recommendation.
+ */
+export function withinCeiling(o: CeilingReading | null | undefined, ceiling: number | null | undefined): boolean {
+  if (!o || o.state !== 'in') return false;
+  if (o.sellerKind !== 'retailer' && o.sellerKind !== 'marketplace') return false;
+  if (ceiling === null || ceiling === undefined || o.price === null || o.price === undefined) return false;
+  const price = Number(o.price);
+  const cap = Number(ceiling);
+  return Number.isFinite(price) && Number.isFinite(cap) && price > 0 && price <= cap;
+}
+
+/**
+ * The edge: inside the ceiling now, and the reading before was in stock but
+ * NOT inside it.
+ *
+ * Out of stock before is deliberately not this alert's business. Coming into
+ * stock is the in-stock card's moment, and that card already says "within
+ * your ceiling" for a reseller; firing both would be one event said twice.
+ * This exists for the case nothing else saw: already in stock, and the price
+ * (or the seller holding the buy box) moved across the line.
+ */
+export function droppedUnderCeiling(
+  before: CeilingReading | null,
+  now: CeilingReading,
+  ceiling: number | null | undefined,
+): boolean {
+  if (!before || before.state !== 'in') return false;
+  return withinCeiling(now, ceiling) && !withinCeiling(before, ceiling);
+}
+
+/**
+ * How long a "dropped under your ceiling" card stays said.
+ *
+ * A Walmart buy box can flap between two resellers every few minutes, one
+ * over the ceiling and one under. The edge alone would say it every time it
+ * flapped back; six hours is one card per evening for one deal.
+ */
+export const CEILING_ALERT_COOLDOWN_HOURS = 6;
+
+/**
+ * Claim the right to say "dropped under your ceiling" for this mission.
+ *
+ * One UPDATE, so two readings in one batch cannot both claim it. Returns
+ * false - never throws - when the column is not there yet: the alert waits
+ * for the SQL, and the reading is stored regardless.
+ */
+export async function claimCeilingAlert(
+  db: Sql,
+  userId: number,
+  missionId: number,
+  cooldownHours = CEILING_ALERT_COOLDOWN_HOURS,
+): Promise<boolean> {
+  try {
+    const rows = await db.query<{ id: number }>(
+      `UPDATE missions SET ceiling_alert_at = now()
+        WHERE id = $1 AND user_id = $2
+          AND (ceiling_alert_at IS NULL
+               OR ceiling_alert_at < now() - ($3 || ' hours')::interval)
+        RETURNING id`,
+      [missionId, userId, String(Math.max(0, Math.round(cooldownHours)))],
+    );
+    return rows.length > 0;
+  } catch (err) {
+    if (isMissingSchema(err)) return false;
+    throw err;
+  }
+}
+
+/**
+ * Note that an in-stock card already said "within your ceiling", so a dip
+ * straight afterwards does not say it again. Best-effort and silent.
+ */
+export async function stampCeilingAlert(db: Sql, userId: number, missionId: number): Promise<void> {
+  try {
+    await db.query(
+      'UPDATE missions SET ceiling_alert_at = now() WHERE id = $1 AND user_id = $2',
+      [missionId, userId],
+    );
+  } catch {
+    /* the column may not exist yet; this is a courtesy, not a rule */
+  }
+}
+
+/**
+ * Claim "invite window open" for this mission, once per window.
+ *
+ * Cleared by clearInviteOpenAlert when the page stops offering an invite, so
+ * the next window is news again. Fails soft like the ceiling claim.
+ */
+export async function claimInviteOpenAlert(db: Sql, userId: number, listingId: number): Promise<boolean> {
+  try {
+    const rows = await db.query<{ id: number }>(
+      `UPDATE missions SET invite_open_alert_at = now()
+        WHERE listing_id = $1 AND user_id = $2 AND invite_open_alert_at IS NULL
+        RETURNING id`,
+      [listingId, userId],
+    );
+    return rows.length > 0;
+  } catch (err) {
+    if (isMissingSchema(err)) return false;
+    throw err;
+  }
+}
+
+/** The page no longer offers an invite: forget we said so. */
+export async function clearInviteOpenAlert(db: Sql, userId: number, listingId: number): Promise<void> {
+  try {
+    await db.query(
+      `UPDATE missions SET invite_open_alert_at = NULL
+        WHERE listing_id = $1 AND user_id = $2 AND invite_open_alert_at IS NOT NULL`,
+      [listingId, userId],
+    );
+  } catch {
+    /* missing column: nothing was ever stamped */
+  }
+}
+
+/**
+ * How long a Best Buy invitation lasts, and when to remind.
+ *
+ * 24 hours from the moment the invite arrives (Best Buy's own rule, as
+ * reported by every guide to it). Reminders at 12 hours, 2 hours and 30
+ * minutes LEFT - so measured from the invite: 12 h, 22 h, 23.5 h after it.
+ */
+export const INVITE_HOURS = 24;
+export const INVITE_REMIND_LEFT_MIN = [12 * 60, 2 * 60, 30] as const;
+
+/** Start, or stop, the 24-hour countdown for this mission. */
+export async function setInviteReceived(
+  db: Sql,
+  userId: number,
+  missionId: number,
+  received: boolean,
+): Promise<'ok' | 'no-mission' | 'not-ready'> {
+  try {
+    const rows = await db.query<{ id: number }>(
+      received
+        ? `UPDATE missions SET invite_at = now(), invite_alerts_sent = 0
+            WHERE id = $1 AND user_id = $2 RETURNING id`
+        : `UPDATE missions SET invite_at = NULL, invite_alerts_sent = 0
+            WHERE id = $1 AND user_id = $2 RETURNING id`,
+      [missionId, userId],
+    );
+    return rows.length > 0 ? 'ok' : 'no-mission';
+  } catch (err) {
+    if (isMissingSchema(err)) return 'not-ready';
+    throw err;
+  }
+}
+
+export interface InviteReminder {
+  missionId: number;
+  name: string;
+  retailer: string;
+  url: string;
+  imageUrl: string;
+  inviteAt: string;
+  expiresAt: string;
+  /** Minutes left when this reminder was claimed. */
+  minutesLeft: number;
+}
+
+/**
+ * The invite reminders that have come due, each claimed exactly once.
+ *
+ * `invite_alerts_sent` is both the counter and the index into the schedule,
+ * and the UPDATE is a compare-and-set on it, the same shape as the in-stock
+ * follow-ups: two check-ins arriving together cannot both send the 2-hour
+ * one. A reminder whose moment passed while nothing was checking in is
+ * skipped forward rather than sent late in a burst - three cards at once with
+ * twenty minutes left is noise; the last one due is the one that matters.
+ */
+export async function claimInviteReminders(db: Sql, userId: number): Promise<InviteReminder[]> {
+  let rows: Record<string, unknown>[];
+  try {
+    rows = await db.query(
+      `SELECT m.id, m.invite_at, COALESCE(m.invite_alerts_sent, 0)::int AS sent,
+              l.retailer, l.url, p.name, p.image_url
+         FROM missions m
+         JOIN listings l ON l.id = m.listing_id
+         JOIN products p ON p.key = l.product_key
+        WHERE m.user_id = $1
+          AND m.invite_at IS NOT NULL
+          AND m.invite_at > now() - ($2 || ' hours')::interval
+          AND COALESCE(m.invite_alerts_sent, 0) < $3`,
+      [userId, String(INVITE_HOURS), INVITE_REMIND_LEFT_MIN.length],
+    );
+  } catch (err) {
+    if (isMissingSchema(err)) return [];
+    throw err;
+  }
+  const out: InviteReminder[] = [];
+  const nowMs = Date.now();
+  for (const r of rows) {
+    const inviteMs = Date.parse(new Date(String(r.invite_at)).toISOString());
+    const expiresMs = inviteMs + INVITE_HOURS * 3600_000;
+    const leftMin = (expiresMs - nowMs) / 60_000;
+    const sent = Number(r.sent);
+    // The furthest reminder whose moment has come.
+    let due = -1;
+    for (let i = sent; i < INVITE_REMIND_LEFT_MIN.length; i++) {
+      if (leftMin <= INVITE_REMIND_LEFT_MIN[i]!) due = i;
+    }
+    if (due < 0) continue;
+    const claimed = await db.query<{ id: number }>(
+      `UPDATE missions SET invite_alerts_sent = $3
+        WHERE id = $1 AND user_id = $2 AND COALESCE(invite_alerts_sent, 0) = $4
+        RETURNING id`,
+      [Number(r.id), userId, due + 1, sent],
+    );
+    if (claimed.length === 0) continue;
+    out.push({
+      missionId: Number(r.id),
+      name: String(r.name ?? ''),
+      retailer: String(r.retailer ?? ''),
+      url: String(r.url ?? ''),
+      imageUrl: String(r.image_url ?? ''),
+      inviteAt: new Date(inviteMs).toISOString(),
+      expiresAt: new Date(expiresMs).toISOString(),
+      minutesLeft: Math.max(0, Math.round(leftMin)),
+    });
+  }
+  return out;
 }
 
 /** Recent readings that actually changed. The "what happened" feed. */
@@ -3362,14 +3692,22 @@ export async function recordDrawings(
      * end, and stays ended.
      */
     const endedAt = before?.ended_at ? Date.parse(String(before.ended_at)) : null;
+    // An OPEN reading counts as a new cycle only when it does not carry a
+    // time from the old one. Since 19 Oct 2026 Phantom also calls a drawing
+    // open from "Drawing starts <a time that has passed>", and a badge
+    // flickering back to last week's start must not reopen last week's
+    // drawing - so an open row with a time needs that time after the end.
     const reborn = endedAt !== null && (
-      item.phase === 'open' ||
+      (item.phase === 'open' && (!item.windowAt || Date.parse(item.windowAt) > endedAt)) ||
       (item.phase === 'announced' && !!item.windowAt && Date.parse(item.windowAt) > endedAt)
     );
 
     // A new cycle is new: it is announced, counted down to and opened afresh.
     const isNew = before === undefined || reborn;
-    const justOpened = item.phase === 'open' && (isNew || before!.phase !== 'open');
+    // An ended drawing does not "open" again without being a new cycle: a
+    // stale start badge read as open must not ring about last week's window.
+    const stillEnded = endedAt !== null && !reborn;
+    const justOpened = item.phase === 'open' && !stillEnded && (isNew || before!.phase !== 'open');
 
     /*
      * Whose game, decided here as well as at the far end.
@@ -3421,7 +3759,12 @@ export async function recordDrawings(
                           THEN EXCLUDED.image_url ELSE drawings.image_url END,
          price = COALESCE(EXCLUDED.price, drawings.price),
          order_limit = COALESCE(EXCLUDED.order_limit, drawings.order_limit),
-         phase = EXCLUDED.phase,
+         -- Ended stays ended within a cycle, whatever a stale badge reads as.
+         phase = CASE
+           WHEN drawings.ended_at IS NOT NULL AND NOT $14::boolean AND EXCLUDED.phase = 'open'
+             THEN drawings.phase
+           ELSE EXCLUDED.phase
+         END,
          window_label = EXCLUDED.window_label,
          window_text = EXCLUDED.window_text,
          window_at = COALESCE(EXCLUDED.window_at, drawings.window_at),
@@ -3468,6 +3811,16 @@ export async function recordDrawings(
         reborn,
       ],
     );
+    if (reborn) {
+      // The 19 Oct reminder stamps belong to the old cycle too. Cleared in a
+      // statement of their own so the upsert above never names a column the
+      // owner may not have added yet.
+      await db.query(
+        `UPDATE drawings SET eve_alert_at = NULL, ended_alert_at = NULL
+          WHERE user_id = $1 AND retailer = $2 AND external_id = $3`,
+        [userId, retailer, externalId],
+      ).catch(() => {});
+    }
     if (rows[0]) out.push({ row: toDrawing(rows[0]), isNew, justOpened });
   }
   return out;
@@ -3617,6 +3970,82 @@ export async function claimClosingDrawings(
     [userId, Math.max(1, Math.round(withinMinutes)), [...WANTED]],
   );
   return rows.map(toDrawing);
+}
+
+/**
+ * The day-before reminder: a drawing we have known about for more than a day
+ * opens within the next 24 hours.
+ *
+ * Only for one announced more than a day ahead. A drawing first seen ten
+ * hours before its start has just had its "announced" card, and a reminder
+ * on the same pass would be the same news twice. Not within two hours of the
+ * start either: that is "opens soon"'s job, said half an hour out.
+ *
+ * Fails soft: before the eve_alert_at column exists it returns nothing.
+ */
+export async function claimEveDrawings(db: Sql, userId: number): Promise<DrawingRow[]> {
+  try {
+    const rows = await db.query(
+      `UPDATE drawings SET eve_alert_at = now()
+        WHERE id IN (
+          SELECT id FROM drawings
+           WHERE user_id = $1
+             AND gone_at IS NULL
+             AND entered_at IS NULL
+             AND franchise = ANY($2::text[])
+             AND ended_at IS NULL
+             AND opened_at IS NULL
+             AND eve_alert_at IS NULL
+             AND phase = 'announced'
+             AND window_label ILIKE '%start%'
+             AND window_at IS NOT NULL
+             AND window_at > now() + INTERVAL '2 hours'
+             AND window_at <= now() + INTERVAL '24 hours'
+             AND announced_at < window_at - INTERVAL '24 hours'
+        )
+        RETURNING *`,
+      [userId, [...WANTED]],
+    );
+    return rows.map(toDrawing);
+  } catch (err) {
+    if (isMissingSchema(err)) return [];
+    throw err;
+  }
+}
+
+/**
+ * "Drawing ended - watch your email for a win." Said once per drawing.
+ *
+ * Walmart picks winners at random after the window and places the order for
+ * them; the only notice is Walmart's own email. So the useful thing to say
+ * when a window shuts is where the answer will arrive.
+ *
+ * Only for one seen BEFORE it ended (a carousel row that was already over the
+ * first time we looked is history, not news), and only within six hours of
+ * the end - a machine that was off all night should not wake somebody to say
+ * a lottery shut yesterday.
+ */
+export async function claimEndedDrawings(db: Sql, userId: number): Promise<DrawingRow[]> {
+  try {
+    const rows = await db.query(
+      `UPDATE drawings SET ended_alert_at = now()
+        WHERE id IN (
+          SELECT id FROM drawings
+           WHERE user_id = $1
+             AND franchise = ANY($2::text[])
+             AND ended_at IS NOT NULL
+             AND ended_alert_at IS NULL
+             AND ended_at > now() - INTERVAL '6 hours'
+             AND first_seen_at < ended_at - INTERVAL '1 minute'
+        )
+        RETURNING *`,
+      [userId, [...WANTED]],
+    );
+    return rows.map(toDrawing);
+  } catch (err) {
+    if (isMissingSchema(err)) return [];
+    throw err;
+  }
 }
 
 /**

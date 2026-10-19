@@ -1150,3 +1150,32 @@ ALTER TABLE drawings ADD COLUMN IF NOT EXISTS franchise TEXT NOT NULL DEFAULT 'p
 -- silently loses rows is a board you cannot trust to have told you anything.
 -- ---------------------------------------------------------------------------
 ALTER TABLE drawings ADD COLUMN IF NOT EXISTS ended_at TIMESTAMPTZ;
+
+-- ---------------------------------------------------------------------------
+-- 19 Oct 2026: "dropped under your ceiling", drawing reminders, Best Buy invites
+--
+-- Every column below is read and written by code that FAILS SOFT when it is
+-- missing: the app keeps taking readings and simply does not send the new
+-- alert until this block has been run. Schema before code, but code that
+-- cannot break the old schema either, because the owner runs this by hand.
+--
+-- ceiling_alert_at      when "dropped under your ceiling" was last said for
+--                       this mission. A listing already in stock whose price
+--                       falls to the ceiling, or whose buy box moves to a
+--                       reseller under it, changes no stock state, so the
+--                       in-stock alert never saw it. Stamped so a marketplace
+--                       buy box flapping between two sellers says it once.
+-- invite_open_alert_at  when "invite window open" was said for this mission
+--                       (Best Buy). Cleared when the page stops offering one.
+-- invite_at             when the owner pressed "I got the invite". Best Buy
+--                       gives 24 hours from then; the reminders count from it.
+-- invite_alerts_sent    how many of the 12 h / 2 h / 30 min reminders went.
+-- eve_alert_at          the day-before reminder for a drawing, said once.
+-- ended_alert_at        "drawing ended - watch your email", said once.
+-- ---------------------------------------------------------------------------
+ALTER TABLE missions ADD COLUMN IF NOT EXISTS ceiling_alert_at TIMESTAMPTZ;
+ALTER TABLE missions ADD COLUMN IF NOT EXISTS invite_open_alert_at TIMESTAMPTZ;
+ALTER TABLE missions ADD COLUMN IF NOT EXISTS invite_at TIMESTAMPTZ;
+ALTER TABLE missions ADD COLUMN IF NOT EXISTS invite_alerts_sent INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE drawings ADD COLUMN IF NOT EXISTS eve_alert_at TIMESTAMPTZ;
+ALTER TABLE drawings ADD COLUMN IF NOT EXISTS ended_alert_at TIMESTAMPTZ;

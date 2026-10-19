@@ -323,6 +323,30 @@ test('Phantom is sent the settings its ceiling rule depends on', async () => {
   assert.equal(typeof body.settings.shippingAllowance, 'number');
 });
 
+test('PHANTOM IS TOLD WHICH OPT-IN SHOPS ARE ON, AND THE ANSWER STARTS AS NONE', async () => {
+  // watcher/src/hub.ts reads settings.enabledRetailers and watcher/src/drop.ts
+  // keeps Best Buy dark unless it is named there. A rename here would keep it
+  // dark forever, which is the safe failure - but a silent one.
+  const { db } = await withMission();
+  const { body } = await call(db, 'GET', '/api/missions/active');
+  assert.ok(Array.isArray(body.settings.enabledRetailers));
+  assert.deepEqual(body.settings.enabledRetailers, []);
+});
+
+test('Phantom can post a Best Buy reading with its invite field', async () => {
+  // watch.ts judge() adds `invite` only for a reader with an opinion.
+  const { db, listingId } = await withMission();
+  const { status, body } = await call(db, 'POST', '/observations', {
+    observations: [{
+      listingId, state: 'out', confidence: 'exact', price: 49.99, sellerKind: 'unknown',
+      sellerName: '', availableQuantity: null, orderLimit: null, addToCart: null,
+      invite: 'open', isPreOrder: false, releaseDate: null, imageUrl: '', note: 'invite open',
+    }],
+  });
+  assert.equal(status, 200);
+  assert.equal(body.failed, 0);
+});
+
 test('settings default to the safe direction, not to nothing', async () => {
   // Zero tax means "do not estimate" — the real number is caught at the cart.
   // Zero shipping allowance means postage must be free. Both refuse rather

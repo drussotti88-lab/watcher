@@ -3025,7 +3025,12 @@ const SETTINGS = {
 test('EVERY SHOP GETS ITS OWN SWITCH, LABELLED WITH THE STATE IT IS IN', async () => {
   const h = await boot({ ...DASHBOARD, settings: { ...SETTINGS, pausedRetailers: ['Walmart'] } });
   const chips = [...h.doc.querySelectorAll('#shop-toggles button')] as any[];
-  assert.equal(chips.length, 3, 'Target, Walmart, Pokemon Center');
+  assert.equal(chips.length, 4, 'Target, Walmart, Pokemon Center, Best Buy');
+  // Best Buy ships OFF and says so, with nothing in the settings naming it:
+  // an opt-in shop is off until it is switched on, not until it is paused.
+  const bestBuy = chips.find((c) => c.textContent.startsWith('Best Buy'));
+  assert.match(bestBuy.textContent, /off/);
+  assert.equal(bestBuy.getAttribute('aria-pressed'), 'false');
   const walmart = chips.find((c) => c.textContent.startsWith('Walmart'));
   const target = chips.find((c) => c.textContent.startsWith('Target'));
   assert.match(walmart.textContent, /off/);
@@ -3044,6 +3049,18 @@ test('pressing a shop switch sends only that shop’s change', async () => {
   assert.ok(posted, 'the toggle saved');
   assert.deepEqual(posted!.body.pausedRetailers.sort(), ['Target', 'Walmart'],
     'Walmart stays off; Target joins it — one switch does not rewrite the others');
+});
+
+test('SWITCHING BEST BUY ON NAMES IT IN enabledRetailers AND LEAVES THE OTHERS ALONE', async () => {
+  const h = await boot({ ...DASHBOARD, settings: { ...SETTINGS, pausedRetailers: ['Walmart'] } });
+  const bestBuy = ([...h.doc.querySelectorAll('#shop-toggles button')] as any[])
+    .find((c) => c.textContent.startsWith('Best Buy'));
+  bestBuy.click();
+  await h.settle();
+  const posted = h.calls.find((c) => c.method === 'POST' && c.path === '/api/settings');
+  assert.ok(posted);
+  assert.deepEqual(posted!.body.enabledRetailers, ['Best Buy']);
+  assert.deepEqual(posted!.body.pausedRetailers, ['Walmart'], 'Walmart stays off');
 });
 
 test('the drop window says what it is doing in words, and offers a way out', async () => {

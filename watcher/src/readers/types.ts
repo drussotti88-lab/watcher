@@ -58,6 +58,12 @@ export interface ProductRead {
    */
   addToCart: boolean | null;
   preOrder: PreOrder;
+  /**
+   * Best Buy's invite system: 'open' when the page is offering to take an
+   * invite request, 'requested' when this browser already asked. Null when
+   * the page said neither; absent from every reader but Best Buy's.
+   */
+  invite?: 'open' | 'requested' | null;
   note: string;
   /**
    * The retailer's own product photo, when the response names one.

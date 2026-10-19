@@ -264,6 +264,12 @@ export const ALERT_KINDS = [
   'drawClosing',
   'bought',
   'report',
+  // 19 Oct 2026.
+  'ceiling',
+  'drawEve',
+  'drawEnded',
+  'inviteOpen',
+  'inviteReminder',
 ] as const;
 export type AlertKind = (typeof ALERT_KINDS)[number];
 
@@ -282,6 +288,11 @@ export const ALERT_KIND_LABELS: Record<AlertKind, string> = {
   drawClosing: 'Drawing closing',
   bought: 'Bought',
   report: 'Tester report',
+  ceiling: 'Dropped under your ceiling',
+  drawEve: 'Drawing opens within a day',
+  drawEnded: 'Drawing ended (watch your email)',
+  inviteOpen: 'Invite window open (Best Buy)',
+  inviteReminder: 'Invite running out (Best Buy)',
 };
 
 /**
@@ -292,6 +303,10 @@ export const ALERT_KIND_LABELS: Record<AlertKind, string> = {
 export const DEFAULT_PUSH_KINDS: readonly AlertKind[] = [
   'stock', 'preorder', 'staged', 'queue', 'wall', 'blind',
   'drawOpened', 'drawSoon', 'drawClosing', 'bought',
+  // A price falling to the ceiling is a buy decision with a clock on it; an
+  // invite window is first-come; an invite running out is money left on the
+  // table. All three are "move within the hour".
+  'ceiling', 'inviteOpen', 'inviteReminder', 'drawEve',
 ];
 
 /**
@@ -299,7 +314,11 @@ export const DEFAULT_PUSH_KINDS: readonly AlertKind[] = [
  * again later. In-stock is off by default because it is over before the mail
  * is read; the owner can switch it on.
  */
-export const DEFAULT_EMAIL_KINDS: readonly AlertKind[] = ['drawAnnounced', 'bought', 'report'];
+export const DEFAULT_EMAIL_KINDS: readonly AlertKind[] = [
+  'drawAnnounced', 'bought', 'report',
+  // "Watch your email for a win" belongs where the win will arrive.
+  'drawEnded',
+];
 
 /** ntfy priorities: 5 rings through Do Not Disturb on most phones, 3 is normal. */
 const PUSH_STYLE: Record<AlertKind, { priority: number; tags: string }> = {
@@ -316,6 +335,11 @@ const PUSH_STYLE: Record<AlertKind, { priority: number; tags: string }> = {
   stillIn: { priority: 3, tags: 'repeat' },
   drawAnnounced: { priority: 3, tags: 'ticket' },
   report: { priority: 3, tags: 'memo' },
+  ceiling: { priority: 5, tags: 'rotating_light,moneybag' },
+  inviteOpen: { priority: 5, tags: 'rotating_light,envelope' },
+  inviteReminder: { priority: 4, tags: 'alarm_clock,envelope' },
+  drawEve: { priority: 3, tags: 'ticket,calendar' },
+  drawEnded: { priority: 3, tags: 'ticket,email' },
 };
 
 /**
@@ -932,7 +956,7 @@ export interface DrawItem {
  * window still opens loudly if that flag never behaves the way we expect. It
  * is deliberately worded as a prediction, because that is what it is.
  */
-export type DrawKind = 'opened' | 'announced' | 'closing' | 'soon';
+export type DrawKind = 'opened' | 'announced' | 'closing' | 'soon' | 'eve' | 'ended';
 
 /** "in 2 days", "in 47 minutes", "3 hours ago". */
 function untilPhrase(iso: string | null, now: string): string {
@@ -996,21 +1020,30 @@ export function buildDrawEmbeds(
     kind === 'opened' ? 'DRAWING OPEN'
     : kind === 'closing' ? 'DRAWING CLOSING'
     : kind === 'soon' ? 'DRAWING OPENS SOON'
+    : kind === 'eve' ? 'DRAWING OPENS WITHIN A DAY'
+    : kind === 'ended' ? 'DRAWING ENDED'
     : 'DRAWING ANNOUNCED';
 
   return items.slice(0, 10).map((i) => {
     const fields = [
       inline('Price', dollars(i.price)),
       inline(
-        kind === 'closing' ? 'Closes' : kind === 'opened' ? 'Open until' : 'Opens',
+        kind === 'closing' ? 'Closes'
+          : kind === 'opened' ? (/start/i.test(i.windowLabel) ? 'Opened' : 'Open until')
+          : kind === 'ended' ? 'Window'
+          : 'Opens',
         i.windowText || 'not stated',
       ),
       inline('Retailer', i.retailer || '—'),
     ];
-    const until = untilPhrase(i.windowAt, now);
-    if (until) {
+    const until = kind === 'ended' ? '' : untilPhrase(i.windowAt, now);
+    // "Time left: 40 minutes ago" is what an open drawing would say when it
+    // was called open from a START that has passed - so a time in the past is
+    // only shown where it is a start being counted down to.
+    const past = i.windowAt ? Date.parse(i.windowAt) < Date.parse(now) : false;
+    if (until && !(past && (kind === 'opened' || kind === 'closing'))) {
       fields.push(
-        inline(kind === 'announced' || kind === 'soon' ? 'That is' : 'Time left', until),
+        inline(kind === 'announced' || kind === 'soon' || kind === 'eve' ? 'That is' : 'Time left', until),
       );
     }
     // The link goes to the shelf, so the card has to say which row to look
@@ -1037,6 +1070,10 @@ export function buildDrawEmbeds(
             ? 'Entry closes soon and you have not marked this entered. Winners are drawn at random.'
             : kind === 'soon'
               ? 'This is Walmart\u2019s own stated start time, not a confirmed open button \u2014 the page may take a few minutes to catch up. Free, one entry per account, drawn at random.'
+            : kind === 'eve'
+              ? 'A reminder the day before. Nothing to do until it opens \u2014 free, one entry per account, drawn at random.'
+            : kind === 'ended'
+              ? 'The window has shut. Walmart draws winners at random and places the order for them \u2014 watch your email from Walmart for a win. Nothing else will tell you.'
               : 'Free, one entry per account. Winners are drawn at random after the window closes \u2014 entering early is worth no more than entering late.',
       },
       timestamp: now,
@@ -1052,6 +1089,90 @@ export async function announceDraw(
 ): Promise<void> {
   const embeds = buildDrawEmbeds(items, now, kind);
   if (embeds.length) await post(webhookUrl, embeds);
+}
+
+/**
+ * "Dropped to $X — within your $Y ceiling."
+ *
+ * The in-stock card, with the one sentence that makes it a different event
+ * put first. Same fields, same photo, same link: the reader racing to it
+ * needs exactly what the in-stock card gives, plus why it is news when the
+ * listing was in stock an hour ago too. The title says it before anything
+ * else does, because two seconds after the phone buzzes that is all anybody
+ * has read.
+ */
+export function buildCeilingEmbeds(items: StockItem[], now: string): Embed[] {
+  return buildStockEmbeds(items, now, 'already in stock - the price is what moved').map((e, n) => {
+    const i = items[n]!;
+    const who =
+      i.seller === 'marketplace'
+        ? ` Sold by ${i.sellerName || 'a third-party seller'}, not ${i.retailer || 'the shop'}.`
+        : '';
+    return {
+      ...e,
+      title: clip(`UNDER YOUR CEILING · ${i.name || 'a watched listing'}`, 240),
+      description: `Dropped to ${dollars(i.price)} — within your ${dollars(i.ceiling ?? null)} ceiling.${who}`,
+    };
+  });
+}
+
+/** One Best Buy listing whose invite state is worth saying. */
+export interface InviteItem {
+  name: string;
+  retailer: string;
+  url: string;
+  imageUrl: string;
+  price?: number | null;
+  /** For a reminder: when the invitation runs out, ISO. */
+  expiresAt?: string | null;
+  /** For a reminder: minutes left when it was claimed. */
+  minutesLeft?: number | null;
+}
+
+function leftPhrase(min: number): string {
+  if (min >= 90) return `${Math.round(min / 60)} hours`;
+  return `${Math.max(1, Math.round(min))} minutes`;
+}
+
+/**
+ * Best Buy's invite system, said as what it is.
+ *
+ * `open`: the product page is offering "ask for an invite" right now. It says
+ * plainly that asking is the reader's job - Phantom never presses that button,
+ * because an invite request is the account holder applying to buy, and it
+ * reads pages without signing in. `reminder`: the reader said they got an
+ * invite, Best Buy gives 24 hours, and this one is counting down.
+ */
+export function buildInviteEmbed(i: InviteItem, now: string, kind: 'open' | 'reminder'): Embed {
+  const fields = [inline('Retailer', i.retailer || 'Best Buy')];
+  if (i.price !== null && i.price !== undefined) fields.unshift(inline('Price', dollars(i.price)));
+  if (kind === 'reminder' && i.expiresAt) {
+    fields.push(inline('Runs out', discordTime(i.expiresAt)));
+  }
+  const left = i.minutesLeft ?? null;
+  return {
+    title: clip(
+      kind === 'open'
+        ? `INVITE WINDOW OPEN · ${i.name || 'a watched listing'}`
+        : `INVITE RUNS OUT IN ${left === null ? 'UNDER A DAY' : leftPhrase(left).toUpperCase()} · ${i.name || 'a watched listing'}`,
+      240,
+    ),
+    ...(i.url ? { url: i.url } : {}),
+    description:
+      kind === 'open'
+        ? 'Best Buy is taking invite requests for this right now. Ask for one on the product page yourself - Phantom never asks for you.'
+        : 'You said you got the invite. Buy it on the product page before it runs out.',
+    color: COLOR_QUEUE,
+    ...(i.imageUrl ? { thumbnail: { url: i.imageUrl } } : {}),
+    fields,
+    footer: {
+      text:
+        kind === 'open'
+          ? 'If one arrives, press "I got the invite" in the app and it will remind you at 12 hours, 2 hours and 30 minutes left.'
+          : 'Reminders ride on Phantom’s check-ins: they arrive while Phantom is running.',
+    },
+    timestamp: now,
+  };
 }
 
 /**
@@ -1123,6 +1244,7 @@ const SHOP_HOME: Record<string, string> = {
   Walmart: 'https://www.walmart.com',
   Target: 'https://www.target.com',
   'Pokemon Center': 'https://www.pokemoncenter.com',
+  'Best Buy': 'https://www.bestbuy.com',
 };
 
 /**
