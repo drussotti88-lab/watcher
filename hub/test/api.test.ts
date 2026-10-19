@@ -455,10 +455,10 @@ test('EACH PRODUCT GETS ITS OWN CARD, NOT A SHARED DIGEST', async () => {
   );
 
   assert.equal(embeds.length, 2, 'two products, two cards');
-  assert.equal(embeds[0].title, 'Chaos Rising ETB');
-  assert.equal(embeds[0].url, 'https://www.target.com/p/-/A-95267143', 'the title is the link');
-  assert.equal(embeds[0].thumbnail?.url, 'https://img.test/a.png');
-  assert.ok(!embeds[1].thumbnail, 'no photo, no empty thumbnail');
+  assert.equal(embeds[0]!.title, 'Chaos Rising ETB');
+  assert.equal(embeds[0]!.url, 'https://www.target.com/p/-/A-95267143', 'the title is the link');
+  assert.equal(embeds[0]!.thumbnail?.url, 'https://img.test/a.png');
+  assert.ok(!embeds[1]!.thumbnail, 'no photo, no empty thumbnail');
 
   const f = (e: any, name: string) => e.fields.find((x: any) => x.name === name)?.value;
   assert.equal(f(embeds[0], 'Price'), '$59.99');
@@ -467,7 +467,7 @@ test('EACH PRODUCT GETS ITS OWN CARD, NOT A SHARED DIGEST', async () => {
   assert.equal(f(embeds[1], 'Stock'), '7 available', 'a real count is printed plainly');
   assert.equal(f(embeds[1], 'vs MSRP'), 'at or under');
   assert.ok(!f(embeds[1], 'Mission'), 'the owner\'s arming state is not the readers\' business');
-  assert.ok(embeds[0].fields.every((x: any) => x.inline), 'laid out across, not down');
+  assert.ok(embeds[0]!.fields!.every((x: any) => x.inline), 'laid out across, not down');
 });
 
 test('a marketplace seller is named and flagged, because the price will not say', async () => {
@@ -495,7 +495,7 @@ test('STAGED STOCK IS ITS OWN CARD, IN ITS OWN COLOUR', async () => {
        url: 'https://t.test/x', imageUrl: '', releaseDate: '2026-09-16' }],
     now,
   );
-  assert.equal(staged.title, '30th Celebration ETB');
+  assert.equal(staged!.title, '30th Celebration ETB');
   const f = (e: any, n: string) => e.fields.find((x: any) => x.name === n)?.value;
   assert.match(f(staged, 'Stock staged'), /31,000/, 'a number this size needs its commas');
   assert.equal(f(staged, 'Buyable'), 'not yet');
@@ -506,7 +506,7 @@ test('STAGED STOCK IS ITS OWN CARD, IN ITS OWN COLOUR', async () => {
        seller: 'retailer', sellerName: '', quantity: 1, orderLimit: null }],
     now,
   );
-  assert.notEqual(staged.color, inStock.color);
+  assert.notEqual(staged!.color, inStock!.color);
 });
 
 test('A DISCORD INVITE MUST BE A DISCORD LINK', async () => {
@@ -528,7 +528,7 @@ test('A WAITING ROOM IS AN INSTRUCTION, NOT A STATUS', async () => {
   // on purpose: a queue is site-wide, and while it is up the product page says
   // sold out — pointing the reader at that page points them at the lie.
   const e = buildQueueEmbed('Walmart', '2026-09-02T21:00:00Z', '2026-09-02T21:00:05Z');
-  assert.match(e.title, /WAITING ROOM UP AT WALMART/);
+  assert.match(e.title ?? '', /WAITING ROOM UP AT WALMART/);
   assert.equal(e.url, 'https://www.walmart.com');
   assert.match(e.description ?? '', /get in line yourself/i);
   // The reader has to be told the page will lie to them.
@@ -541,7 +541,7 @@ test('A WAITING ROOM IS AN INSTRUCTION, NOT A STATUS', async () => {
 test('an unknown shop still gets an alert, just without a link', async () => {
   const { buildQueueEmbed } = await import('../src/notify.ts');
   const e = buildQueueEmbed('', '', '2026-09-02T21:00:05Z');
-  assert.match(e.title, /WAITING ROOM UP AT A SHOP/);
+  assert.match(e.title ?? '', /WAITING ROOM UP AT A SHOP/);
   assert.equal(e.url, undefined);
 });
 

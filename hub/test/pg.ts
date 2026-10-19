@@ -18,6 +18,10 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { Sql, Statement } from '../src/db.ts';
 
+// Only the part of PGlite's transaction this file uses, written out so strict
+// mode has no implicit any even where the package's own types are missing.
+type PgTransaction = { query(text: string, params?: never[]): Promise<unknown> };
+
 export class TestDb implements Sql {
   private pg: PGlite;
 
@@ -42,7 +46,7 @@ export class TestDb implements Sql {
     if (statements.length === 0) return;
     // A real transaction, which is the behaviour production gets from the
     // pooler. Half a batch landing is the failure mode this prevents.
-    await this.pg.transaction(async (tx) => {
+    await this.pg.transaction(async (tx: PgTransaction) => {
       for (const s of statements) await tx.query(s.text, (s.params ?? []) as never[]);
     });
   }
