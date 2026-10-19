@@ -19,5 +19,6 @@
   "intervalSec": 90,
   "autoUpdate": true,
   "neverTouch": [],
-  "lightenReads": true
+  "lightenReads": true,
+  "wallProbeHours": 6
 }
