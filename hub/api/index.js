@@ -11883,7 +11883,8 @@ function createHandler(db2, env2) {
         await countUsers(db2);
         return json({ ok: true });
       } catch (err) {
-        return json({ ok: false, error: err.message }, 503);
+        console.error("[health] database did not answer:", err);
+        return json({ ok: false, error: "the database did not answer" }, 503);
       }
     }
     if (request.method === "GET" && path === "/manifest.webmanifest") {
@@ -12588,7 +12589,9 @@ function createHandler(db2, env2) {
       return json({ id });
     }
     if (request.method === "GET" && path === "/api/phantom.zip") {
-      if (caller.kind !== "browser") return json({ error: "sign in first" }, 403);
+      if (caller.kind !== "browser" && caller.kind !== "watcher") {
+        return json({ error: "sign in first" }, 403);
+      }
       if (!await canArm(db2, userId)) {
         return json({ error: "watching needs no Phantom of your own; the owner\u2019s does the reading" }, 403);
       }
@@ -13385,8 +13388,28 @@ function env() {
       process.env,
       [process.env.DISCORD_WEBHOOK_URL ?? "", walmart]
     ),
+    // The OTHER name for Walmart's room, already folded into `walmart` above.
+    // Given the resolved value, not the raw variable: the raw one could equal
+    // the main webhook, which walmartWebhookFrom deliberately refuses, and
+    // app.ts falls back to this field. Passing it keeps env.test.ts's rule
+    // ("every field of Env is passed through") free of exceptions.
+    DISCORD_DRAWS_WEBHOOK_URL: walmart,
+    // Still signs in as user 1 (the owner). Not retired yet; see types.ts.
     INGEST_TOKEN: process.env.INGEST_TOKEN,
     APP_PASSWORD: process.env.APP_PASSWORD,
+    /*
+     * The four below were declared in Env (or AuthEnv) and read by the
+     * handler, but never passed through here — so in production they were
+     * always undefined however they were set in Vercel. Found 19 Oct 2026:
+     * sessions were being signed with APP_PASSWORD (the fallback in
+     * auth.ts sessionSecret), and the vault link (SSO, entitlement checks,
+     * sending acquisitions) could never switch on. env.test.ts now fails if
+     * a field of Env is missing from this object.
+     */
+    SESSION_SECRET: process.env.SESSION_SECRET,
+    PHANTOM_SHARED_SECRET: process.env.PHANTOM_SHARED_SECRET,
+    VAULT_URL: process.env.VAULT_URL,
+    VAULT_OWNER_USER_ID: process.env.VAULT_OWNER_USER_ID,
     /*
      * The NAMES of every webhook variable that actually arrived, with a value.
      *
@@ -13439,8 +13462,9 @@ async function handler(req, res) {
     });
   } catch (err) {
     if (isConnectionFailure(err)) dropConnection();
+    console.error("[app] request failed:", err);
     response = new Response(
-      JSON.stringify({ error: err.message }, null, 2),
+      JSON.stringify({ error: "the app hit an error; the details are in its server log" }, null, 2),
       { status: 500, headers: { "Content-Type": "application/json; charset=utf-8" } }
     );
   }
