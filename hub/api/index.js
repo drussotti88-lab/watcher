@@ -513,6 +513,552 @@ function franchiseOf(title) {
   };
 }
 
+// src/notify.ts
+var COLOR_NEW = 2059087;
+var COLOR_OPS = 9069584;
+var COLOR_STAGED = 12597547;
+var COLOR_IN = 2067276;
+var COLOR_PRE = 5793266;
+var COLOR_DRAW = 8150230;
+var COLOR_QUEUE = 15105570;
+var COLOR_WIN = 16106818;
+var COLOR_WALL = 7371142;
+var MAX_FIELDS = 20;
+var inline = (name, value) => ({ name, value, inline: true });
+var dollars = (n) => n === null || n === void 0 ? "\u2014" : `$${Number(n).toFixed(2)}`;
+function stockPhrase(quantity, orderLimit, sellable) {
+  if (quantity === null || quantity === void 0) return sellable ? "in stock" : "not sellable";
+  const capped = quantity > 0 && (orderLimit !== null && orderLimit !== void 0 && orderLimit > 0 && quantity === orderLimit || quantity === 10 || quantity === 20);
+  const n = capped ? `${quantity}+` : String(quantity);
+  return sellable ? `${n} available` : `${n} staged`;
+}
+function clip(s, n) {
+  return s.length <= n ? s : `${s.slice(0, n - 1)}\u2026`;
+}
+function buildDiscoveryEmbed(label, retailer, items, now) {
+  const shown = items.slice(0, MAX_FIELDS);
+  const fields = shown.map((i) => ({
+    name: clip(i.name || i.externalId, 240),
+    value: clip(i.url ? `[${i.externalId}](${i.url})` : i.externalId, 1e3)
+  }));
+  const extra = items.length - shown.length;
+  return {
+    title: `\u{1F195} ${items.length} new ${items.length === 1 ? "product" : "products"} \u2014 ${retailer}`,
+    description: `Seen for the first time in **${label}**.` + (extra > 0 ? `
+_${extra} more not listed._` : ""),
+    color: COLOR_NEW,
+    fields,
+    footer: { text: "catalog discovery \xB7 not a stock signal" },
+    timestamp: now
+  };
+}
+function buildOpsEmbed(results, now) {
+  const failed = results.filter((r) => !r.ok);
+  if (failed.length === 0) return null;
+  return {
+    title: `\u26A0\uFE0F ${failed.length} source${failed.length === 1 ? "" : "s"} failed`,
+    color: COLOR_OPS,
+    fields: failed.slice(0, MAX_FIELDS).map((r) => ({
+      name: clip(r.label, 240),
+      value: clip(r.error ?? "unknown error", 1e3)
+    })),
+    timestamp: now
+  };
+}
+var sendLimits = { timeoutMs: 4e3, retryCapMs: 2e3 };
+async function retryWaitMs(res) {
+  let seconds = Number.NaN;
+  const header = res.headers.get("retry-after");
+  if (header !== null && header.trim() !== "") seconds = Number(header);
+  if (!Number.isFinite(seconds)) {
+    const body = await res.json().catch(() => null);
+    seconds = Number(body?.retry_after);
+  }
+  const ms = Number.isFinite(seconds) && seconds >= 0 ? Math.ceil(seconds * 1e3) : 1e3;
+  return ms <= sendLimits.retryCapMs ? ms : null;
+}
+async function send(label, url, init) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const res = await fetch(url, { ...init, signal: AbortSignal.timeout(sendLimits.timeoutMs) });
+      if (res.ok || res.status === 204) return true;
+      if (res.status === 429 && attempt === 0) {
+        const wait = await retryWaitMs(res);
+        if (wait !== null) {
+          await new Promise((r) => setTimeout(r, wait));
+          continue;
+        }
+        console.warn(`${label} rate-limited for longer than we can wait; this alert is lost`);
+        return false;
+      }
+      const detail = await res.text().catch(() => "");
+      console.warn(`${label} rejected the send`, res.status, detail.slice(0, 300));
+      return false;
+    } catch (err) {
+      console.warn(`${label} unreachable`, err instanceof Error ? err.message : String(err));
+      return false;
+    }
+  }
+  return false;
+}
+async function post(url, embeds) {
+  if (!url || embeds.length === 0) return false;
+  return send("discord", url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ embeds: embeds.slice(0, 10) })
+  });
+}
+var ALERT_KINDS = [
+  "stock",
+  "preorder",
+  "stillIn",
+  "staged",
+  "queue",
+  "wall",
+  "blind",
+  "drawOpened",
+  "drawSoon",
+  "drawAnnounced",
+  "drawClosing",
+  "bought",
+  "report"
+];
+var ALERT_KIND_LABELS = {
+  stock: "In stock",
+  preorder: "Pre-order opened",
+  stillIn: "Still in stock (follow-ups)",
+  staged: "Stock staged before a drop",
+  queue: "Waiting room up",
+  wall: "Human check (wall) up",
+  blind: "Phantom is blind at a shop",
+  drawOpened: "Drawing open",
+  drawSoon: "Drawing opens soon",
+  drawAnnounced: "Drawing announced",
+  drawClosing: "Drawing closing",
+  bought: "Bought",
+  report: "Tester report"
+};
+var DEFAULT_PUSH_KINDS = [
+  "stock",
+  "preorder",
+  "staged",
+  "queue",
+  "wall",
+  "blind",
+  "drawOpened",
+  "drawSoon",
+  "drawClosing",
+  "bought"
+];
+var DEFAULT_EMAIL_KINDS = ["drawAnnounced", "bought", "report"];
+var PUSH_STYLE = {
+  stock: { priority: 5, tags: "rotating_light,shopping_cart" },
+  queue: { priority: 5, tags: "rotating_light,hourglass" },
+  preorder: { priority: 4, tags: "calendar" },
+  staged: { priority: 4, tags: "package" },
+  wall: { priority: 4, tags: "no_entry" },
+  blind: { priority: 4, tags: "see_no_evil" },
+  drawOpened: { priority: 4, tags: "ticket" },
+  drawClosing: { priority: 4, tags: "ticket,alarm_clock" },
+  bought: { priority: 4, tags: "tada" },
+  drawSoon: { priority: 3, tags: "ticket" },
+  stillIn: { priority: 3, tags: "repeat" },
+  drawAnnounced: { priority: 3, tags: "ticket" },
+  report: { priority: 3, tags: "memo" }
+};
+function asciiHeader(s, max = 200) {
+  return String(s ?? "").normalize("NFKD").replace(/[̀-ͯ]/g, "").replace(/[‒-―·•]/g, "-").replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/[^\x20-\x7e]/g, "").replace(/\s+/g, " ").trim().slice(0, max);
+}
+function centralTime(ms) {
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Chicago",
+    hour: "numeric",
+    minute: "2-digit"
+  }).format(new Date(ms)).replace(/[\u202f\u00a0]/g, " ") + " CT";
+}
+function embedToText(e) {
+  const plain = (s) => String(s ?? "").replace(/<t:(\d+):[a-zA-Z]>/g, (_, sec) => centralTime(Number(sec) * 1e3)).replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, "$1 ($2)").replace(/\*\*([^*]+)\*\*/g, "$1").replace(/(^|\s)_([^_\n]+)_(?=\s|$|[.,;:!?])/g, "$1$2").trim();
+  const lines = [];
+  if (e.description) lines.push(plain(e.description));
+  for (const f of e.fields ?? []) lines.push(`${plain(f.name)}: ${plain(f.value)}`);
+  if (e.footer?.text) lines.push(plain(e.footer.text));
+  return { title: plain(e.title) || "Phantom", body: lines.join("\n"), url: e.url ?? "" };
+}
+async function sendPush(target, kind, msg) {
+  if (!target.topic) return false;
+  const style = kind === "test" ? { priority: 3, tags: "white_check_mark" } : PUSH_STYLE[kind];
+  const headers = {
+    Title: asciiHeader(msg.title) || "Phantom",
+    Priority: String(style.priority),
+    Tags: style.tags
+  };
+  if (/^https?:\/\/[\x21-\x7e]+$/.test(msg.url)) headers.Click = msg.url;
+  if (target.token) headers.Authorization = `Bearer ${target.token}`;
+  const server = String(target.server || "https://ntfy.sh").replace(/\/+$/, "");
+  return send("ntfy", `${server}/${encodeURIComponent(target.topic)}`, {
+    method: "POST",
+    headers,
+    body: msg.body.slice(0, 3500)
+  });
+}
+async function sendEmail(target, subject, text) {
+  if (!target.apiKey || !target.from || !target.to) return false;
+  return send("email", "https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${target.apiKey}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      from: target.from,
+      to: [target.to],
+      subject: subject.slice(0, 200),
+      text
+    })
+  });
+}
+function anyOutlet(out) {
+  return Boolean(out && (out.rooms.main || out.push || out.email));
+}
+async function deliver(out, kind, items, build, opts = {}) {
+  const sent = { discord: 0, push: 0, email: 0 };
+  if (items.length === 0) return sent;
+  const jobs = [];
+  const groups = opts.room !== void 0 ? opts.room ? [{ url: opts.room, items: [...items] }] : [] : splitByRoom(items, out.rooms);
+  for (const g of groups) {
+    jobs.push(post(g.url, build(g.items)).then((ok) => {
+      if (ok) sent.discord++;
+    }));
+  }
+  const wantsPush = out.push !== null && out.pushKinds.includes(kind);
+  const wantsEmail = out.email !== null && out.emailKinds.includes(kind);
+  if (wantsPush || wantsEmail) {
+    const texts = build([...items]).map(embedToText);
+    if (wantsPush) {
+      for (const t of texts.slice(0, 3)) {
+        jobs.push(sendPush(out.push, kind, t).then((ok) => {
+          if (ok) sent.push++;
+        }));
+      }
+    }
+    if (wantsEmail && texts.length > 0) {
+      const subject = texts[0].title + (texts.length > 1 ? ` (+${texts.length - 1} more)` : "");
+      const text = texts.map((t) => [t.title, t.body, t.url].filter(Boolean).join("\n")).join("\n\n") + "\n\n- Phantom";
+      jobs.push(sendEmail(out.email, subject, text).then((ok) => {
+        if (ok) sent.email++;
+      }));
+    }
+  }
+  await Promise.allSettled(jobs);
+  return sent;
+}
+function looksLikeWebhook(value) {
+  return /^https:\/\/(canary\.|ptb\.)?discord(app)?\.com\/api\/webhooks\/\d+\/\S+/.test(
+    String(value ?? "").trim()
+  );
+}
+function webhookVarNames(vars) {
+  return Object.keys(vars).filter((k) => looksLikeWebhook(vars[k])).sort();
+}
+function nearMissVarNames(vars) {
+  return Object.keys(vars).filter((k) => /hook|discord|walmart|draw|phantom/i.test(k) && !looksLikeWebhook(vars[k])).sort();
+}
+function shopWebhookFrom(vars, spec) {
+  const spoken = spec.taken.map((t) => String(t ?? "").trim()).filter(Boolean);
+  const ok = (v) => {
+    const url = String(v ?? "").trim();
+    return looksLikeWebhook(url) && !spoken.includes(url) ? url : "";
+  };
+  for (const name of spec.named) {
+    const found = ok(vars[name]);
+    if (found) return found;
+  }
+  for (const key of Object.keys(vars).sort()) {
+    if (!spec.hint.test(key)) continue;
+    const found = ok(vars[key]);
+    if (found) return found;
+  }
+  return "";
+}
+function walmartWebhookFrom(vars, main) {
+  return shopWebhookFrom(vars, {
+    named: ["DISCORD_WALMART_WEBHOOK_URL", "DISCORD_DRAWS_WEBHOOK_URL"],
+    hint: /walmart|draw/i,
+    taken: [main]
+  });
+}
+function pokemonCenterWebhookFrom(vars, taken) {
+  return shopWebhookFrom(vars, {
+    named: ["DISCORD_POKEMON_CENTER_WEBHOOK_URL", "DISCORD_PKC_WEBHOOK_URL"],
+    hint: /pok[e\u00e9]?mon|\bpkc\b|centre?\b/i,
+    taken
+  });
+}
+function roomKey(retailer) {
+  return String(retailer ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+function roomFor(rooms, retailer) {
+  return rooms.byRetailer[roomKey(retailer)] || rooms.main;
+}
+function splitByRoom(items, rooms) {
+  const out = [];
+  const index = /* @__PURE__ */ new Map();
+  for (const item of items) {
+    const url = roomFor(rooms, item.retailer);
+    if (!url) continue;
+    const at = index.get(url);
+    if (at === void 0) {
+      index.set(url, out.length);
+      out.push({ url, items: [item] });
+    } else {
+      out[at].items.push(item);
+    }
+  }
+  return out;
+}
+function buyablePhrase(addToCart) {
+  if (addToCart === true) return "\u2705 add to cart works";
+  if (addToCart === false) return "\u23F3 NOT addable \u2014 queue or hold";
+  return null;
+}
+function buildStockEmbeds(items, now, note) {
+  return items.slice(0, 10).map((i) => {
+    const pre = i.isPreOrder === true;
+    const fields = [
+      inline("Price", dollars(i.price)),
+      // "0 available" on a pre-order is the normal state of something you can
+      // order right now — nothing has been manufactured yet — and printed
+      // beside a price it reads as a listing that is already gone.
+      inline(
+        pre ? "Ships" : "Stock",
+        pre ? i.releaseDate ? `on ${i.releaseDate}` : "on release" : stockPhrase(i.quantity, i.orderLimit, true)
+      ),
+      inline("Retailer", i.retailer || "\u2014")
+    ];
+    const buyable = buyablePhrase(i.addToCart);
+    if (buyable) fields.push(inline("Buyable", buyable));
+    fields.push(inline("MSRP", dollars(i.msrp)));
+    if (i.price !== null && i.msrp !== null && i.msrp > 0) {
+      const over = i.price - i.msrp;
+      fields.push(inline("vs MSRP", over > 5e-3 ? `+${dollars(over)}` : "at or under"));
+    } else {
+      fields.push(inline("vs MSRP", "\u2014"));
+    }
+    fields.push(
+      inline(
+        "Seller",
+        i.seller === "marketplace" ? `\u26A0\uFE0F ${i.sellerName || "marketplace seller"}` : i.retailer || "the shop"
+      )
+    );
+    const thirdParty = i.seller === "marketplace" ? `Third-party seller${i.sellerName ? ` (${i.sellerName})` : ""}` + (i.ceiling !== null && i.ceiling !== void 0 ? `, within your ${dollars(i.ceiling)} ceiling.` : ".") : "";
+    return {
+      // The prefix is the point. Two seconds after the notification lands,
+      // the title is all anybody has read.
+      title: clip((pre ? "PRE-ORDER \xB7 " : "") + (i.name || "a watched listing"), 240),
+      ...i.url ? { url: i.url } : {},
+      ...thirdParty ? { description: thirdParty } : {},
+      color: pre ? COLOR_PRE : COLOR_IN,
+      ...i.imageUrl ? { thumbnail: { url: i.imageUrl } } : {},
+      fields,
+      ...note ? { footer: { text: note } } : {},
+      timestamp: now
+    };
+  });
+}
+async function announceStock(webhookUrl, items, now, note) {
+  const embeds = buildStockEmbeds(items, now, note);
+  if (embeds.length) await post(webhookUrl, embeds);
+}
+function untilPhrase(iso, now) {
+  if (!iso) return "";
+  const ms = Date.parse(iso) - Date.parse(now);
+  if (!Number.isFinite(ms)) return "";
+  const mins = Math.round(Math.abs(ms) / 6e4);
+  const said = mins < 90 ? `${mins} minute${mins === 1 ? "" : "s"}` : mins < 2880 ? `${Math.round(mins / 60)} hours` : `${Math.round(mins / 1440)} days`;
+  return ms >= 0 ? `in ${said}` : `${said} ago`;
+}
+var DRAW_HOME = {
+  Walmart: "https://www.walmart.com/shop/collectibles/draw"
+};
+function buildDrawEmbeds(items, now, kind) {
+  const heading = kind === "opened" ? "DRAWING OPEN" : kind === "closing" ? "DRAWING CLOSING" : kind === "soon" ? "DRAWING OPENS SOON" : "DRAWING ANNOUNCED";
+  return items.slice(0, 10).map((i) => {
+    const fields = [
+      inline("Price", dollars(i.price)),
+      inline(
+        kind === "closing" ? "Closes" : kind === "opened" ? "Open until" : "Opens",
+        i.windowText || "not stated"
+      ),
+      inline("Retailer", i.retailer || "\u2014")
+    ];
+    const until = untilPhrase(i.windowAt, now);
+    if (until) {
+      fields.push(
+        inline(kind === "announced" || kind === "soon" ? "That is" : "Time left", until)
+      );
+    }
+    if (i.externalId) fields.push(inline("Item", i.externalId));
+    if (i.orderLimit !== null && i.orderLimit !== void 0) {
+      fields.push(inline("Limit", `${i.orderLimit} per entry`));
+    }
+    const go = DRAW_HOME[i.retailer] ?? "";
+    return {
+      title: clip(`${heading} \xB7 ${i.name || "a collectibles drawing"}`, 240),
+      ...go ? { url: go } : {},
+      color: COLOR_DRAW,
+      ...i.imageUrl ? { thumbnail: { url: i.imageUrl } } : {},
+      fields,
+      footer: {
+        text: kind === "closing" ? "Entry closes soon and you have not marked this entered. Winners are drawn at random." : kind === "soon" ? "This is Walmart\u2019s own stated start time, not a confirmed open button \u2014 the page may take a few minutes to catch up. Free, one entry per account, drawn at random." : "Free, one entry per account. Winners are drawn at random after the window closes \u2014 entering early is worth no more than entering late."
+      },
+      timestamp: now
+    };
+  });
+}
+async function announceDraw(webhookUrl, items, now, kind) {
+  const embeds = buildDrawEmbeds(items, now, kind);
+  if (embeds.length) await post(webhookUrl, embeds);
+}
+async function announceTest(webhookUrl, now) {
+  await post(webhookUrl, [
+    {
+      title: "\u2705 Phantom is connected",
+      description: "This is a test message. Real alerts arrive one card per product: in stock on a watched listing, stock staged before a drop, and sources that stopped working.",
+      color: COLOR_IN,
+      footer: { text: "sent from Settings" },
+      timestamp: now
+    }
+  ]);
+}
+function buildStagedEmbeds(items, now, note) {
+  return items.slice(0, 10).map((i) => {
+    const fields = [
+      inline("Stock staged", `**${i.quantity.toLocaleString("en-US")}** units`),
+      inline("Retailer", i.retailer || "\u2014"),
+      inline("Buyable", "not yet")
+    ];
+    if (i.releaseDate) fields.push(inline("On sale", i.releaseDate));
+    return {
+      title: clip(i.name || "a watched listing", 240),
+      ...i.url ? { url: i.url } : {},
+      description: "Counted in the warehouse, and the shop is still saying no.",
+      color: COLOR_STAGED,
+      ...i.imageUrl ? { thumbnail: { url: i.imageUrl } } : {},
+      fields,
+      footer: { text: note ?? "not buyable yet \u2014 this is the warning, not the drop" },
+      timestamp: now
+    };
+  });
+}
+var SHOP_HOME = {
+  Walmart: "https://www.walmart.com",
+  Target: "https://www.target.com",
+  "Pokemon Center": "https://www.pokemoncenter.com"
+};
+function buildQueueEmbed(retailer, at, now) {
+  const home = SHOP_HOME[retailer] ?? "";
+  return {
+    title: `WAITING ROOM UP AT ${(retailer || "A SHOP").toUpperCase()}`,
+    ...home ? { url: home } : {},
+    description: "A drop is very likely live right now. **Get in line yourself** \u2014 a place in the queue is the scarce thing, and it stops being available the longer this sits.",
+    color: COLOR_QUEUE,
+    fields: [
+      inline("Shop", retailer || "\u2014"),
+      inline("Seen", discordTime(at)),
+      inline("Product pages", "will say sold out \u2014 ignore that")
+    ],
+    footer: {
+      text: "Phantom does not join queues or answer bot checks. This one is yours."
+    },
+    timestamp: now
+  };
+}
+function discordTime(iso) {
+  const ms = Date.parse(String(iso ?? ""));
+  return Number.isFinite(ms) ? `<t:${Math.floor(ms / 1e3)}:t>` : "just now";
+}
+function buildWallEmbed(i, now) {
+  const home = SHOP_HOME[i.retailer] ?? "";
+  const fields = [
+    inline("Shop", i.retailer || "\u2014"),
+    inline("Seen", discordTime(i.at)),
+    inline("Check", i.reason || "a human check")
+  ];
+  if (i.restingMinutes) {
+    fields.push(inline("Not reading for", `${i.restingMinutes} min`));
+  }
+  const shop = (i.retailer || "A SHOP").toUpperCase();
+  return {
+    title: i.still ? `${shop} STILL HAS A HUMAN CHECK UP` : `${shop} PUT A HUMAN CHECK UP`,
+    ...home ? { url: home } : {},
+    description: "**Phantom is standing down and will not touch the check.** Reading has paused for this shop, so treat the quiet as blindness rather than as nothing happening.\n\nThis does not on its own mean a drop is live - shops raise their defences at drop time and also when a browser simply looks wrong. If you are waiting on one, **look yourself**.\n\n_Said once when a wall goes up, then every 12 hours while it stands._",
+    color: COLOR_WALL,
+    fields,
+    footer: {
+      text: "Press-and-hold and CAPTCHAs are a person\u2019s job, never this program\u2019s."
+    },
+    timestamp: now
+  };
+}
+function buildBlindEmbed(i, now) {
+  const home = SHOP_HOME[i.retailer] ?? "";
+  return {
+    title: `${(i.retailer || "A SHOP").toUpperCase()}: PHANTOM IS BLIND`,
+    ...home ? { url: home } : {},
+    description: `**Every read of this shop has failed for the last ${i.minutes} minutes** (${i.checks} checks), and none of it looked like a wall the detector knows.
+
+Whatever is live there right now, nothing is watching it. **Check by hand** if you are expecting stock. The usual causes are a new kind of bot check or the shop changing its pages - either way it needs a person to look.`,
+    color: COLOR_WALL,
+    fields: [
+      inline("Shop", i.retailer || "\u2014"),
+      inline("Failed reads", String(i.checks)),
+      inline("For at least", `${i.minutes} min`)
+    ],
+    footer: { text: "Said once an hour while it lasts, so it cannot be mistaken for a quiet day." },
+    timestamp: now
+  };
+}
+function buildBoughtEmbed(i, now) {
+  const qty = i.quantity && i.quantity > 1 ? `${i.quantity} \xD7 ` : "";
+  const paid = i.total !== null && i.total !== void 0 ? dollars(i.total) : dollars(i.price);
+  const saved = i.price !== null && i.msrp !== null && i.msrp > 0 && i.price <= i.msrp + 5e-3 ? " at retail" : "";
+  return {
+    title: `BOUGHT \u2014 ${clip(i.name || "a watched listing", 200)}`,
+    ...i.url ? { url: i.url } : {},
+    description: `**${qty}${paid}${saved}** from ${i.retailer || "the shop"}. The retailer confirmed the order.`,
+    color: COLOR_WIN,
+    // Full-width image, not a thumbnail. See the note above.
+    ...i.imageUrl ? { image: { url: i.imageUrl } } : {},
+    fields: [
+      inline("Paid", paid),
+      inline("MSRP", dollars(i.msrp)),
+      inline("Retailer", i.retailer || "\u2014")
+    ],
+    footer: { text: "Phantom \xB7 confirmed by the retailer, not by a click that seemed to work" },
+    timestamp: now
+  };
+}
+function buildReportEmbed(input) {
+  return {
+    title: `REPORT #${input.id} FROM ${(input.handle || "someone").toUpperCase()}`,
+    description: input.note.slice(0, 400) || "(they did not add a note)",
+    color: COLOR_QUEUE,
+    fields: [
+      { name: "What the machine says", value: input.summary.slice(0, 900) || "nothing obvious", inline: false },
+      { name: "Read it", value: `npm run reports ${input.id}`, inline: false }
+    ]
+  };
+}
+async function announce(webhookUrl, label, retailer, items, now) {
+  if (items.length === 0) return;
+  await post(webhookUrl, [buildDiscoveryEmbed(label, retailer, items, now)]);
+}
+async function reportOps(webhookUrl, results, now) {
+  const embed = buildOpsEmbed(results, now);
+  if (embed) await post(webhookUrl, [embed]);
+}
+
 // src/store.ts
 function toPrice(v) {
   if (v === null || v === void 0 || v === "") return null;
@@ -1069,8 +1615,18 @@ var DEFAULT_SETTINGS = {
   budgetTotal: 0,
   pausedRetailers: [],
   burstSpacingSeconds: 0,
-  dropModeUntil: ""
+  dropModeUntil: "",
+  pushTopic: "",
+  emailTo: "",
+  pushKinds: [...DEFAULT_PUSH_KINDS],
+  emailKinds: [...DEFAULT_EMAIL_KINDS]
 };
+function maskSettings(s) {
+  return {
+    ...s,
+    pushTopic: s.pushTopic ? `\u2022\u2022\u2022${s.pushTopic.slice(-3)}` : ""
+  };
+}
 var KNOWN_RETAILERS = ["Target", "Walmart", "Pokemon Center"];
 function isClockTime(v) {
   if (v === "") return true;
@@ -1124,6 +1680,30 @@ function validateSettings(s) {
     if (!Number.isFinite(t)) return "the drop window end must be a timestamp";
     if (t > Date.now() + 12 * 36e5) {
       return "a drop window cannot be opened more than 12 hours ahead";
+    }
+  }
+  if (s.pushTopic !== void 0 && s.pushTopic !== "") {
+    const v = String(s.pushTopic).trim();
+    if (!/^[A-Za-z0-9_-]+$/.test(v)) {
+      return "a push topic is letters, numbers, - and _ only (no spaces or links)";
+    }
+    if (v.length < 12) return "make the push topic at least 12 characters, so nobody can guess it";
+    if (v.length > 64) return "a push topic is at most 64 characters";
+  }
+  if (s.emailTo !== void 0 && s.emailTo !== "") {
+    const v = String(s.emailTo).trim();
+    if (v.length > 200 || !/^[^\s@<>,;]+@[^\s@<>,;]+\.[A-Za-z]{2,}$/.test(v)) {
+      return "that does not look like one email address";
+    }
+  }
+  for (const key of ["pushKinds", "emailKinds"]) {
+    const list = s[key];
+    if (list === void 0) continue;
+    if (!Array.isArray(list)) return `${key} must be a list of alert kinds`;
+    for (const k of list) {
+      if (!ALERT_KINDS.includes(String(k))) {
+        return `"${k}" is not an alert this app sends`;
+      }
     }
   }
   for (const key of ["activeFrom", "activeUntil"]) {
@@ -1216,8 +1796,18 @@ async function getSettings(db2, userId) {
     // table for it would be three joins to answer "is Target on".
     pausedRetailers: text("pausedRetailers", "").split(",").map((r) => r.trim()).filter((r) => KNOWN_RETAILERS.includes(r)),
     burstSpacingSeconds: num2("burstSpacingSeconds", DEFAULT_SETTINGS.burstSpacingSeconds),
-    dropModeUntil: text("dropModeUntil", "")
+    dropModeUntil: text("dropModeUntil", ""),
+    pushTopic: text("pushTopic", ""),
+    emailTo: text("emailTo", ""),
+    // Absent key: the defaults. Present and blank: every one switched off.
+    // Unknown names are dropped, so a kind retired later cannot break a read.
+    pushKinds: kindList(map.get("pushKinds"), DEFAULT_PUSH_KINDS),
+    emailKinds: kindList(map.get("emailKinds"), DEFAULT_EMAIL_KINDS)
   };
+}
+function kindList(raw, fallback) {
+  if (raw === void 0) return [...fallback];
+  return raw.split(",").map((k) => k.trim()).filter((k) => ALERT_KINDS.includes(k));
 }
 async function setSettings(db2, userId, patch) {
   const problem = validateSettings(patch);
@@ -1238,9 +1828,14 @@ async function setSettings(db2, userId, patch) {
     "spendCapDay",
     "pausedRetailers",
     "burstSpacingSeconds",
-    "dropModeUntil"
+    "dropModeUntil",
+    "pushTopic",
+    "emailTo",
+    "pushKinds",
+    "emailKinds"
   ]) {
-    const value = patch[key];
+    const raw = patch[key];
+    const value = (key === "pushTopic" || key === "emailTo") && typeof raw === "string" ? raw.trim() : raw;
     if (value === void 0) continue;
     statements.push({
       text: `INSERT INTO settings (user_id, key, value) VALUES ($1, $2, $3)
@@ -1277,7 +1872,9 @@ function toMission(r) {
     alerts: r.alerts === void 0 || r.alerts === null ? true : r.alerts === true,
     ceiling: toPrice(r.ceiling),
     quantity: Number(r.quantity ?? 1),
-    sellerPolicy: String(r.seller_policy ?? "retailer_only"),
+    // 'any' since 19 Oct 2026 (Dan: third-party sellers count when the price
+    // is within the ceiling). Still checked against the ceiling on every buy.
+    sellerPolicy: String(r.seller_policy ?? "any"),
     preOrderPolicy: String(r.preorder_policy ?? "skip"),
     checkEverySeconds: Number(r.check_every_s ?? 60),
     checkNow: r.check_now_at !== null && r.check_now_at !== void 0,
@@ -1452,7 +2049,7 @@ async function upsertMission(db2, userId, m) {
       m.armed ?? false,
       m.ceiling ?? null,
       m.quantity ?? 1,
-      m.sellerPolicy ?? "retailer_only",
+      m.sellerPolicy ?? "any",
       m.preOrderPolicy ?? "skip",
       m.checkEverySeconds ?? 60,
       m.notes ?? "",
@@ -3290,403 +3887,6 @@ function dropReadiness(input) {
     note: drop.slot.note,
     blockers
   };
-}
-
-// src/notify.ts
-var COLOR_NEW = 2059087;
-var COLOR_OPS = 9069584;
-var COLOR_STAGED = 12597547;
-var COLOR_IN = 2067276;
-var COLOR_PRE = 5793266;
-var COLOR_DRAW = 8150230;
-var COLOR_QUEUE = 15105570;
-var COLOR_WIN = 16106818;
-var COLOR_WALL = 7371142;
-var MAX_FIELDS = 20;
-var inline = (name, value) => ({ name, value, inline: true });
-var dollars = (n) => n === null || n === void 0 ? "\u2014" : `$${Number(n).toFixed(2)}`;
-function stockPhrase(quantity, orderLimit, sellable) {
-  if (quantity === null || quantity === void 0) return sellable ? "in stock" : "not sellable";
-  const capped = quantity > 0 && (orderLimit !== null && orderLimit !== void 0 && orderLimit > 0 && quantity === orderLimit || quantity === 10 || quantity === 20);
-  const n = capped ? `${quantity}+` : String(quantity);
-  return sellable ? `${n} available` : `${n} staged`;
-}
-function clip(s, n) {
-  return s.length <= n ? s : `${s.slice(0, n - 1)}\u2026`;
-}
-function buildDiscoveryEmbed(label, retailer, items, now) {
-  const shown = items.slice(0, MAX_FIELDS);
-  const fields = shown.map((i) => ({
-    name: clip(i.name || i.externalId, 240),
-    value: clip(i.url ? `[${i.externalId}](${i.url})` : i.externalId, 1e3)
-  }));
-  const extra = items.length - shown.length;
-  return {
-    title: `\u{1F195} ${items.length} new ${items.length === 1 ? "product" : "products"} \u2014 ${retailer}`,
-    description: `Seen for the first time in **${label}**.` + (extra > 0 ? `
-_${extra} more not listed._` : ""),
-    color: COLOR_NEW,
-    fields,
-    footer: { text: "catalog discovery \xB7 not a stock signal" },
-    timestamp: now
-  };
-}
-function buildOpsEmbed(results, now) {
-  const failed = results.filter((r) => !r.ok);
-  if (failed.length === 0) return null;
-  return {
-    title: `\u26A0\uFE0F ${failed.length} source${failed.length === 1 ? "" : "s"} failed`,
-    color: COLOR_OPS,
-    fields: failed.slice(0, MAX_FIELDS).map((r) => ({
-      name: clip(r.label, 240),
-      value: clip(r.error ?? "unknown error", 1e3)
-    })),
-    timestamp: now
-  };
-}
-async function post(url, embeds) {
-  if (!url || embeds.length === 0) return;
-  try {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ embeds: embeds.slice(0, 10) })
-    });
-    if (!res.ok && res.status !== 204) {
-      const detail = await res.text().catch(() => "");
-      console.warn("discord rejected the post", res.status, detail.slice(0, 300));
-    }
-  } catch (err) {
-    console.warn("discord unreachable", err instanceof Error ? err.message : String(err));
-  }
-}
-function looksLikeWebhook(value) {
-  return /^https:\/\/(canary\.|ptb\.)?discord(app)?\.com\/api\/webhooks\/\d+\/\S+/.test(
-    String(value ?? "").trim()
-  );
-}
-function webhookVarNames(vars) {
-  return Object.keys(vars).filter((k) => looksLikeWebhook(vars[k])).sort();
-}
-function nearMissVarNames(vars) {
-  return Object.keys(vars).filter((k) => /hook|discord|walmart|draw|phantom/i.test(k) && !looksLikeWebhook(vars[k])).sort();
-}
-function shopWebhookFrom(vars, spec) {
-  const spoken = spec.taken.map((t) => String(t ?? "").trim()).filter(Boolean);
-  const ok = (v) => {
-    const url = String(v ?? "").trim();
-    return looksLikeWebhook(url) && !spoken.includes(url) ? url : "";
-  };
-  for (const name of spec.named) {
-    const found = ok(vars[name]);
-    if (found) return found;
-  }
-  for (const key of Object.keys(vars).sort()) {
-    if (!spec.hint.test(key)) continue;
-    const found = ok(vars[key]);
-    if (found) return found;
-  }
-  return "";
-}
-function walmartWebhookFrom(vars, main) {
-  return shopWebhookFrom(vars, {
-    named: ["DISCORD_WALMART_WEBHOOK_URL", "DISCORD_DRAWS_WEBHOOK_URL"],
-    hint: /walmart|draw/i,
-    taken: [main]
-  });
-}
-function pokemonCenterWebhookFrom(vars, taken) {
-  return shopWebhookFrom(vars, {
-    named: ["DISCORD_POKEMON_CENTER_WEBHOOK_URL", "DISCORD_PKC_WEBHOOK_URL"],
-    hint: /pok[e\u00e9]?mon|\bpkc\b|centre?\b/i,
-    taken
-  });
-}
-function roomKey(retailer) {
-  return String(retailer ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "");
-}
-function roomFor(rooms, retailer) {
-  return rooms.byRetailer[roomKey(retailer)] || rooms.main;
-}
-function splitByRoom(items, rooms) {
-  const out = [];
-  const index = /* @__PURE__ */ new Map();
-  for (const item of items) {
-    const url = roomFor(rooms, item.retailer);
-    if (!url) continue;
-    const at = index.get(url);
-    if (at === void 0) {
-      index.set(url, out.length);
-      out.push({ url, items: [item] });
-    } else {
-      out[at].items.push(item);
-    }
-  }
-  return out;
-}
-function buyablePhrase(addToCart) {
-  if (addToCart === true) return "\u2705 add to cart works";
-  if (addToCart === false) return "\u23F3 NOT addable \u2014 queue or hold";
-  return null;
-}
-function buildStockEmbeds(items, now, note) {
-  return items.slice(0, 10).map((i) => {
-    const pre = i.isPreOrder === true;
-    const fields = [
-      inline("Price", dollars(i.price)),
-      // "0 available" on a pre-order is the normal state of something you can
-      // order right now — nothing has been manufactured yet — and printed
-      // beside a price it reads as a listing that is already gone.
-      inline(
-        pre ? "Ships" : "Stock",
-        pre ? i.releaseDate ? `on ${i.releaseDate}` : "on release" : stockPhrase(i.quantity, i.orderLimit, true)
-      ),
-      inline("Retailer", i.retailer || "\u2014")
-    ];
-    const buyable = buyablePhrase(i.addToCart);
-    if (buyable) fields.push(inline("Buyable", buyable));
-    fields.push(inline("MSRP", dollars(i.msrp)));
-    if (i.price !== null && i.msrp !== null && i.msrp > 0) {
-      const over = i.price - i.msrp;
-      fields.push(inline("vs MSRP", over > 5e-3 ? `+${dollars(over)}` : "at or under"));
-    } else {
-      fields.push(inline("vs MSRP", "\u2014"));
-    }
-    fields.push(
-      inline(
-        "Seller",
-        i.seller === "marketplace" ? `\u26A0\uFE0F ${i.sellerName || "marketplace seller"}` : i.retailer || "the shop"
-      )
-    );
-    return {
-      // The prefix is the point. Two seconds after the notification lands,
-      // the title is all anybody has read.
-      title: clip((pre ? "PRE-ORDER \xB7 " : "") + (i.name || "a watched listing"), 240),
-      ...i.url ? { url: i.url } : {},
-      color: pre ? COLOR_PRE : COLOR_IN,
-      ...i.imageUrl ? { thumbnail: { url: i.imageUrl } } : {},
-      fields,
-      ...note ? { footer: { text: note } } : {},
-      timestamp: now
-    };
-  });
-}
-async function announceStock(webhookUrl, items, now, note) {
-  const embeds = buildStockEmbeds(items, now, note);
-  if (embeds.length) await post(webhookUrl, embeds);
-}
-function untilPhrase(iso, now) {
-  if (!iso) return "";
-  const ms = Date.parse(iso) - Date.parse(now);
-  if (!Number.isFinite(ms)) return "";
-  const mins = Math.round(Math.abs(ms) / 6e4);
-  const said = mins < 90 ? `${mins} minute${mins === 1 ? "" : "s"}` : mins < 2880 ? `${Math.round(mins / 60)} hours` : `${Math.round(mins / 1440)} days`;
-  return ms >= 0 ? `in ${said}` : `${said} ago`;
-}
-var DRAW_HOME = {
-  Walmart: "https://www.walmart.com/shop/collectibles/draw"
-};
-function buildDrawEmbeds(items, now, kind) {
-  const heading = kind === "opened" ? "DRAWING OPEN" : kind === "closing" ? "DRAWING CLOSING" : kind === "soon" ? "DRAWING OPENS SOON" : "DRAWING ANNOUNCED";
-  return items.slice(0, 10).map((i) => {
-    const fields = [
-      inline("Price", dollars(i.price)),
-      inline(
-        kind === "closing" ? "Closes" : kind === "opened" ? "Open until" : "Opens",
-        i.windowText || "not stated"
-      ),
-      inline("Retailer", i.retailer || "\u2014")
-    ];
-    const until = untilPhrase(i.windowAt, now);
-    if (until) {
-      fields.push(
-        inline(kind === "announced" || kind === "soon" ? "That is" : "Time left", until)
-      );
-    }
-    if (i.externalId) fields.push(inline("Item", i.externalId));
-    if (i.orderLimit !== null && i.orderLimit !== void 0) {
-      fields.push(inline("Limit", `${i.orderLimit} per entry`));
-    }
-    const go = DRAW_HOME[i.retailer] ?? "";
-    return {
-      title: clip(`${heading} \xB7 ${i.name || "a collectibles drawing"}`, 240),
-      ...go ? { url: go } : {},
-      color: COLOR_DRAW,
-      ...i.imageUrl ? { thumbnail: { url: i.imageUrl } } : {},
-      fields,
-      footer: {
-        text: kind === "closing" ? "Entry closes soon and you have not marked this entered. Winners are drawn at random." : kind === "soon" ? "This is Walmart\u2019s own stated start time, not a confirmed open button \u2014 the page may take a few minutes to catch up. Free, one entry per account, drawn at random." : "Free, one entry per account. Winners are drawn at random after the window closes \u2014 entering early is worth no more than entering late."
-      },
-      timestamp: now
-    };
-  });
-}
-async function announceDraw(webhookUrl, items, now, kind) {
-  const embeds = buildDrawEmbeds(items, now, kind);
-  if (embeds.length) await post(webhookUrl, embeds);
-}
-async function announceTest(webhookUrl, now) {
-  await post(webhookUrl, [
-    {
-      title: "\u2705 Phantom is connected",
-      description: "This is a test message. Real alerts arrive one card per product: in stock on a watched listing, stock staged before a drop, and sources that stopped working.",
-      color: COLOR_IN,
-      footer: { text: "sent from Settings" },
-      timestamp: now
-    }
-  ]);
-}
-function buildStagedEmbeds(items, now, note) {
-  return items.slice(0, 10).map((i) => {
-    const fields = [
-      inline("Stock staged", `**${i.quantity.toLocaleString("en-US")}** units`),
-      inline("Retailer", i.retailer || "\u2014"),
-      inline("Buyable", "not yet")
-    ];
-    if (i.releaseDate) fields.push(inline("On sale", i.releaseDate));
-    return {
-      title: clip(i.name || "a watched listing", 240),
-      ...i.url ? { url: i.url } : {},
-      description: "Counted in the warehouse, and the shop is still saying no.",
-      color: COLOR_STAGED,
-      ...i.imageUrl ? { thumbnail: { url: i.imageUrl } } : {},
-      fields,
-      footer: { text: note ?? "not buyable yet \u2014 this is the warning, not the drop" },
-      timestamp: now
-    };
-  });
-}
-var SHOP_HOME = {
-  Walmart: "https://www.walmart.com",
-  Target: "https://www.target.com",
-  "Pokemon Center": "https://www.pokemoncenter.com"
-};
-function buildQueueEmbed(retailer, at, now) {
-  const home = SHOP_HOME[retailer] ?? "";
-  return {
-    title: `WAITING ROOM UP AT ${(retailer || "A SHOP").toUpperCase()}`,
-    ...home ? { url: home } : {},
-    description: "A drop is very likely live right now. **Get in line yourself** \u2014 a place in the queue is the scarce thing, and it stops being available the longer this sits.",
-    color: COLOR_QUEUE,
-    fields: [
-      inline("Shop", retailer || "\u2014"),
-      inline("Seen", discordTime(at)),
-      inline("Product pages", "will say sold out \u2014 ignore that")
-    ],
-    footer: {
-      text: "Phantom does not join queues or answer bot checks. This one is yours."
-    },
-    timestamp: now
-  };
-}
-function discordTime(iso) {
-  const ms = Date.parse(String(iso ?? ""));
-  return Number.isFinite(ms) ? `<t:${Math.floor(ms / 1e3)}:t>` : "just now";
-}
-function buildWallEmbed(i, now) {
-  const home = SHOP_HOME[i.retailer] ?? "";
-  const fields = [
-    inline("Shop", i.retailer || "\u2014"),
-    inline("Seen", discordTime(i.at)),
-    inline("Check", i.reason || "a human check")
-  ];
-  if (i.restingMinutes) {
-    fields.push(inline("Not reading for", `${i.restingMinutes} min`));
-  }
-  const shop = (i.retailer || "A SHOP").toUpperCase();
-  return {
-    title: i.still ? `${shop} STILL HAS A HUMAN CHECK UP` : `${shop} PUT A HUMAN CHECK UP`,
-    ...home ? { url: home } : {},
-    description: "**Phantom is standing down and will not touch the check.** Reading has paused for this shop, so treat the quiet as blindness rather than as nothing happening.\n\nThis does not on its own mean a drop is live - shops raise their defences at drop time and also when a browser simply looks wrong. If you are waiting on one, **look yourself**.\n\n_Said once when a wall goes up, then every 12 hours while it stands._",
-    color: COLOR_WALL,
-    fields,
-    footer: {
-      text: "Press-and-hold and CAPTCHAs are a person\u2019s job, never this program\u2019s."
-    },
-    timestamp: now
-  };
-}
-async function announceWalls(webhookUrl, walls, now) {
-  if (walls.length === 0) return;
-  await post(webhookUrl, walls.slice(0, 3).map((w) => buildWallEmbed(w, now)));
-}
-function buildBlindEmbed(i, now) {
-  const home = SHOP_HOME[i.retailer] ?? "";
-  return {
-    title: `${(i.retailer || "A SHOP").toUpperCase()}: PHANTOM IS BLIND`,
-    ...home ? { url: home } : {},
-    description: `**Every read of this shop has failed for the last ${i.minutes} minutes** (${i.checks} checks), and none of it looked like a wall the detector knows.
-
-Whatever is live there right now, nothing is watching it. **Check by hand** if you are expecting stock. The usual causes are a new kind of bot check or the shop changing its pages - either way it needs a person to look.`,
-    color: COLOR_WALL,
-    fields: [
-      inline("Shop", i.retailer || "\u2014"),
-      inline("Failed reads", String(i.checks)),
-      inline("For at least", `${i.minutes} min`)
-    ],
-    footer: { text: "Said once an hour while it lasts, so it cannot be mistaken for a quiet day." },
-    timestamp: now
-  };
-}
-async function announceBlind(webhookUrl, items, now) {
-  if (items.length === 0) return;
-  await post(webhookUrl, items.slice(0, 3).map((i) => buildBlindEmbed(i, now)));
-}
-async function announceQueues(webhookUrl, sightings, now) {
-  if (sightings.length === 0) return;
-  await post(
-    webhookUrl,
-    sightings.slice(0, 3).map((q) => buildQueueEmbed(q.retailer, q.at, now))
-  );
-}
-function buildBoughtEmbed(i, now) {
-  const qty = i.quantity && i.quantity > 1 ? `${i.quantity} \xD7 ` : "";
-  const paid = i.total !== null && i.total !== void 0 ? dollars(i.total) : dollars(i.price);
-  const saved = i.price !== null && i.msrp !== null && i.msrp > 0 && i.price <= i.msrp + 5e-3 ? " at retail" : "";
-  return {
-    title: `BOUGHT \u2014 ${clip(i.name || "a watched listing", 200)}`,
-    ...i.url ? { url: i.url } : {},
-    description: `**${qty}${paid}${saved}** from ${i.retailer || "the shop"}. The retailer confirmed the order.`,
-    color: COLOR_WIN,
-    // Full-width image, not a thumbnail. See the note above.
-    ...i.imageUrl ? { image: { url: i.imageUrl } } : {},
-    fields: [
-      inline("Paid", paid),
-      inline("MSRP", dollars(i.msrp)),
-      inline("Retailer", i.retailer || "\u2014")
-    ],
-    footer: { text: "Phantom \xB7 confirmed by the retailer, not by a click that seemed to work" },
-    timestamp: now
-  };
-}
-async function announceBought(webhookUrl, item, now) {
-  await post(webhookUrl, [buildBoughtEmbed(item, now)]);
-}
-async function announceStaged(webhookUrl, items, now, note) {
-  const embeds = buildStagedEmbeds(items, now, note);
-  if (embeds.length) await post(webhookUrl, embeds);
-}
-function buildReportEmbed(input) {
-  return {
-    title: `REPORT #${input.id} FROM ${(input.handle || "someone").toUpperCase()}`,
-    description: input.note.slice(0, 400) || "(they did not add a note)",
-    color: COLOR_QUEUE,
-    fields: [
-      { name: "What the machine says", value: input.summary.slice(0, 900) || "nothing obvious", inline: false },
-      { name: "Read it", value: `npm run reports ${input.id}`, inline: false }
-    ]
-  };
-}
-async function announceReport(webhookUrl, input) {
-  await post(webhookUrl, [buildReportEmbed(input)]);
-}
-async function announce(webhookUrl, label, retailer, items, now) {
-  if (items.length === 0) return;
-  await post(webhookUrl, [buildDiscoveryEmbed(label, retailer, items, now)]);
-}
-async function reportOps(webhookUrl, results, now) {
-  const embed = buildOpsEmbed(results, now);
-  if (embed) await post(webhookUrl, [embed]);
 }
 
 // src/auth.ts
@@ -5826,6 +6026,38 @@ ${FONTS}<style>${STYLE}</style></head>
       </div>
       <div class="meta" id="discord-result" style="margin-top:8px" hidden></div>
     </div>
+    <!-- Phone and email, per account. Discord is a room for everybody; these
+         are yours. The push topic is a credential (anyone who knows it can
+         read your alerts), so the page is only ever told that one is saved
+         and its last three letters, never the whole name. -->
+    <div class="card" style="margin-top:10px">
+      <form class="stack" id="alerts-form">
+        <div class="row">
+          <div class="grow">
+            <div class="name">Phone and email</div>
+            <div class="meta" id="alerts-state">Checking\u2026</div>
+          </div>
+          <button id="alerts-test" type="button">Send a test to every channel</button>
+        </div>
+        <div class="grid2">
+          <label class="f">Phone push topic
+            <span class="hint">install the free ntfy app, subscribe to a long private name, paste the same name here</span>
+            <input type="text" name="pushTopic" autocomplete="off" spellcheck="false" maxlength="64">
+          </label>
+          <label class="f">Email alerts to
+            <span class="hint">one address \u2014 blank turns email off</span>
+            <input type="email" name="emailTo" autocomplete="off" spellcheck="false" maxlength="200">
+          </label>
+        </div>
+        <div class="meta">Which alerts go where. Discord gets every one regardless.</div>
+        <div class="stack" id="alert-kinds" style="gap:4px"></div>
+        <div class="actions">
+          <button type="submit" class="primary">Save alerts</button>
+          <button type="button" id="push-clear" hidden>Stop phone alerts</button>
+          <span class="msg" id="alerts-msg"></span>
+        </div>
+      </form>
+    </div>
 
     <h2>What is true of every mission</h2>
     <p class="sub" style="margin:-6px 0 14px">
@@ -6891,8 +7123,8 @@ function missionPanel(m) {
       </label>
       <label class="f">Sellers
         <select name="sellerPolicy">
+          <option value="any" selected>Any seller, under the ceiling</option>
           <option value="retailer_only">The retailer only</option>
-          <option value="any">Any seller, under the ceiling</option>
         </select>
       </label>
       <label class="f">Pre-orders
@@ -6933,7 +7165,9 @@ function missionPanel(m) {
   }
   q('quantity').value = m.quantity;
   q('checkEverySeconds').value = String(m.checkEverySeconds);
-  q('sellerPolicy').value = m.sellerPolicy;
+  // 'any' when the mission does not say: the default since 19 Oct 2026, and
+  // what the app stores for a mission created without one.
+  q('sellerPolicy').value = m.sellerPolicy || 'any';
   q('preOrderPolicy').value = m.preOrderPolicy || 'skip';
   q('enabled').checked = m.enabled;
   q('armed').checked = m.armed;
@@ -8465,6 +8699,7 @@ function renderShops(st) {
   if (inRep && document.activeElement !== inRep) {
     inRep.value = (st.inStockRepeatAfter || []).join(', ');
   }
+  renderAlertChannels(st);
 
   // Is a window open, and how long is left? Said in words, because "true" is
   // not an answer to "am I about to be checking Target every 8 seconds".
@@ -8680,6 +8915,8 @@ function isFresh(d) {
  * and a price sanity check that arrives late is no use next to a price.
  */
 const TYPICAL_PRICE = ${JSON.stringify(TYPICAL_PRICE)};
+/** Every alert kind and its words, for the phone/email choices. From notify.ts. */
+const ALERT_KIND_LIST = ${JSON.stringify(ALERT_KINDS.map((k) => [k, ALERT_KIND_LABELS[k]]))};
 const FLAG_ABOVE = ${FLAG_ABOVE};
 
 /** How far above the usual price this sits. Null when there is no comparison. */
@@ -11007,6 +11244,131 @@ document.getElementById('discord-redraw').addEventListener('click', async () => 
 });
 
 document.getElementById('discord-test').addEventListener('click', () => sendTest('hello'));
+
+/*
+ * Phone and email: what is on, and which alerts go to each.
+ *
+ * Re-rendered on every load like the rest of Settings, except while the form
+ * has unsaved changes - the page refreshes itself, and a refresh that unticked
+ * the boxes somebody was halfway through ticking would be a form that lies.
+ */
+function renderAlertChannels(st) {
+  const form = document.getElementById('alerts-form');
+  if (!form) return;
+  const pushOn = DATA.push === true;
+  const mailOn = DATA.email === true;
+  const state = document.getElementById('alerts-state');
+  state.textContent =
+    'Phone: ' + (pushOn ? 'on (topic ending ' + String(st.pushTopic || '').slice(-3) + ')' : 'off') + '. ' +
+    'Email: ' + (mailOn
+      ? 'on, to ' + (st.emailTo || '')
+      : DATA.emailReady
+        ? 'off. Add an address below.'
+        : 'not set up on the app yet. Add RESEND_API_KEY and ALERT_EMAIL_FROM in Vercel and redeploy.') +
+    (mailOn ? '.' : '');
+  document.getElementById('alerts-test').disabled = !(DATA.discord === true || pushOn || mailOn);
+  document.getElementById('push-clear').hidden = !pushOn;
+  if (form.dataset.dirty === '1') return;
+
+  // Never filled with the topic: the page is only told it is set.
+  const topic = form.querySelector('[name=pushTopic]');
+  topic.value = '';
+  topic.placeholder = pushOn
+    ? 'saved. Type a new name only to replace it'
+    : 'a long private name, e.g. phantom-dan-7q2x9k4m';
+  const mail = form.querySelector('[name=emailTo]');
+  mail.value = st.emailTo || '';
+
+  const pushK = Array.isArray(st.pushKinds) ? st.pushKinds : [];
+  const mailK = Array.isArray(st.emailKinds) ? st.emailKinds : [];
+  const box = document.getElementById('alert-kinds');
+  box.textContent = '';
+  for (const pair of ALERT_KIND_LIST) {
+    const kind = pair[0];
+    const row = el('div', 'row');
+    row.append(el('span', 'grow', pair[1]));
+    const p = document.createElement('input');
+    p.type = 'checkbox';
+    p.dataset.push = kind;
+    p.checked = pushK.includes(kind);
+    const pl = el('label', 'check');
+    pl.append(p, ' phone');
+    const m = document.createElement('input');
+    m.type = 'checkbox';
+    m.dataset.email = kind;
+    m.checked = mailK.includes(kind);
+    const ml = el('label', 'check');
+    ml.append(m, ' email');
+    row.append(pl, ml);
+    box.append(row);
+  }
+}
+
+document.getElementById('alerts-form').addEventListener('input', (e) => {
+  e.currentTarget.dataset.dirty = '1';
+});
+
+document.getElementById('alerts-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const form = e.target;
+  const msg = document.getElementById('alerts-msg');
+  const topic = String(form.querySelector('[name=pushTopic]').value || '').trim();
+  const patch = {
+    emailTo: String(form.querySelector('[name=emailTo]').value || '').trim(),
+    pushKinds: [...form.querySelectorAll('input[data-push]')].filter((i) => i.checked).map((i) => i.dataset.push),
+    emailKinds: [...form.querySelectorAll('input[data-email]')].filter((i) => i.checked).map((i) => i.dataset.email),
+  };
+  // Blank keeps the saved topic: the box is never filled with it, so blank
+  // is what an untouched box looks like. "Stop phone alerts" is how to clear.
+  if (topic) patch.pushTopic = topic;
+  const ok = await withButton(form.querySelector('button[type=submit]'), 'Saving\u2026', msg, async () => {
+    await api('POST', '/api/settings', patch);
+    return 'saved';
+  });
+  if (ok) {
+    form.dataset.dirty = '';
+    load();
+  }
+});
+
+document.getElementById('push-clear').addEventListener('click', async (e) => {
+  const form = document.getElementById('alerts-form');
+  const msg = document.getElementById('alerts-msg');
+  const ok = await withButton(e.target, 'Stopping\u2026', msg, async () => {
+    await api('POST', '/api/settings', { pushTopic: '' });
+    return 'phone alerts stopped';
+  });
+  if (ok) {
+    form.dataset.dirty = '';
+    load();
+  }
+});
+
+/*
+ * One button, every channel, each answering for itself. "Discord yes, phone
+ * no" is one fix; "nothing arrived" is four guesses.
+ */
+document.getElementById('alerts-test').addEventListener('click', async (e) => {
+  const btn = e.target;
+  const msg = document.getElementById('alerts-msg');
+  btn.disabled = true;
+  try {
+    const res = await fetch('/api/notify/test?kind=hello', { method: 'POST' });
+    const body = await res.json();
+    if (!body.configured) {
+      say(msg, 'Nothing is set up to send to yet.', false);
+    } else {
+      const word = (v) => (v === true ? 'sent' : v === false ? 'FAILED' : 'not set up');
+      const all = body.push !== false && body.email !== false;
+      say(msg,
+        'Discord: ' + (body.rooms ? 'sent to ' + body.rooms + ' channel' + (body.rooms === 1 ? '' : 's') : 'not set up') +
+        '. Phone: ' + word(body.push) + '. Email: ' + word(body.email) + '.', all);
+    }
+  } catch (err) {
+    say(msg, 'Could not reach the app: ' + err.message, false);
+  }
+  btn.disabled = false;
+});
 // The real alert, with real data, footered as a rehearsal. See the endpoint for
 // why waiting cannot show you this when the thing is already in stock.
 document.getElementById('discord-preview').addEventListener('click', () => sendTest('stock'));
@@ -11824,6 +12186,7 @@ var PHANTOM_ZIP_BASE64 = "UEsDBAoAAAAAAFakI10AAAAAAAAAAAAAAAAIAAkAUGhhbnRvbS9VVA
 
 // src/app.ts
 var SWEEP_SOURCE = "target-tcg";
+var OWNER_ID = 1;
 function json(body, status = 200, headers = {}) {
   return new Response(JSON.stringify(body, null, 2), {
     status,
@@ -11838,10 +12201,18 @@ function roomsFrom(env2) {
   if (pkc) byRetailer[roomKey("Pokemon Center")] = pkc;
   return { main: env2.DISCORD_WEBHOOK_URL, byRetailer };
 }
-async function toRooms(items, rooms, send) {
-  for (const group of splitByRoom(items, rooms)) {
-    await send(group.url, group.items);
-  }
+function outletsFor(env2, s) {
+  const mailReady = Boolean(env2.RESEND_API_KEY && env2.ALERT_EMAIL_FROM);
+  return {
+    rooms: roomsFrom(env2),
+    push: s?.pushTopic ? { server: env2.NTFY_URL || "https://ntfy.sh", topic: s.pushTopic, token: env2.NTFY_TOKEN } : null,
+    email: mailReady && s?.emailTo ? { apiKey: env2.RESEND_API_KEY ?? "", from: env2.ALERT_EMAIL_FROM ?? "", to: s.emailTo } : null,
+    pushKinds: s?.pushKinds ?? DEFAULT_PUSH_KINDS,
+    emailKinds: s?.emailKinds ?? DEFAULT_EMAIL_KINDS
+  };
+}
+async function outletsOf(db2, userId, env2) {
+  return outletsFor(env2, await getSettings(db2, userId).catch(() => null));
 }
 async function publish(db2, userId, env2, results, now) {
   for (const result of results) {
@@ -12060,11 +12431,12 @@ function createHandler(db2, env2) {
         changes,
         products,
         listings,
-        settings,
         discoveries,
         sweep,
         now,
         you,
+        // The push topic is a credential; the page is told it is set, not what.
+        settings: maskSettings(settings),
         // What was decided against, and by whom. Small, and a review list you
         // cannot see the other side of is half a review list.
         forgotten,
@@ -12100,6 +12472,12 @@ function createHandler(db2, env2) {
           env2.DISCORD_WALMART_WEBHOOK_URL || env2.DISCORD_DRAWS_WEBHOOK_URL
         ),
         discordPkc: Boolean(env2.DISCORD_POKEMON_CENTER_WEBHOOK_URL),
+        // This account's phone and inbox, beside Discord. Booleans again:
+        // push is on when a topic is saved; email needs the app's Resend key
+        // and sender (emailReady) AND an address on this account.
+        push: Boolean(settings.pushTopic),
+        emailReady: Boolean(env2.RESEND_API_KEY && env2.ALERT_EMAIL_FROM),
+        email: Boolean(env2.RESEND_API_KEY && env2.ALERT_EMAIL_FROM && settings.emailTo),
         // Names of the webhook variables this deployment received, so
         // "I set it and it still says no" is a question with an answer.
         // Names only - the value is the credential.
@@ -12198,12 +12576,16 @@ function createHandler(db2, env2) {
       const announced = outcomes.filter((o) => o.isNew && ours(o) && !o.justOpened && o.row.phase === "announced").map((o) => card(o.row));
       const closing = (await claimClosingDrawings(db2, userId)).map(card);
       const soon = opened.length > 0 ? [] : (await claimOpeningDrawings(db2, userId)).map(card);
-      const rooms = roomsFrom(env2);
-      if (env2.DISCORD_WEBHOOK_URL) {
-        await toRooms(opened, rooms, (url2, g) => announceDraw(url2, g, now, "opened"));
-        await toRooms(soon, rooms, (url2, g) => announceDraw(url2, g, now, "soon"));
-        await toRooms(announced, rooms, (url2, g) => announceDraw(url2, g, now, "announced"));
-        await toRooms(closing, rooms, (url2, g) => announceDraw(url2, g, now, "closing"));
+      if (opened.length + soon.length + announced.length + closing.length > 0) {
+        const out = await outletsOf(db2, userId, env2);
+        if (anyOutlet(out)) {
+          await Promise.allSettled([
+            deliver(out, "drawOpened", opened, (g) => buildDrawEmbeds(g, now, "opened")),
+            deliver(out, "drawSoon", soon, (g) => buildDrawEmbeds(g, now, "soon")),
+            deliver(out, "drawAnnounced", announced, (g) => buildDrawEmbeds(g, now, "announced")),
+            deliver(out, "drawClosing", closing, (g) => buildDrawEmbeds(g, now, "closing"))
+          ]);
+        }
       }
       return json({
         recorded: outcomes.length,
@@ -12575,15 +12957,27 @@ function createHandler(db2, env2) {
         version: String(report.version ?? ""),
         body: report
       });
-      const room = env2.DISCORD_OPS_WEBHOOK_URL || env2.DISCORD_WEBHOOK_URL;
-      if (room && id) {
-        await announceReport(room, {
-          id,
-          handle: (await profile(db2, userId)).handle,
-          note: String(report.note ?? ""),
-          summary: String(report.summary ?? "")
-        }).catch(() => {
-        });
+      const room = env2.DISCORD_OPS_WEBHOOK_URL || env2.DISCORD_WEBHOOK_URL || "";
+      if (id) {
+        try {
+          const out = await outletsOf(db2, OWNER_ID, env2);
+          await deliver(
+            out,
+            "report",
+            [{
+              // No shop: a report is about a machine. Said explicitly so the
+              // card type still has the field every alert is routed by.
+              retailer: "",
+              id,
+              handle: (await profile(db2, userId)).handle,
+              note: String(report.note ?? ""),
+              summary: String(report.summary ?? "")
+            }],
+            (g) => g.map((r) => buildReportEmbed(r)),
+            { room }
+          );
+        } catch {
+        }
       }
       return json({ id });
     }
@@ -12614,13 +13008,13 @@ function createHandler(db2, env2) {
       return json({ token, hubUrl: url.origin }, 200, { "Cache-Control": "private, no-store" });
     }
     if (request.method === "GET" && path === "/api/settings") {
-      return json({ settings: await getSettings(db2, userId) });
+      return json({ settings: maskSettings(await getSettings(db2, userId)) });
     }
     if (request.method === "POST" && path === "/api/settings") {
       const b = await body();
       if (!b) return json({ error: "body must be JSON" }, 400);
       try {
-        return json({ settings: await setSettings(db2, userId, b) });
+        return json({ settings: maskSettings(await setSettings(db2, userId, b)) });
       } catch (err) {
         return json({ error: err.message }, 400);
       }
@@ -12669,10 +13063,11 @@ function createHandler(db2, env2) {
       return json({ forgotten: id });
     }
     if (request.method === "POST" && path === "/api/notify/test") {
-      if (!env2.DISCORD_WEBHOOK_URL) {
+      const kind = url.searchParams.get("kind") ?? "hello";
+      const out = await outletsOf(db2, userId, env2);
+      if (kind === "stock" ? !env2.DISCORD_WEBHOOK_URL : !anyOutlet(out)) {
         return json({ sent: false, configured: false }, 200);
       }
-      const kind = url.searchParams.get("kind") ?? "hello";
       if (kind === "stock") {
         const rows = await listMissions(db2, userId).catch(() => []);
         const live = rows.filter((m) => m.state === "in" && m.enabled).slice(0, 3);
@@ -12700,8 +13095,24 @@ function createHandler(db2, env2) {
       }
       const testRooms = roomsFrom(env2);
       const urls = [.../* @__PURE__ */ new Set([testRooms.main, ...Object.values(testRooms.byRetailer)])].filter(Boolean);
-      for (const url2 of urls) await announceTest(url2, now);
-      return json({ sent: true, configured: true, rooms: urls.length });
+      const words = {
+        title: "Phantom is connected",
+        body: "This is a test from Settings. Real alerts say what dropped, the price, and open the product when you tap them.",
+        url: url.origin
+      };
+      const [, push, email] = await Promise.all([
+        Promise.allSettled(urls.map((u) => announceTest(u, now))),
+        out.push ? sendPush(out.push, "test", words) : Promise.resolve(null),
+        out.email ? sendEmail(out.email, "Phantom test: email alerts are connected", words.body) : Promise.resolve(null)
+      ]);
+      return json({
+        sent: urls.length > 0 || push === true || email === true,
+        configured: true,
+        rooms: urls.length,
+        // true sent, false tried and failed, null not set up.
+        push,
+        email
+      });
     }
     if (request.method === "POST" && path === "/api/activity") {
       const b = await body();
@@ -12719,7 +13130,10 @@ function createHandler(db2, env2) {
       const wallToldLately = anyWall && walledBefore.size > 0 ? await wallAlertedRecently(db2, userId).catch(() => /* @__PURE__ */ new Set([...walledBefore])) : /* @__PURE__ */ new Set();
       const result = await recordActivity(db2, userId, lines);
       const pruned = await pruneActivity(db2, userId);
-      if (env2.DISCORD_WEBHOOK_URL) {
+      const failedCheck = lines.some((l) => l.kind === "check" && !["in", "out", "in_stock", "staged"].includes(String(l.state ?? "")) && !isWallLine(l.message));
+      const mightSay = anyWall || failedCheck || lines.some((l) => isQueueLine(l.message));
+      const out = mightSay ? await outletsOf(db2, userId, env2) : null;
+      if (out && anyOutlet(out)) {
         const fresh = /* @__PURE__ */ new Map();
         for (const line of lines) {
           if (!isQueueLine(line.message)) continue;
@@ -12728,10 +13142,12 @@ function createHandler(db2, env2) {
           fresh.set(retailer, String(line.at ?? (/* @__PURE__ */ new Date()).toISOString()));
         }
         if (fresh.size > 0) {
-          await toRooms(
-            [...fresh].map(([retailer, at]) => ({ retailer, at })),
-            roomsFrom(env2),
-            (url2, group) => announceQueues(url2, group, (/* @__PURE__ */ new Date()).toISOString())
+          const at = (/* @__PURE__ */ new Date()).toISOString();
+          await deliver(
+            out,
+            "queue",
+            [...fresh].map(([retailer, seen]) => ({ retailer, at: seen })),
+            (g) => g.slice(0, 3).map((q) => buildQueueEmbed(q.retailer, q.at, at))
           ).catch(() => {
           });
         }
@@ -12751,10 +13167,12 @@ function createHandler(db2, env2) {
           });
         }
         if (walls.size > 0) {
-          await toRooms(
+          const at = (/* @__PURE__ */ new Date()).toISOString();
+          await deliver(
+            out,
+            "wall",
             [...walls].map(([retailer, w]) => ({ retailer, at: w.at, reason: w.reason, still: w.still })),
-            roomsFrom(env2),
-            (url2, group) => announceWalls(url2, group, (/* @__PURE__ */ new Date()).toISOString())
+            (g) => g.slice(0, 3).map((w) => buildWallEmbed(w, at))
           ).catch(() => {
           });
           for (const [retailer, w] of walls) {
@@ -12762,7 +13180,6 @@ function createHandler(db2, env2) {
             });
           }
         }
-        const failedCheck = lines.some((l) => l.kind === "check" && !["in", "out", "in_stock", "staged"].includes(String(l.state ?? "")) && !isWallLine(l.message));
         if (failedCheck) {
           try {
             const blind = await blindShops(db2, userId);
@@ -12770,10 +13187,12 @@ function createHandler(db2, env2) {
               const told = await blindAlertedRecently(db2, userId);
               const fresh2 = blind.filter((b2) => !told.has(b2.retailer));
               if (fresh2.length > 0) {
-                await toRooms(
+                const at = (/* @__PURE__ */ new Date()).toISOString();
+                await deliver(
+                  out,
+                  "blind",
                   fresh2.map((b2) => ({ ...b2, minutes: BLIND_WINDOW_MIN })),
-                  roomsFrom(env2),
-                  (url2, group) => announceBlind(url2, group, (/* @__PURE__ */ new Date()).toISOString())
+                  (g) => g.slice(0, 3).map((b2) => buildBlindEmbed(b2, at))
                 );
                 for (const b2 of fresh2) await noteBlindAlert(db2, userId, b2.retailer, b2.checks);
               }
@@ -12868,7 +13287,7 @@ function createHandler(db2, env2) {
         manual: state.queued,
         sourceId: SWEEP_SOURCE
       };
-      return json({ missions, settings, sweep });
+      return json({ missions, settings: maskSettings(settings), sweep });
     }
     if (request.method === "POST" && path === "/api/runs") {
       const b = await body();
@@ -12887,26 +13306,33 @@ function createHandler(db2, env2) {
         isPreOrder: b.isPreOrder === true,
         releaseDate: b.releaseDate ?? null
       });
-      const winsUrl = env2.DISCORD_WINS_WEBHOOK_URL || env2.DISCORD_WEBHOOK_URL;
-      if (b.outcome === "bought" && winsUrl) {
-        const m = (await listMissions(db2, userId).catch(() => [])).find(
-          (x) => x.id === b.missionId
-        );
-        await announceBought(
-          winsUrl,
-          {
-            name: m?.productName ?? `mission ${b.missionId}`,
-            retailer: m?.retailer ?? "",
-            price: b.price ?? null,
-            total: b.total ?? null,
-            quantity: b.quantity ?? null,
-            msrp: m?.msrp ?? null,
-            url: m?.url ?? "",
-            imageUrl: m?.imageUrl ?? ""
-          },
-          now
-        ).catch(() => {
-        });
+      const winsUrl = env2.DISCORD_WINS_WEBHOOK_URL || env2.DISCORD_WEBHOOK_URL || "";
+      if (b.outcome === "bought") {
+        const out = await outletsOf(db2, userId, env2);
+        if (winsUrl || out.push || out.email) {
+          const m = (await listMissions(db2, userId).catch(() => [])).find(
+            (x) => x.id === b.missionId
+          );
+          await deliver(
+            out,
+            "bought",
+            [{
+              name: m?.productName ?? `mission ${b.missionId}`,
+              retailer: m?.retailer ?? "",
+              price: b.price ?? null,
+              total: b.total ?? null,
+              quantity: b.quantity ?? null,
+              msrp: m?.msrp ?? null,
+              url: m?.url ?? "",
+              imageUrl: m?.imageUrl ?? ""
+            }],
+            (g) => g.slice(0, 1).map((i) => buildBoughtEmbed(i, now)),
+            // The wins room, never the shop's room: a win is the record of
+            // what this did, not an alert for people racing.
+            { room: winsUrl }
+          ).catch(() => {
+          });
+        }
       }
       return json({ run: id });
     }
@@ -12971,19 +13397,30 @@ function createHandler(db2, env2) {
       const enteredIn = changes.filter((c) => c.obs.state === "in" && c.was !== "in");
       const cameIntoStock = enteredIn.filter((c) => c.obs.isPreOrder !== true);
       const preOrdersOpened = enteredIn.filter((c) => c.obs.isPreOrder === true);
-      const willAlert = env2.DISCORD_WEBHOOK_URL && (cameIntoStock.length > 0 || preOrdersOpened.length > 0 || loaded.length > 0 || stillIn.length > 0);
+      const candidates = cameIntoStock.length > 0 || preOrdersOpened.length > 0 || loaded.length > 0 || stillIn.length > 0;
+      const out = candidates ? outletsFor(env2, cfg) : null;
+      const willAlert = anyOutlet(out);
       const byListing = willAlert ? new Map((await listMissions(db2, userId).catch(() => [])).map((m) => [m.listingId, m])) : /* @__PURE__ */ new Map();
       const speaks = (listingId) => {
         const m = byListing.get(listingId);
         return m ? m.alerts !== false : false;
       };
+      const alertable = (o, m) => {
+        if (o.sellerKind === "retailer") return true;
+        if (o.sellerKind !== "marketplace") return false;
+        if (!m || m.ceiling == null || o.price == null) return false;
+        const price = Number(o.price);
+        return Number.isFinite(price) && price <= Number(m.ceiling);
+      };
       const fromTheShop = (sellerKind) => sellerKind === "retailer";
-      const alertRooms = roomsFrom(env2);
+      const sends = [];
       const freshAlerts = cameIntoStock.filter(
-        (c) => speaks(c.obs.listingId) && fromTheShop(c.obs.sellerKind)
+        (c) => speaks(c.obs.listingId) && alertable(c.obs, byListing.get(c.obs.listingId))
       );
-      if (freshAlerts.length > 0 && env2.DISCORD_WEBHOOK_URL) {
-        await toRooms(
+      if (freshAlerts.length > 0 && out && willAlert) {
+        sends.push(deliver(
+          out,
+          "stock",
           freshAlerts.map((c) => {
             const m = byListing.get(c.obs.listingId);
             return {
@@ -12996,18 +13433,20 @@ function createHandler(db2, env2) {
               seller: c.obs.sellerKind ?? "",
               sellerName: c.obs.sellerName ?? (m ? m.sellerName : "") ?? "",
               quantity: c.obs.availableQuantity ?? null,
-              orderLimit: c.obs.orderLimit ?? (m ? m.orderLimit : null)
+              orderLimit: c.obs.orderLimit ?? (m ? m.orderLimit : null),
+              ceiling: m ? m.ceiling : null
             };
           }),
-          alertRooms,
-          (url2, group) => announceStock(url2, group, now)
-        );
+          (g) => buildStockEmbeds(g, now)
+        ));
       }
       const preOrderAlerts = preOrdersOpened.filter(
-        (c) => speaks(c.obs.listingId) && fromTheShop(c.obs.sellerKind)
+        (c) => speaks(c.obs.listingId) && alertable(c.obs, byListing.get(c.obs.listingId))
       );
-      if (preOrderAlerts.length > 0 && env2.DISCORD_WEBHOOK_URL) {
-        await toRooms(
+      if (preOrderAlerts.length > 0 && out && willAlert) {
+        sends.push(deliver(
+          out,
+          "preorder",
           preOrderAlerts.map((c) => {
             const m = byListing.get(c.obs.listingId);
             return {
@@ -13022,23 +13461,20 @@ function createHandler(db2, env2) {
               quantity: null,
               orderLimit: c.obs.orderLimit ?? (m ? m.orderLimit : null),
               isPreOrder: true,
-              releaseDate: c.obs.releaseDate ?? (m ? m.releaseDate : null) ?? null
+              releaseDate: c.obs.releaseDate ?? (m ? m.releaseDate : null) ?? null,
+              ceiling: m ? m.ceiling : null
             };
           }),
-          alertRooms,
-          (url2, group) => announceStock(
-            url2,
-            group,
-            now,
-            "Orderable now, ships on release. This is not a restock."
-          )
-        );
+          (g) => buildStockEmbeds(g, now, "Orderable now, ships on release. This is not a restock.")
+        ));
       }
       const againAlerts = stillIn.filter(
         (o) => speaks(o.listingId) && fromTheShop(o.sellerKind) && o.isPreOrder !== true
       );
-      if (againAlerts.length > 0 && env2.DISCORD_WEBHOOK_URL) {
-        await toRooms(
+      if (againAlerts.length > 0 && out && willAlert) {
+        sends.push(deliver(
+          out,
+          "stillIn",
           againAlerts.map((o) => {
             const m = byListing.get(o.listingId);
             return {
@@ -13055,13 +13491,14 @@ function createHandler(db2, env2) {
               addToCart: o.addToCart ?? null
             };
           }),
-          alertRooms,
-          (url2, group) => announceStock(url2, group, now, "still in stock")
-        );
+          (g) => buildStockEmbeds(g, now, "still in stock")
+        ));
       }
       const loadedAlerts = loaded.filter((l) => speaks(l.listingId));
-      if (loadedAlerts.length > 0 && env2.DISCORD_WEBHOOK_URL) {
-        await toRooms(
+      if (loadedAlerts.length > 0 && out && willAlert) {
+        sends.push(deliver(
+          out,
+          "staged",
           loadedAlerts.map((l) => {
             const m = byListing.get(l.listingId);
             return {
@@ -13073,10 +13510,10 @@ function createHandler(db2, env2) {
               releaseDate: m ? m.releaseDate ?? "" : ""
             };
           }),
-          alertRooms,
-          (url2, group) => announceStaged(url2, group, now)
-        );
+          (g) => buildStagedEmbeds(g, now)
+        ));
       }
+      await Promise.allSettled(sends);
       return json({
         recorded: results.length,
         changed: results.filter((r) => r.changed).length,
@@ -13409,7 +13846,14 @@ function env() {
      */
     WEBHOOK_VAR_NAMES: webhookVarNames(process.env),
     // Set, named like a webhook, and not holding one. The third state.
-    NEAR_MISS_VAR_NAMES: nearMissVarNames(process.env)
+    NEAR_MISS_VAR_NAMES: nearMissVarNames(process.env),
+    // ── Phone push and email (alerts-push-email PR) ──
+    // Passed through one by one like everything above: a name declared in
+    // types.ts and missing here is silently undefined in production.
+    NTFY_URL: process.env.NTFY_URL,
+    NTFY_TOKEN: process.env.NTFY_TOKEN,
+    RESEND_API_KEY: process.env.RESEND_API_KEY,
+    ALERT_EMAIL_FROM: process.env.ALERT_EMAIL_FROM
   };
 }
 async function readBody(req) {
