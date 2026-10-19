@@ -216,3 +216,17 @@ drawfix.tgz
 _dwr/
 
 deployments.json
+
+# Every Chrome profile, not just the first one. CLAUDE.md rule 7 says never
+# commit chrome-profile*, but only chrome-profile/ and chrome-profile-draw/
+# were listed; chrome-profile-buy/ is the signed-in one that can spend.
+chrome-profile*/
+logs/
+probe-artifacts/
+# One-off GitHub deployment dumps and the scripts that read them, removed
+# from the repo 19 Oct 2026; kept out so they do not come back.
+dep.json
+deploy.json
+live.html
+checkdep.mjs
+checkdeploy.mjs

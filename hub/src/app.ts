@@ -176,7 +176,10 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
         await store.countUsers(db);
         return json({ ok: true });
       } catch (err) {
-        return json({ ok: false, error: (err as Error).message }, 503);
+        // The reason goes to the server log, not the reply: a driver error
+        // names the database host, and this route answers anyone.
+        console.error('[health] database did not answer:', err);
+        return json({ ok: false, error: 'the database did not answer' }, 503);
       }
     }
 
@@ -255,6 +258,19 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
       if (!userId) {
         // Deliberately vague and deliberately slow-ish: no hint about length,
         // and no distinction between a name that exists and one that does not.
+        //
+        // TODO(login rate limit): 400 ms is the only brake on guessing, and
+        // each serverless instance starts fresh, so an in-memory counter here
+        // would do nothing. The activity table was considered and rejected
+        // (19 Oct 2026): its rows belong to a user (a failed login has none,
+        // so they would land in the owner's feed), it is pruned to a hard row
+        // cap on every write (a guessing run would push out the real history
+        // the owner diagnoses from), and keying on IP would put a personal
+        // identifier in the app. The right fix is a small login_failures
+        // table (name + hashed IP + time, pruned after an hour) added to
+        // schema.sql first and approved by the owner, then a delay that
+        // doubles per recent failure. Passwords are PBKDF2-hashed and the
+        // owner's is long, so this is a gap, not an open door.
         await new Promise((r) => setTimeout(r, 400));
         return html(loginPage('That name and password do not go together.', handle), 401);
       }
@@ -1286,7 +1302,16 @@ export function createHandler(db: Sql, env: Env): (request: Request) => Promise<
     }
 
     if (request.method === 'GET' && path === '/api/phantom.zip') {
-      if (caller.kind !== 'browser') return json({ error: 'sign in first' }, 403);
+      // A signed-in browser (the front door's download button) or a Phantom
+      // presenting its own token (auto-update, every six hours: update.ts
+      // calls hub.ts phantomZip with the agent's Bearer token). This used to
+      // demand a browser, so every auto-update was refused with a 403 and
+      // testers' Phantoms never updated themselves. Either way the account
+      // still has to be one that may arm: a member who only watches has no
+      // Phantom of their own to update.
+      if (caller.kind !== 'browser' && caller.kind !== 'watcher') {
+        return json({ error: 'sign in first' }, 403);
+      }
       if (!(await store.canArm(db, userId))) {
         return json({ error: 'watching needs no Phantom of your own; the owner’s does the reading' }, 403);
       }
